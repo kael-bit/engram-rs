@@ -55,6 +55,7 @@ pub fn router(state: AppState) -> Router {
             get(get_memory).patch(update_memory).delete(delete_memory),
         )
         .route("/recall", post(do_recall))
+        .route("/search", get(quick_search))
         .route("/consolidate", post(do_consolidate))
         .route("/extract", post(do_extract))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
@@ -176,6 +177,7 @@ async fn delete_memory(
 #[derive(Deserialize)]
 struct ListQuery {
     layer: Option<u8>,
+    tag: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
 }
@@ -187,16 +189,25 @@ async fn list_memories(
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || {
         let d = lock_db(&db);
-        if let Some(layer_val) = q.layer {
-            if let Ok(layer) = layer_val.try_into() {
-                let memories = d.list_by_layer(layer);
-                let count = memories.len();
-                return Ok(serde_json::json!({"memories": memories, "count": count}));
-            }
-        }
         let limit = q.limit.unwrap_or(50).min(200);
         let offset = q.offset.unwrap_or(0);
-        let memories = d.list_all(limit, offset)?;
+
+        // filter by layer if specified
+        let mut memories = if let Some(layer_val) = q.layer {
+            if let Ok(layer) = layer_val.try_into() {
+                d.list_by_layer(layer)
+            } else {
+                vec![]
+            }
+        } else {
+            d.list_all(limit, offset)?
+        };
+
+        // filter by tag if specified
+        if let Some(ref tag) = q.tag {
+            memories.retain(|m| m.tags.iter().any(|t| t == tag));
+        }
+
         let count = memories.len();
         let stats = d.stats();
         Ok::<_, EngramError>(serde_json::json!({
@@ -211,6 +222,42 @@ async fn list_memories(
     .map_err(|e| EngramError::Internal(e.to_string()))??;
 
     Ok(Json(result))
+}
+
+/// Simple keyword search — lighter than /recall, no scoring or budget logic.
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: String,
+    limit: Option<usize>,
+}
+
+async fn quick_search(
+    State(state): State<AppState>,
+    Query(sq): Query<SearchQuery>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    if sq.q.trim().is_empty() {
+        return Err(EngramError::EmptyContent);
+    }
+    let limit = sq.limit.unwrap_or(10).min(50);
+    let db = state.db.clone();
+    let query = sq.q.clone();
+    let results = tokio::task::spawn_blocking(move || {
+        let d = lock_db(&db);
+        let hits = d.search_fts(&query, limit);
+        let memories: Vec<db::Memory> = hits
+            .into_iter()
+            .filter_map(|(id, _)| d.get(&id).ok().flatten())
+            .collect();
+        memories
+    })
+    .await
+    .map_err(|e| EngramError::Internal(e.to_string()))?;
+
+    let count = results.len();
+    Ok(Json(serde_json::json!({
+        "memories": results,
+        "count": count,
+    })))
 }
 
 async fn do_recall(

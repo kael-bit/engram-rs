@@ -88,11 +88,12 @@ Promotes frequently-accessed important memories upward, drops decayed entries.
 | `GET` | `/` | Health + stats |
 | `GET` | `/stats` | Layer counts |
 | `POST` | `/memories` | Create |
-| `GET` | `/memories` | List (`?layer=N&limit=50&offset=0`) |
+| `GET` | `/memories` | List (`?layer=N&tag=X&limit=50&offset=0`) |
 | `GET` | `/memories/:id` | Get |
 | `PATCH` | `/memories/:id` | Update |
 | `DELETE` | `/memories/:id` | Delete |
-| `POST` | `/recall` | Hybrid search |
+| `POST` | `/recall` | Hybrid search (semantic + keyword, budget-aware) |
+| `GET` | `/search` | Quick keyword search (`?q=term&limit=10`) |
 | `POST` | `/consolidate` | Maintenance cycle |
 | `POST` | `/extract` | LLM extraction (requires AI) |
 
