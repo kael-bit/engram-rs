@@ -13,8 +13,9 @@ async function engramFetch(path: string, body?: unknown): Promise<unknown> {
     headers["Authorization"] = `Bearer ${ENGRAM_API_KEY}`;
   }
 
+  const method = body !== undefined ? "POST" : "GET";
   const resp = await fetch(`${ENGRAM_URL}${path}`, {
-    method: "POST",
+    method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
@@ -149,6 +150,26 @@ server.tool(
     if (auto_embed !== undefined) body.auto_embed = auto_embed;
 
     const result = await engramFetch("/extract", body);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+// -- engram_search --
+
+server.tool(
+  "engram_search",
+  "Quick keyword search across memories. Lighter than recall — " +
+    "no scoring, no budget logic, just find memories matching a term.",
+  {
+    q: z.string().describe("Search query"),
+    limit: z.number().int().min(1).max(50).optional().describe("Max results (default 10)"),
+  },
+  async ({ q, limit }) => {
+    const params = new URLSearchParams({ q });
+    if (limit !== undefined) params.set("limit", String(limit));
+    const result = await engramFetch(`/search?${params}`);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };

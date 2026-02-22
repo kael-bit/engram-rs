@@ -158,6 +158,26 @@ pub fn is_cjk(c: char) -> bool {
     )
 }
 
+/// Append CJK bigrams to text so FTS5 unicode61 can actually index Chinese/Japanese/Korean.
+/// Original text is preserved intact; bigrams are appended after a space.
+fn append_cjk_bigrams(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut bigrams = Vec::new();
+    for i in 0..chars.len().saturating_sub(1) {
+        if is_cjk(chars[i]) && is_cjk(chars[i + 1]) {
+            let mut s = String::with_capacity(8);
+            s.push(chars[i]);
+            s.push(chars[i + 1]);
+            bigrams.push(s);
+        }
+    }
+    if bigrams.is_empty() {
+        text.to_string()
+    } else {
+        format!("{} {}", text, bigrams.join(" "))
+    }
+}
+
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS memories (
@@ -179,20 +199,17 @@ CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance);
 CREATE INDEX IF NOT EXISTS idx_last_accessed ON memories(last_accessed);
 "#;
 
+// Use content= external content FTS — we manage inserts/deletes ourselves
+// so we can pre-process CJK text with bigrams before indexing.
 const FTS_SCHEMA: &str =
     "CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(\
      id UNINDEXED, content, tags, tokenize='unicode61')";
 
-const TRIGGERS: [&str; 3] = [
-    "CREATE TRIGGER IF NOT EXISTS mem_ai AFTER INSERT ON memories \
-     BEGIN INSERT INTO memories_fts(id, content, tags) \
-     VALUES (new.id, new.content, new.tags); END",
-    "CREATE TRIGGER IF NOT EXISTS mem_ad AFTER DELETE ON memories \
-     BEGIN DELETE FROM memories_fts WHERE id = old.id; END",
-    "CREATE TRIGGER IF NOT EXISTS mem_au AFTER UPDATE OF content, tags ON memories \
-     BEGIN DELETE FROM memories_fts WHERE id = old.id; \
-     INSERT INTO memories_fts(id, content, tags) \
-     VALUES (new.id, new.content, new.tags); END",
+// Drop old triggers if they exist (migrating from trigger-based to manual FTS)
+const DROP_TRIGGERS: [&str; 3] = [
+    "DROP TRIGGER IF EXISTS mem_ai",
+    "DROP TRIGGER IF EXISTS mem_ad",
+    "DROP TRIGGER IF EXISTS mem_au",
 ];
 
 
@@ -208,14 +225,107 @@ impl MemoryDB {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
         conn.execute(FTS_SCHEMA, [])?;
-        for t in &TRIGGERS {
+        // migrate away from trigger-based FTS
+        for t in &DROP_TRIGGERS {
             conn.execute(t, [])?;
         }
         // Migration: add embedding column if missing
         if conn.prepare("SELECT embedding FROM memories LIMIT 0").is_err() {
             conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB", [])?;
         }
-        Ok(Self { conn })
+        let db = Self { conn };
+        db.rebuild_fts()?;
+        Ok(db)
+    }
+
+    /// Insert a row into FTS with CJK bigram preprocessing.
+    fn fts_insert(&self, id: &str, content: &str, tags_json: &str) -> Result<(), EngramError> {
+        let processed = append_cjk_bigrams(content);
+        self.conn.execute(
+            "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
+            params![id, processed, tags_json],
+        )?;
+        Ok(())
+    }
+
+    fn fts_delete(&self, id: &str) -> Result<(), EngramError> {
+        self.conn
+            .execute("DELETE FROM memories_fts WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Rebuild FTS index from scratch (idempotent, runs on startup).
+    fn rebuild_fts(&self) -> Result<(), EngramError> {
+        let fts_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM memories_fts", [], |r| r.get(0))?;
+        let mem_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))?;
+
+        if mem_count == 0 {
+            return Ok(());
+        }
+
+        // Check if we need to rebuild: count mismatch or missing CJK bigrams
+        let needs_rebuild = fts_count != mem_count || {
+            // Sample a CJK-containing memory from the FTS table
+            let has_cjk_content: bool = self
+                .conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM memories WHERE content GLOB '*[一-龥]*' LIMIT 1)",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(false);
+
+            if has_cjk_content {
+                // If there's CJK content, check if FTS has longer content (bigrams appended)
+                let sample: Option<(i64, i64)> = self
+                    .conn
+                    .query_row(
+                        "SELECT LENGTH(m.content), LENGTH(f.content) \
+                         FROM memories m JOIN memories_fts f ON m.id = f.id \
+                         WHERE m.content GLOB '*[一-龥]*' LIMIT 1",
+                        [],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .ok();
+
+                match sample {
+                    Some((mem_len, fts_len)) => fts_len <= mem_len, // no bigrams appended
+                    None => true, // can't check, rebuild to be safe
+                }
+            } else {
+                false // no CJK content, no rebuild needed
+            }
+        };
+
+        if !needs_rebuild {
+            return Ok(());
+        }
+
+        // Full rebuild
+        self.conn.execute("DELETE FROM memories_fts", [])?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, content, tags FROM memories")?;
+        let rows: Vec<(String, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (id, content, tags) in &rows {
+            self.fts_insert(id, content, tags)?;
+        }
+        tracing::info!(count = rows.len(), "rebuilt FTS index with CJK bigrams");
+        Ok(())
     }
 
     pub fn insert(&self, input: MemoryInput) -> Result<Memory, EngramError> {
@@ -249,6 +359,8 @@ impl MemoryDB {
             ],
         )?;
 
+        self.fts_insert(&id, &input.content, &tags_json)?;
+
         Ok(Memory {
             id,
             content: input.content,
@@ -274,6 +386,7 @@ impl MemoryDB {
     }
 
     pub fn delete(&self, id: &str) -> Result<bool, EngramError> {
+        self.fts_delete(id)?;
         let n = self.conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
         Ok(n > 0)
     }
@@ -297,8 +410,9 @@ impl MemoryDB {
             return vec![];
         }
 
-        // FTS5 unicode61 splits CJK into single chars; use OR for partial matching.
-        let fts_query: String = sanitized.split_whitespace().collect::<Vec<_>>().join(" OR ");
+        // Pre-process query: add CJK bigrams so "天气" matches bigram-indexed content
+        let processed = append_cjk_bigrams(sanitized);
+        let fts_query: String = processed.split_whitespace().collect::<Vec<_>>().join(" OR ");
 
         let Ok(mut stmt) = self.conn.prepare(
             "SELECT id, rank FROM memories_fts \
@@ -454,6 +568,15 @@ impl MemoryDB {
             self.conn
                 .execute("UPDATE memories SET tags=?1 WHERE id=?2", params![j, id])?;
         }
+        // Rebuild FTS entry if content or tags changed
+        if content.is_some() || tags.is_some() {
+            if let Ok(Some(mem)) = self.get(id) {
+                self.fts_delete(id)?;
+                let tags_json = serde_json::to_string(&mem.tags).unwrap_or_else(|_| "[]".into());
+                self.fts_insert(id, &mem.content, &tags_json)?;
+            }
+        }
+
         self.get(id)
     }
 
@@ -650,6 +773,24 @@ mod tests {
 
         let results = db.search_fts("quick fox", 10);
         assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn fts_cjk_bigram_search() {
+        let db = test_db();
+        db.insert(MemoryInput {
+            content: "今天天气很好适合出门散步".into(),
+            layer: None,
+            importance: None,
+            source: None,
+            tags: None,
+        })
+        .unwrap();
+
+        // Two-char CJK words should match via bigrams
+        assert!(!db.search_fts("天气", 10).is_empty(), "天气 should match");
+        assert!(!db.search_fts("很好", 10).is_empty(), "很好 should match");
+        assert!(!db.search_fts("天气", 10).is_empty(), "天气 should match");
     }
 
     #[test]
