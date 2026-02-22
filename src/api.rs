@@ -502,11 +502,28 @@ async fn do_recall(
 
     let query_emb = if let Some(ref cfg) = state.ai {
         if cfg.has_embed() {
-            match ai::get_embeddings(cfg, std::slice::from_ref(&query_text)).await {
-                Ok(mut v) => v.pop(),
-                Err(e) => {
-                    warn!(error = %e, "embedding lookup failed, falling back to FTS");
-                    None
+            // check cache first
+            let cached = {
+                let cache = state.embed_cache.lock().unwrap();
+                cache.get(&query_text).cloned()
+            };
+            if let Some(emb) = cached {
+                debug!("embed cache hit for recall query");
+                Some(emb)
+            } else {
+                match ai::get_embeddings(cfg, std::slice::from_ref(&query_text)).await {
+                    Ok(mut v) => {
+                        let emb = v.pop();
+                        if let Some(ref e) = emb {
+                            let mut cache = state.embed_cache.lock().unwrap();
+                            cache.put(query_text.clone(), e.clone());
+                        }
+                        emb
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "embedding lookup failed, falling back to FTS");
+                        None
+                    }
                 }
             }
         } else {
@@ -665,6 +682,9 @@ mod tests {
             db: std::sync::Arc::new(std::sync::Mutex::new(mdb)),
             ai: None,
             api_key: api_key.map(|s| s.to_string()),
+            embed_cache: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::EmbedCacheInner::new(16),
+            )),
         }
     }
 

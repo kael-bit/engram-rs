@@ -39,6 +39,44 @@ pub struct AppState {
     pub(crate) db: SharedDB,
     pub(crate) ai: Option<ai::AiConfig>,
     pub(crate) api_key: Option<String>,
+    pub(crate) embed_cache: EmbedCache,
+}
+
+/// Small LRU-ish cache for query embeddings to avoid repeated API calls.
+/// Key = query text, Value = embedding vector.
+pub type EmbedCache = std::sync::Arc<std::sync::Mutex<EmbedCacheInner>>;
+
+pub struct EmbedCacheInner {
+    map: std::collections::HashMap<String, Vec<f64>>,
+    order: std::collections::VecDeque<String>,
+    cap: usize,
+}
+
+impl EmbedCacheInner {
+    pub fn new(cap: usize) -> Self {
+        Self {
+            map: std::collections::HashMap::with_capacity(cap),
+            order: std::collections::VecDeque::with_capacity(cap),
+            cap,
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Vec<f64>> {
+        self.map.get(key)
+    }
+
+    pub fn put(&mut self, key: String, val: Vec<f64>) {
+        if self.map.contains_key(&key) {
+            return;
+        }
+        if self.order.len() >= self.cap {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            }
+        }
+        self.order.push_back(key.clone());
+        self.map.insert(key, val);
+    }
 }
 
 #[tokio::main]
@@ -72,7 +110,9 @@ async fn main() {
     let api_key = std::env::var("ENGRAM_API_KEY").ok();
     let auth_status = if api_key.is_some() { "enabled" } else { "disabled" };
 
-    let state = AppState { db: shared.clone(), ai: ai_cfg, api_key };
+    let embed_cache: EmbedCache =
+        std::sync::Arc::new(std::sync::Mutex::new(EmbedCacheInner::new(128)));
+    let state = AppState { db: shared.clone(), ai: ai_cfg, api_key, embed_cache };
     let app = api::router(state.clone());
 
     // background consolidation — runs every ENGRAM_CONSOLIDATE_MINS (default 30)
