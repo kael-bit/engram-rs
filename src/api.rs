@@ -58,6 +58,8 @@ pub fn router(state: AppState) -> Router {
         .route("/search", get(quick_search))
         .route("/consolidate", post(do_consolidate))
         .route("/extract", post(do_extract))
+        .route("/export", get(do_export))
+        .route("/import", post(do_import))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     public.merge(protected).with_state(state)
@@ -382,4 +384,44 @@ async fn do_extract(
     let count = memories.len();
     debug!(count, "extract complete");
     Ok(Json(ExtractResponse { extracted: memories, count }))
+}
+
+// -- Export / Import --
+
+async fn do_export(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let db = state.db.clone();
+    let memories = tokio::task::spawn_blocking(move || lock_db(&db).export_all())
+        .await
+        .map_err(|e| EngramError::Internal(e.to_string()))??;
+
+    let count = memories.len();
+    Ok(Json(serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "count": count,
+        "memories": memories,
+    })))
+}
+
+async fn do_import(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let memories_val = body
+        .get("memories")
+        .ok_or_else(|| EngramError::Validation("missing 'memories' array".into()))?;
+
+    let memories: Vec<db::Memory> = serde_json::from_value(memories_val.clone())
+        .map_err(|e| EngramError::Validation(format!("invalid memories format: {e}")))?;
+
+    let db = state.db.clone();
+    let imported = tokio::task::spawn_blocking(move || lock_db(&db).import(&memories))
+        .await
+        .map_err(|e| EngramError::Internal(e.to_string()))??;
+
+    Ok(Json(serde_json::json!({
+        "imported": imported,
+        "skipped": memories_val.as_array().map(|a| a.len()).unwrap_or(0) - imported,
+    })))
 }

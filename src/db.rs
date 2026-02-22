@@ -330,7 +330,40 @@ impl MemoryDB {
 
     pub fn insert(&self, input: MemoryInput) -> Result<Memory, EngramError> {
         validate_input(&input)?;
-        // TODO: check for near-duplicate content before inserting?
+
+        // Near-duplicate detection: if an existing memory has very similar content,
+        // update it instead of creating a duplicate. Uses token overlap as a proxy.
+        if let Some(existing) = self.find_near_duplicate(&input.content) {
+            tracing::debug!(existing_id = %existing.id, "near-duplicate found, updating instead");
+            let tags = input.tags.unwrap_or_default();
+            // Merge tags from both
+            let mut merged_tags: Vec<String> = existing.tags.clone();
+            for t in &tags {
+                if !merged_tags.contains(t) {
+                    merged_tags.push(t.clone());
+                }
+            }
+            // Keep the higher importance
+            let imp = input
+                .importance
+                .map(|new_imp| new_imp.max(existing.importance))
+                .unwrap_or(existing.importance);
+            // Keep the higher layer
+            let layer = input
+                .layer
+                .map(|new_l| new_l.max(existing.layer as u8))
+                .unwrap_or(existing.layer as u8);
+
+            return self
+                .update_fields(
+                    &existing.id,
+                    Some(&input.content),
+                    Some(layer),
+                    Some(imp),
+                    Some(&merged_tags),
+                )?
+                .ok_or(EngramError::Internal("update after dedup failed".into()));
+        }
 
         let now = now_ms();
         let layer_val = input.layer.unwrap_or(1);
@@ -625,6 +658,89 @@ impl MemoryDB {
         scored.truncate(limit);
         scored
     }
+
+    /// Check if content is a near-duplicate of an existing memory.
+    /// Uses word-level Jaccard similarity (threshold ~0.8).
+    fn find_near_duplicate(&self, content: &str) -> Option<Memory> {
+        // Quick FTS lookup to narrow candidates
+        let candidates = self.search_fts(content, 5);
+        if candidates.is_empty() {
+            return None;
+        }
+
+        let new_words: std::collections::HashSet<&str> = content.split_whitespace().collect();
+        if new_words.len() < 3 {
+            // Too short to reliably dedup — could match too aggressively
+            return None;
+        }
+
+        for (id, _) in &candidates {
+            if let Ok(Some(mem)) = self.get(id) {
+                let old_words: std::collections::HashSet<&str> =
+                    mem.content.split_whitespace().collect();
+                let intersection = new_words.intersection(&old_words).count();
+                let union = new_words.union(&old_words).count();
+                if union > 0 {
+                    let jaccard = intersection as f64 / union as f64;
+                    if jaccard > 0.8 {
+                        return Some(mem);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Export all memories as a JSON-serializable vec (for backup/migration).
+    /// Embeddings are excluded to keep exports portable.
+    pub fn export_all(&self) -> Result<Vec<Memory>, EngramError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM memories ORDER BY created_at ASC")?;
+        let rows = stmt
+            .query_map([], row_to_memory)?
+            .filter_map(|r| r.ok())
+            .map(|mut m| {
+                m.embedding = None; // strip embeddings from export
+                m
+            })
+            .collect();
+        Ok(rows)
+    }
+
+    /// Import memories from an export. Skips entries whose id already exists.
+    /// Returns count of newly imported memories.
+    pub fn import(&self, memories: &[Memory]) -> Result<usize, EngramError> {
+        let mut imported = 0;
+        for m in memories {
+            // skip if id already present
+            if self.get(&m.id)?.is_some() {
+                continue;
+            }
+            let tags_json = serde_json::to_string(&m.tags).unwrap_or_else(|_| "[]".into());
+            self.conn.execute(
+                "INSERT INTO memories \
+                 (id, content, layer, importance, created_at, last_accessed, \
+                  access_count, decay_rate, source, tags) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                params![
+                    m.id,
+                    m.content,
+                    m.layer as u8,
+                    m.importance,
+                    m.created_at,
+                    m.last_accessed,
+                    m.access_count,
+                    m.decay_rate,
+                    m.source,
+                    tags_json,
+                ],
+            )?;
+            self.fts_insert(&m.id, &m.content, &tags_json)?;
+            imported += 1;
+        }
+        Ok(imported)
+    }
 }
 
 fn row_to_memory(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
@@ -796,9 +912,15 @@ mod tests {
     #[test]
     fn stats() {
         let db = test_db();
-        for layer in [1, 1, 2, 3] {
+        let entries = [
+            ("buffer entry alpha", 1),
+            ("buffer entry beta zeta", 1),
+            ("working entry gamma delta", 2),
+            ("core entry epsilon theta", 3),
+        ];
+        for (content, layer) in entries {
             db.insert(MemoryInput {
-                content: format!("mem layer {layer}"),
+                content: content.into(),
                 layer: Some(layer),
                 importance: None,
                 source: None,
@@ -855,5 +977,42 @@ mod tests {
 
         let page2 = db.list_all(3, 3).unwrap();
         assert_eq!(page2.len(), 2);
+    }
+
+    #[test]
+    fn dedup_merges_similar() {
+        let db = test_db();
+        let original = db
+            .insert(MemoryInput {
+                content: "engram project uses Rust SQLite FTS5 for memory storage and retrieval system".into(),
+                layer: Some(1),
+                importance: Some(0.5),
+                source: None,
+                tags: Some(vec!["habit".into()]),
+            })
+            .unwrap();
+
+        // Insert near-duplicate with one word changed
+        let deduped = db
+            .insert(MemoryInput {
+                content: "engram project uses Rust SQLite FTS5 for memory storage and search system".into(),
+                layer: Some(2),
+                importance: Some(0.7),
+                source: None,
+                tags: Some(vec!["preference".into()]),
+            })
+            .unwrap();
+
+        // Should reuse the same id (updated, not new)
+        assert_eq!(deduped.id, original.id);
+        // Should keep higher importance
+        assert!(deduped.importance >= 0.7);
+        // Should merge tags
+        assert!(deduped.tags.contains(&"habit".into()));
+        assert!(deduped.tags.contains(&"preference".into()));
+        // Should be promoted to higher layer
+        assert_eq!(deduped.layer, Layer::Working);
+        // Total count should still be 1
+        assert_eq!(db.stats().total, 1);
     }
 }

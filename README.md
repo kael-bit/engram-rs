@@ -96,6 +96,8 @@ Promotes frequently-accessed important memories upward, drops decayed entries.
 | `GET` | `/search` | Quick keyword search (`?q=term&limit=10`) |
 | `POST` | `/consolidate` | Maintenance cycle |
 | `POST` | `/extract` | LLM extraction (requires AI) |
+| `GET` | `/export` | Export all memories as JSON |
+| `POST` | `/import` | Import memories (skips existing ids) |
 
 ## MCP
 
