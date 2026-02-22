@@ -7,9 +7,11 @@ use std::collections::{HashMap, HashSet};
 use tracing::warn;
 
 // scoring weights — should add up to 1.0
-const WEIGHT_IMPORTANCE: f64 = 0.4;
-const WEIGHT_RECENCY: f64 = 0.3;
-const WEIGHT_RELEVANCE: f64 = 0.3;
+// relevance is king: a perfectly relevant low-importance memory
+// beats a vaguely related high-importance one
+const WEIGHT_RELEVANCE: f64 = 0.45;
+const WEIGHT_IMPORTANCE: f64 = 0.3;
+const WEIGHT_RECENCY: f64 = 0.25;
 
 /// Recall request parameters.
 #[derive(Debug, Deserialize)]

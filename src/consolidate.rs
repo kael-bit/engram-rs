@@ -127,6 +127,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
 
 const MERGE_SYSTEM: &str = "Merge these memories into one concise entry. \
     Keep all important information, remove redundancy. \
+    If they describe the same thing at different points in time, keep only the latest state. \
     Use the same language as the originals. Output only the merged text.";
 
 async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
