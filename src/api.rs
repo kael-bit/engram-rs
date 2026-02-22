@@ -307,15 +307,24 @@ async fn list_recent(
 
 async fn do_recall(
     State(state): State<AppState>,
-    Json(req): Json<recall::RecallRequest>,
+    Json(mut req): Json<recall::RecallRequest>,
 ) -> Result<Json<recall::RecallResponse>, EngramError> {
     if req.query.is_empty() {
         return Err(EngramError::EmptyContent);
     }
 
+    let do_rerank =
+        req.rerank.unwrap_or(false) && state.ai.as_ref().map_or(false, |c| c.has_llm());
+    let query_text = req.query.clone();
+    let final_limit = req.limit.unwrap_or(20).min(100);
+
+    if do_rerank {
+        req.limit = Some(final_limit * 2);
+    }
+
     let query_emb = if let Some(ref cfg) = state.ai {
         if cfg.has_embed() {
-            match ai::get_embeddings(cfg, std::slice::from_ref(&req.query)).await {
+            match ai::get_embeddings(cfg, &[query_text.clone()]).await {
                 Ok(mut v) => v.pop(),
                 Err(e) => {
                     warn!(error = %e, "embedding lookup failed, falling back to FTS");
@@ -330,11 +339,16 @@ async fn do_recall(
     };
 
     let db = state.db.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let mut result = tokio::task::spawn_blocking(move || {
         recall::recall(&lock_db(&db), &req, query_emb.as_deref())
     })
     .await
     .map_err(|e| EngramError::Internal(e.to_string()))?;
+
+    if do_rerank {
+        let cfg = state.ai.as_ref().unwrap();
+        recall::rerank_results(&mut result, &query_text, final_limit, cfg).await;
+    }
 
     Ok(Json(result))
 }
@@ -349,12 +363,8 @@ async fn do_consolidate(
         serde_json::from_slice(&body).ok()
     };
 
-    let db = state.db.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        consolidate::consolidate(&lock_db(&db), parsed.as_ref())
-    })
-    .await
-    .map_err(|e| EngramError::Internal(e.to_string()))?;
+    let result =
+        consolidate::consolidate(state.db.clone(), parsed, state.ai.clone()).await;
 
     Ok(Json(result))
 }

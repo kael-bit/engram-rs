@@ -82,6 +82,44 @@ struct ChatChoice {
     message: ChatMessage,
 }
 
+/// Send a chat completion request, return the response text.
+pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String, String> {
+    let req = ChatRequest {
+        model: cfg.llm_model.clone(),
+        messages: vec![
+            ChatMessage { role: "system".into(), content: system.into() },
+            ChatMessage { role: "user".into(), content: user.into() },
+        ],
+        temperature: 0.1,
+    };
+
+    let mut builder = cfg.client.post(&cfg.llm_url).json(&req);
+    if !cfg.llm_key.is_empty() {
+        builder = builder.header("Authorization", format!("Bearer {}", cfg.llm_key));
+    }
+
+    let resp = builder
+        .send()
+        .await
+        .map_err(|e| format!("LLM request failed: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("LLM returned {status}: {body}"));
+    }
+
+    let chat: ChatResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("LLM response parse failed: {e}"))?;
+    Ok(chat
+        .choices
+        .first()
+        .map(|c| c.message.content.clone())
+        .unwrap_or_default())
+}
+
+
 const EXTRACT_SYSTEM_PROMPT: &str = r#"You are a memory extraction engine. Given a conversation or text, extract important facts, decisions, preferences, and events as discrete memory entries.
 
 For each memory, output a JSON array of objects with these fields:
@@ -106,48 +144,9 @@ pub async fn extract_memories(
     cfg: &AiConfig,
     text: &str,
 ) -> Result<Vec<ExtractedMemory>, String> {
-    let req = ChatRequest {
-        model: cfg.llm_model.clone(),
-        messages: vec![
-            ChatMessage {
-                role: "system".into(),
-                content: EXTRACT_SYSTEM_PROMPT.into(),
-            },
-            ChatMessage {
-                role: "user".into(),
-                content: text.into(),
-            },
-        ],
-        temperature: 0.1,
-    };
+    debug!(model = %cfg.llm_model, "extracting memories");
 
-    let mut builder = cfg.client.post(&cfg.llm_url).json(&req);
-    if !cfg.llm_key.is_empty() {
-        builder = builder.header("Authorization", format!("Bearer {}", cfg.llm_key));
-    }
-
-    debug!(model = %cfg.llm_model, "calling LLM for memory extraction");
-
-    let resp = builder
-        .send()
-        .await
-        .map_err(|e| format!("LLM request failed: {e}"))?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("LLM returned {status}: {body}"));
-    }
-
-    let chat: ChatResponse = resp
-        .json()
-        .await
-        .map_err(|e| format!("LLM response parse failed: {e}"))?;
-    let raw = chat
-        .choices
-        .first()
-        .map(|c| c.message.content.clone())
-        .unwrap_or_default();
-
+    let raw = llm_chat(cfg, EXTRACT_SYSTEM_PROMPT, text).await?;
     let json_str = extract_json_from_response(&raw);
     let memories: Vec<ExtractedMemory> = serde_json::from_str(&json_str)
         .map_err(|e| format!("failed to parse extracted memories: {e}\nraw: {raw}"))?;

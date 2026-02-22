@@ -1,8 +1,10 @@
 //! Hybrid recall: semantic + keyword retrieval with budget awareness.
 
+use crate::ai::{self, AiConfig};
 use crate::db::{is_cjk, Layer, Memory, MemoryDB, ScoredMemory};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
+use tracing::warn;
 
 const W_IMPORTANCE: f64 = 0.4;
 const W_RECENCY: f64 = 0.3;
@@ -22,6 +24,8 @@ pub struct RecallRequest {
     pub until: Option<i64>,
     /// Sort order: "score" (default), "recent" (by created_at desc), "accessed" (by last_accessed desc).
     pub sort_by: Option<String>,
+    /// Whether to use LLM to re-rank results.
+    pub rerank: Option<bool>,
 }
 
 /// Recall response with scored memories and metadata.
@@ -261,6 +265,66 @@ pub fn recall(
     }
 }
 
+const RERANK_SYSTEM: &str = "Given a query and numbered memories, return the numbers \
+    sorted by relevance (most relevant first). Output only comma-separated numbers.";
+
+/// Re-rank recall results using an LLM. Falls back to original order on failure.
+pub async fn rerank_results(
+    response: &mut RecallResponse,
+    query: &str,
+    limit: usize,
+    cfg: &AiConfig,
+) {
+    if response.memories.len() < 2 {
+        return;
+    }
+
+    let mut numbered = String::new();
+    for (i, sm) in response.memories.iter().enumerate() {
+        use std::fmt::Write;
+        let _ = writeln!(numbered, "{}. {}", i + 1, sm.memory.content);
+    }
+
+    let user = format!("Query: {query}\n\nMemories:\n{numbered}");
+
+    match ai::llm_chat(cfg, RERANK_SYSTEM, &user).await {
+        Ok(raw) => {
+            let order = parse_rerank_response(&raw, response.memories.len());
+            if order.is_empty() {
+                return;
+            }
+
+            let old = std::mem::take(&mut response.memories);
+            let mut seen = HashSet::new();
+            for idx in &order {
+                if seen.insert(*idx) && *idx < old.len() {
+                    response.memories.push(old[*idx].clone());
+                }
+            }
+            // append any the LLM didn't mention
+            for (i, sm) in old.into_iter().enumerate() {
+                if !seen.contains(&i) {
+                    response.memories.push(sm);
+                }
+            }
+            response.memories.truncate(limit);
+            response.search_mode = format!("{} +rerank", response.search_mode);
+        }
+        Err(e) => {
+            warn!(error = %e, "LLM rerank failed, keeping original order");
+        }
+    }
+}
+
+fn parse_rerank_response(raw: &str, count: usize) -> Vec<usize> {
+    raw.split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse::<usize>().ok())
+        .filter(|&n| n >= 1 && n <= count)
+        .map(|n| n - 1)
+        .collect()
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -284,5 +348,26 @@ mod tests {
     fn tokens_mixed() {
         let tokens = estimate_tokens("hello 你好");
         assert!(tokens >= 2);
+    }
+
+    #[test]
+    fn parse_rerank_basic() {
+        assert_eq!(parse_rerank_response("3, 1, 2", 3), vec![2, 0, 1]);
+    }
+
+    #[test]
+    fn parse_rerank_with_noise() {
+        // number 5 is out of range (count=3), should be filtered
+        assert_eq!(parse_rerank_response("3,1,2,5", 3), vec![2, 0, 1]);
+    }
+
+    #[test]
+    fn parse_rerank_newlines() {
+        assert_eq!(parse_rerank_response("2\n1\n3", 3), vec![1, 0, 2]);
+    }
+
+    #[test]
+    fn parse_rerank_empty() {
+        assert!(parse_rerank_response("no numbers here", 3).is_empty());
     }
 }
