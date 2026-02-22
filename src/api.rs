@@ -1,5 +1,3 @@
-//! HTTP API handlers.
-
 use axum::extract::{Path, Query, State};
 use axum::http::{Request, StatusCode};
 use axum::middleware::{self, Next};
@@ -8,6 +6,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
+use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{debug, warn};
 
 use crate::error::EngramError;
@@ -42,12 +41,10 @@ async fn require_auth(
 }
 
 pub fn router(state: AppState) -> Router {
-    // Public routes (no auth)
     let public = Router::new()
         .route("/", get(health))
         .route("/stats", get(stats));
 
-    // Protected routes
     let protected = Router::new()
         .route("/memories", post(create_memory).get(list_memories))
         .route(
@@ -63,7 +60,12 @@ pub fn router(state: AppState) -> Router {
         .route("/import", post(do_import))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
-    public.merge(protected).with_state(state)
+    // 64KB ought to be enough for anybody — content cap is 8K chars (~24KB UTF-8),
+    // extract text can be longer but 64KB is plenty
+    public
+        .merge(protected)
+        .layer(RequestBodyLimitLayer::new(64 * 1024))
+        .with_state(state)
 }
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -88,6 +90,46 @@ async fn stats(State(state): State<AppState>) -> Json<db::Stats> {
     Json(s)
 }
 
+/// Fire-and-forget: generate embedding for a memory in the background.
+fn spawn_embed(db: crate::SharedDB, cfg: ai::AiConfig, id: String, content: String) {
+    tokio::spawn(async move {
+        match ai::get_embeddings(&cfg, &[content]).await {
+            Ok(embs) if !embs.is_empty() => {
+                let emb = embs.into_iter().next().unwrap();
+                let _ = tokio::task::spawn_blocking(move || {
+                    lock_db(&db).set_embedding(&id, &emb)
+                })
+                .await;
+            }
+            Err(e) => warn!(error = %e, "embedding generation failed"),
+            _ => {}
+        }
+    });
+}
+
+/// Batch embed: generate embeddings for multiple memories at once.
+fn spawn_embed_batch(db: crate::SharedDB, cfg: ai::AiConfig, items: Vec<(String, String)>) {
+    if items.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        let texts: Vec<String> = items.iter().map(|(_, c)| c.clone()).collect();
+        match ai::get_embeddings(&cfg, &texts).await {
+            Ok(embs) => {
+                for (emb, (id, _)) in embs.into_iter().zip(items.iter()) {
+                    let db = db.clone();
+                    let id = id.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        lock_db(&db).set_embedding(&id, &emb)
+                    })
+                    .await;
+                }
+            }
+            Err(e) => warn!(error = %e, "batch embedding failed"),
+        }
+    });
+}
+
 async fn create_memory(
     State(state): State<AppState>,
     Json(input): Json<db::MemoryInput>,
@@ -99,22 +141,7 @@ async fn create_memory(
 
     if let Some(ref cfg) = state.ai {
         if cfg.has_embed() {
-            let cfg = cfg.clone();
-            let db = state.db.clone();
-            let id = mem.id.clone();
-            let content = mem.content.clone();
-            tokio::spawn(async move {
-                match ai::get_embeddings(&cfg, &[content]).await {
-                    Ok(embs) if !embs.is_empty() => {
-                        let emb = embs.into_iter().next().unwrap();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            lock_db(&db).set_embedding(&id, &emb)
-                        }).await;
-                    }
-                    Err(e) => warn!(error = %e, "embedding generation failed"),
-                    _ => {}
-                }
-            });
+            spawn_embed(state.db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
         }
     }
 
@@ -397,6 +424,7 @@ async fn do_extract(
 
     let auto_embed = req.auto_embed.unwrap_or(true);
     let mut memories = Vec::new();
+    let mut embed_batch = Vec::new();
 
     for em in extracted {
         let input = db::MemoryInput {
@@ -412,26 +440,16 @@ async fn do_extract(
             .await
             .map_err(|e| EngramError::Internal(e.to_string()))??;
 
-        if auto_embed && cfg.has_embed() {
-            let cfg = cfg.clone();
-            let db = state.db.clone();
-            let id = mem.id.clone();
-            let content = mem.content.clone();
-            tokio::spawn(async move {
-                match ai::get_embeddings(&cfg, &[content]).await {
-                    Ok(embs) if !embs.is_empty() => {
-                        let emb = embs.into_iter().next().unwrap();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            lock_db(&db).set_embedding(&id, &emb)
-                        }).await;
-                    }
-                    Err(e) => warn!(error = %e, "embedding generation failed"),
-                    _ => {}
-                }
-            });
+        if auto_embed {
+            embed_batch.push((mem.id.clone(), mem.content.clone()));
         }
 
         memories.push(mem);
+    }
+
+    // single batch call instead of N individual embed requests
+    if !embed_batch.is_empty() && cfg.has_embed() {
+        spawn_embed_batch(state.db.clone(), cfg.clone(), embed_batch);
     }
 
     let count = memories.len();

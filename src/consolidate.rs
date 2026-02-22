@@ -51,7 +51,7 @@ pub async fn consolidate(
     result
 }
 
-fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> ConsolidateResponse {
+pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> ConsolidateResponse {
     let promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
     let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
     let decay_threshold = req.and_then(|r| r.decay_drop_threshold).unwrap_or(0.01);
@@ -357,5 +357,103 @@ mod tests {
         let mems: Vec<&(Memory, Vec<f64>)> = vec![];
         let clusters = find_clusters(&mems, 0.85);
         assert!(clusters.is_empty());
+    }
+
+    // --- consolidate_sync tests ---
+    // These use import() to set up memories with specific timestamps.
+
+    fn test_db() -> MemoryDB {
+        MemoryDB::open(":memory:").expect("in-memory db")
+    }
+
+    fn mem_with_ts(
+        id: &str,
+        layer: Layer,
+        importance: f64,
+        access_count: i64,
+        created_ms: i64,
+        accessed_ms: i64,
+    ) -> Memory {
+        Memory {
+            id: id.into(),
+            content: format!("test memory {id}"),
+            layer,
+            importance,
+            created_at: created_ms,
+            last_accessed: accessed_ms,
+            access_count,
+            decay_rate: layer.default_decay(),
+            source: "test".into(),
+            tags: vec![],
+            embedding: None,
+        }
+    }
+
+    #[test]
+    fn promote_high_access_working() {
+        let db = test_db();
+        let now = crate::db::now_ms();
+        // working memory with enough accesses and importance → should promote
+        let good = mem_with_ts("promote-me", Layer::Working, 0.8, 5, now - 1000, now);
+        // working memory with low access → should stay
+        let meh = mem_with_ts("leave-me", Layer::Working, 0.8, 1, now - 1000, now);
+        db.import(&[good, meh]).unwrap();
+
+        let result = consolidate_sync(&db, None);
+        assert_eq!(result.promoted, 1);
+        assert!(result.promoted_ids.contains(&"promote-me".to_string()));
+
+        let promoted = db.get("promote-me").unwrap().unwrap();
+        assert_eq!(promoted.layer, Layer::Core);
+        let stayed = db.get("leave-me").unwrap().unwrap();
+        assert_eq!(stayed.layer, Layer::Working);
+    }
+
+    #[test]
+    fn age_promote_old_working() {
+        let db = test_db();
+        let now = crate::db::now_ms();
+        let eight_days_ago = now - 8 * 86_400_000;
+        // old working memory with decent importance → should promote by age
+        let old = mem_with_ts("old-but-worthy", Layer::Working, 0.6, 1, eight_days_ago, now);
+        // fresh working memory → should stay
+        let fresh = mem_with_ts("too-young", Layer::Working, 0.6, 1, now - 1000, now);
+        db.import(&[old, fresh]).unwrap();
+
+        let result = consolidate_sync(&db, None);
+        assert!(result.promoted_ids.contains(&"old-but-worthy".to_string()));
+        assert!(!result.promoted_ids.contains(&"too-young".to_string()));
+    }
+
+    #[test]
+    fn drop_expired_low_importance_buffer() {
+        let db = test_db();
+        let now = crate::db::now_ms();
+        let two_hours_ago = now - 7200_000;
+        // old buffer with low importance → should be dropped by TTL
+        let expendable = mem_with_ts("bye", Layer::Buffer, 0.2, 0, two_hours_ago, two_hours_ago);
+        // old buffer with high importance → should be promoted to working
+        let valuable = mem_with_ts("save-me", Layer::Buffer, 0.5, 0, two_hours_ago, two_hours_ago);
+        db.import(&[expendable, valuable]).unwrap();
+
+        let result = consolidate_sync(&db, None);
+        // "bye" either gets dropped by decay or by TTL
+        assert!(db.get("bye").unwrap().is_none(), "low importance buffer should be gone");
+        // "save-me" should survive (promoted from buffer to working)
+        let saved = db.get("save-me").unwrap();
+        assert!(saved.is_some(), "high importance buffer should survive");
+    }
+
+    #[test]
+    fn nothing_to_do() {
+        let db = test_db();
+        let now = crate::db::now_ms();
+        // fresh core memory — nothing should happen
+        let stable = mem_with_ts("stable", Layer::Core, 0.9, 10, now - 1000, now);
+        db.import(&[stable]).unwrap();
+
+        let r = consolidate_sync(&db, None);
+        assert_eq!(r.promoted, 0);
+        assert_eq!(r.decayed, 0);
     }
 }

@@ -367,4 +367,143 @@ mod tests {
     fn parse_rerank_empty() {
         assert!(parse_rerank_response("no numbers here", 3).is_empty());
     }
+
+    // --- recall integration tests ---
+
+    use crate::db::{MemoryDB, MemoryInput};
+
+    fn test_db_with_data() -> MemoryDB {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        db.insert(MemoryInput {
+            content: "very important fact about rust".into(),
+            layer: Some(3),
+            importance: Some(0.95),
+            source: None,
+            tags: None,
+        }).unwrap();
+        db.insert(MemoryInput {
+            content: "trivial note about lunch".into(),
+            layer: Some(1),
+            importance: Some(0.1),
+            source: None,
+            tags: None,
+        }).unwrap();
+        db.insert(MemoryInput {
+            content: "medium importance work log about rust compiler".into(),
+            layer: Some(2),
+            importance: Some(0.5),
+            source: None,
+            tags: None,
+        }).unwrap();
+        db
+    }
+
+    #[test]
+    fn score_favors_important() {
+        let db = test_db_with_data();
+        let req = RecallRequest {
+            query: "rust".into(),
+            budget_tokens: Some(2000),
+            layers: None,
+            min_importance: None,
+            limit: Some(10),
+            since: None,
+            until: None,
+            sort_by: None,
+            rerank: None,
+        };
+        let result = recall(&db, &req, None);
+        assert!(result.memories.len() >= 2);
+        // "very important fact" should score higher than "medium importance"
+        let first = &result.memories[0];
+        assert!(first.memory.content.contains("very important"), "highest importance should rank first");
+    }
+
+    #[test]
+    fn budget_limits_output() {
+        let db = test_db_with_data();
+        // tiny budget — should get at most 1 result
+        let req = RecallRequest {
+            query: "rust".into(),
+            budget_tokens: Some(5),
+            layers: None,
+            min_importance: None,
+            limit: Some(10),
+            since: None,
+            until: None,
+            sort_by: None,
+            rerank: None,
+        };
+        let result = recall(&db, &req, None);
+        assert!(result.memories.len() <= 2, "budget should limit results");
+        assert!(result.total_tokens <= 10, "shouldn't overshoot budget by much");
+    }
+
+    #[test]
+    fn budget_zero_returns_empty() {
+        let db = test_db_with_data();
+        let req = RecallRequest {
+            query: "rust".into(),
+            budget_tokens: Some(0),
+            layers: None,
+            min_importance: None,
+            limit: Some(10),
+            since: None,
+            until: None,
+            sort_by: None,
+            rerank: None,
+        };
+        let result = recall(&db, &req, None);
+        assert!(result.memories.is_empty());
+    }
+
+    #[test]
+    fn time_filter_since() {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        // insert two memories — we can't control created_at via MemoryInput,
+        // but both will have "now" timestamps. Import lets us set timestamps.
+        let now = crate::db::now_ms();
+        let old = Memory {
+            id: "old-one".into(),
+            content: "old memory about testing".into(),
+            layer: Layer::Core,
+            importance: 0.9,
+            created_at: now - 86_400_000, // yesterday
+            last_accessed: now - 86_400_000,
+            access_count: 5,
+            decay_rate: 0.05,
+            source: "test".into(),
+            tags: vec![],
+            embedding: None,
+        };
+        let recent = Memory {
+            id: "new-one".into(),
+            content: "recent memory about testing".into(),
+            layer: Layer::Core,
+            importance: 0.9,
+            created_at: now - 1000,
+            last_accessed: now,
+            access_count: 1,
+            decay_rate: 0.05,
+            source: "test".into(),
+            tags: vec![],
+            embedding: None,
+        };
+        db.import(&[old, recent]).unwrap();
+
+        let req = RecallRequest {
+            query: "testing".into(),
+            budget_tokens: Some(2000),
+            layers: None,
+            min_importance: None,
+            limit: Some(10),
+            since: Some(now - 3600_000), // last hour only
+            until: None,
+            sort_by: None,
+            rerank: None,
+        };
+        let result = recall(&db, &req, None);
+        assert_eq!(result.memories.len(), 1);
+        assert_eq!(result.memories[0].memory.id, "new-one");
+    }
 }

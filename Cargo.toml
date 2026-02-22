@@ -1,6 +1,6 @@
 [package]
 name = "engram"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Hierarchical memory engine for AI agents"
 license = "MIT"
@@ -10,7 +10,8 @@ categories = ["database", "command-line-utilities"]
 readme = "README.md"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["default"] }
+tower-http = { version = "0.6", features = ["limit"] }
 tokio = { version = "1", features = ["full"] }
 rusqlite = { version = "0.38", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
