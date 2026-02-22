@@ -20,11 +20,15 @@ Memories promote upward through access frequency and importance, and decay natur
 
 - Three-layer memory with configurable decay and automatic promotion
 - Hybrid search: semantic (embeddings) + BM25 keyword matching
+- LLM-powered memory merge: consolidation detects similar memories and merges them via LLM
+- LLM re-ranking: optionally re-rank recall results using an LLM for better relevance
 - LLM extraction: feed raw text, get structured memories
+- Time-windowed recall: `since`/`until` filters, `/recent` endpoint
 - Budget-aware recall with composite scoring
-- CJK tokenization support
+- CJK tokenization support (bigram indexing for Chinese/Japanese/Korean)
+- Near-duplicate detection on insert
 - Optional Bearer token auth
-- AI-optional: works without AI (pure FTS), gains semantic search with it
+- AI-optional: works without AI (pure FTS), gains semantic search + LLM features with it
 - Single binary, ~4 MB, <10 MB RSS
 
 ## Getting started
@@ -58,12 +62,29 @@ curl -X POST http://localhost:3917/memories \
 ### Recall
 
 ```bash
+# Basic recall
 curl -X POST http://localhost:3917/recall \
   -H 'Content-Type: application/json' \
   -d '{"query": "user preferences", "budget_tokens": 500}'
+
+# With LLM re-ranking
+curl -X POST http://localhost:3917/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "user preferences", "budget_tokens": 500, "rerank": true}'
+
+# Time-filtered (last 4 hours)
+curl -X POST http://localhost:3917/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "recent work", "budget_tokens": 500, "since": 1708600000000}'
 ```
 
 Scoring: `(0.4 × importance + 0.3 × recency + 0.3 × relevance) × layer_bonus`. Core memories always included.
+
+### Recent memories
+
+```bash
+curl http://localhost:3917/recent?hours=4&limit=20
+```
 
 ### Extract from text
 
@@ -76,10 +97,16 @@ curl -X POST http://localhost:3917/extract \
 ### Consolidate
 
 ```bash
+# Basic: promote/decay only
 curl -X POST http://localhost:3917/consolidate
+
+# With LLM merge: detect and merge semantically similar memories
+curl -X POST http://localhost:3917/consolidate \
+  -H 'Content-Type: application/json' \
+  -d '{"merge": true}'
 ```
 
-Promotes frequently-accessed important memories upward, drops decayed entries.
+Promotes frequently-accessed important memories upward, drops decayed entries. With `merge: true`, uses embedding similarity + LLM to intelligently merge duplicates.
 
 ### Full endpoint list
 
@@ -92,9 +119,10 @@ Promotes frequently-accessed important memories upward, drops decayed entries.
 | `GET` | `/memories/:id` | Get |
 | `PATCH` | `/memories/:id` | Update |
 | `DELETE` | `/memories/:id` | Delete |
-| `POST` | `/recall` | Hybrid search (semantic + keyword, budget-aware) |
+| `POST` | `/recall` | Hybrid search (semantic + keyword, budget-aware, optional rerank) |
 | `GET` | `/search` | Quick keyword search (`?q=term&limit=10`) |
-| `POST` | `/consolidate` | Maintenance cycle |
+| `GET` | `/recent` | Recent memories (`?hours=2&limit=20&layer=N`) |
+| `POST` | `/consolidate` | Maintenance cycle (optional `{"merge": true}`) |
 | `POST` | `/extract` | LLM extraction (requires AI) |
 | `GET` | `/export` | Export all memories as JSON |
 | `POST` | `/import` | Import memories (skips existing ids) |
