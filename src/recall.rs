@@ -138,20 +138,24 @@ pub fn recall(
         }
     }
 
-    // Phase 3: Always include core memories
-    for mem in db.list_by_layer(Layer::Core) {
-        if seen.contains(&mem.id) {
-            continue;
-        }
-        if mem.importance < min_imp {
-            continue;
-        }
-        if let Some(ref lf) = layer_filter {
-            if !lf.contains(&Layer::Core) {
+    // Phase 3: Include unseen core memories as fallback (low baseline relevance).
+    // These pad results when semantic+FTS don't cover enough, but won't outrank
+    // genuinely relevant hits due to the low relevance=0.1 baseline.
+    if scored.len() < limit {
+        for mem in db.list_by_layer(Layer::Core) {
+            if seen.contains(&mem.id) {
                 continue;
             }
+            if mem.importance < min_imp {
+                continue;
+            }
+            if let Some(ref lf) = layer_filter {
+                if !lf.contains(&Layer::Core) {
+                    continue;
+                }
+            }
+            scored.push(score_memory(&mem, 0.1));
         }
-        scored.push(score_memory(&mem, 0.0));
     }
 
     // Sort by score descending
@@ -182,7 +186,10 @@ pub fn recall(
         *breakdown.entry(layer_key).or_insert(0) += 1;
         total_tokens += tokens;
 
-        let _ = db.touch(&sm.memory.id);
+        // Only bump access stats for genuinely relevant results
+        if sm.relevance > 0.2 {
+            let _ = db.touch(&sm.memory.id);
+        }
         selected.push(sm);
     }
 

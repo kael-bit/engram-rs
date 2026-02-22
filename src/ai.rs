@@ -95,8 +95,10 @@ Rules:
 - Each entry must be self-contained (understandable without context)
 - Prefer concise entries over verbose ones
 - Merge redundant information
-- Assign higher importance to: identity, preferences, decisions, relationships
-- Assign lower importance to: debug info, transient states, routine actions
+- Write content in the same language as the input
+- Skip trivial metadata (counts, sizes, timestamps) unless they carry meaningful context
+- Assign higher importance to: identity, preferences, decisions, relationships, lessons learned
+- Assign lower importance to: debug info, transient states, routine actions, version snapshots
 - Output ONLY the JSON array, no other text"#;
 
 /// Extract structured memories from raw text using an LLM.
