@@ -112,14 +112,35 @@ server.tool(
     hours: z.number().positive().optional().describe("Look back N hours (default 2)"),
     limit: z.number().int().min(1).max(100).optional().describe("Max results (default 20)"),
     layer: z.number().int().min(1).max(3).optional().describe("Filter by layer"),
+    source: z.string().optional().describe("Filter by source (e.g. session)"),
   },
-  async ({ hours, limit, layer }) => {
+  async ({ hours, limit, layer, source }) => {
     const params = new URLSearchParams();
     if (hours !== undefined) params.set("hours", String(hours));
     if (limit !== undefined) params.set("limit", String(limit));
     if (layer !== undefined) params.set("layer", String(layer));
+    if (source !== undefined) params.set("source", source);
     const qs = params.toString();
     const result = await engramFetch(`/recent${qs ? "?" + qs : ""}`);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "engram_resume",
+  "One-call session recovery. Returns identity (core memories), " +
+    "recent activity, and session-tagged memories in a single response. " +
+    "Use this when waking up to restore context fast.",
+  {
+    hours: z.number().positive().optional().describe("Look back N hours (default 4)"),
+  },
+  async ({ hours }) => {
+    const params = new URLSearchParams();
+    if (hours !== undefined) params.set("hours", String(hours));
+    const qs = params.toString();
+    const result = await engramFetch(`/resume${qs ? "?" + qs : ""}`);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
