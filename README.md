@@ -78,12 +78,21 @@ curl -X POST http://localhost:3917/recall \
   -d '{"query": "recent work", "budget_tokens": 500, "since": 1708600000000}'
 ```
 
-Scoring: `(0.4 × importance + 0.3 × recency + 0.3 × relevance) × layer_bonus`. Core memories always included.
+Scoring: `(0.45 × relevance + 0.3 × importance + 0.25 × recency) × layer_bonus`. Core memories always included.
+
+### Session recovery
+
+```bash
+# One call to get identity, recent activity, and session context
+curl http://localhost:3917/resume?hours=4
+```
+
+Returns `identity` (high-importance core memories), `recent` (time-windowed), and `sessions` (source=session). Designed for agent wake-up.
 
 ### Recent memories
 
 ```bash
-curl http://localhost:3917/recent?hours=4&limit=20
+curl 'http://localhost:3917/recent?hours=4&limit=20&source=session'
 ```
 
 ### Extract from text
@@ -121,7 +130,8 @@ Promotes frequently-accessed important memories upward, drops decayed entries. W
 | `DELETE` | `/memories/:id` | Delete |
 | `POST` | `/recall` | Hybrid search (semantic + keyword, budget-aware, optional rerank) |
 | `GET` | `/search` | Quick keyword search (`?q=term&limit=10`) |
-| `GET` | `/recent` | Recent memories (`?hours=2&limit=20&layer=N`) |
+| `GET` | `/recent` | Recent memories (`?hours=2&limit=20&layer=N&source=X`) |
+| `GET` | `/resume` | Session recovery (`?hours=4`) |
 | `POST` | `/consolidate` | Maintenance cycle (optional `{"merge": true}`) |
 | `POST` | `/extract` | LLM extraction (requires AI) |
 | `GET` | `/export` | Export all memories as JSON |
