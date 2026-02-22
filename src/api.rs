@@ -561,6 +561,7 @@ async fn do_extract(
             source: Some("extract".into()),
             tags: em.tags,
         supersedes: None,
+        skip_dedup: None,
         };
 
         let db = state.db.clone();

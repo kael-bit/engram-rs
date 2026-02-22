@@ -86,6 +86,9 @@ pub struct MemoryInput {
     /// If set, the new memory replaces these old ones (by id). They get deleted.
     #[serde(default)]
     pub supersedes: Option<Vec<String>>,
+    /// Skip near-duplicate detection. Useful when storing intentionally similar memories.
+    #[serde(default)]
+    pub skip_dedup: Option<bool>,
 }
 
 impl MemoryInput {
@@ -97,6 +100,7 @@ impl MemoryInput {
             source: None,
             tags: None,
             supersedes: None,
+            skip_dedup: None,
         }
     }
 
@@ -122,6 +126,11 @@ impl MemoryInput {
 
     pub fn supersedes(mut self, ids: Vec<String>) -> Self {
         self.supersedes = Some(ids);
+        self
+    }
+
+    pub fn skip_dedup(mut self) -> Self {
+        self.skip_dedup = Some(true);
         self
     }
 }
@@ -370,6 +379,8 @@ impl MemoryDB {
 
         // Near-duplicate detection: if an existing memory has very similar content,
         // update it instead of creating a duplicate. Uses token overlap as a proxy.
+        let do_dedup = !input.skip_dedup.unwrap_or(false);
+        if do_dedup {
         if let Some(existing) = self.find_near_duplicate(&input.content) {
             tracing::debug!(existing_id = %existing.id, "near-duplicate found, updating instead");
             let tags = input.tags.unwrap_or_default();
@@ -413,6 +424,7 @@ impl MemoryDB {
                     opt.ok_or(EngramError::Internal("update after dedup failed".into()))
                 });
         }
+        } // do_dedup
 
         let now = now_ms();
         let layer_val = input.layer.unwrap_or(1);
@@ -909,6 +921,7 @@ mod tests {
                 source: None,
                 tags: Some(vec!["test".into()]),
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
 
@@ -937,6 +950,7 @@ mod tests {
                 source: None,
                 tags: None,
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
 
@@ -955,6 +969,7 @@ mod tests {
             source: None,
             tags: None,
         supersedes: None,
+        skip_dedup: None,
         });
         assert!(result.is_err());
     }
@@ -969,6 +984,7 @@ mod tests {
             source: None,
             tags: None,
         supersedes: None,
+        skip_dedup: None,
         });
         assert!(result.is_err());
     }
@@ -984,6 +1000,7 @@ mod tests {
                 source: None,
                 tags: None,
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
         assert!((mem.importance - 1.0).abs() < f64::EPSILON);
@@ -1000,6 +1017,7 @@ mod tests {
                 source: None,
                 tags: None,
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
 
@@ -1017,6 +1035,7 @@ mod tests {
             source: None,
             tags: None,
         supersedes: None,
+        skip_dedup: None,
         })
         .unwrap();
 
@@ -1034,6 +1053,7 @@ mod tests {
             source: None,
             tags: None,
         supersedes: None,
+        skip_dedup: None,
         })
         .unwrap();
 
@@ -1060,6 +1080,7 @@ mod tests {
                 source: None,
                 tags: None,
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
         }
@@ -1082,6 +1103,7 @@ mod tests {
                 source: None,
                 tags: None,
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
 
@@ -1105,6 +1127,7 @@ mod tests {
                 source: None,
                 tags: None,
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
         }
@@ -1127,6 +1150,7 @@ mod tests {
                 source: None,
                 tags: Some(vec!["habit".into()]),
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
 
@@ -1139,6 +1163,7 @@ mod tests {
                 source: None,
                 tags: Some(vec!["preference".into()]),
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
 
@@ -1166,6 +1191,7 @@ mod tests {
                 source: None,
                 tags: Some(vec!["学习".into()]),
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
 
@@ -1178,6 +1204,7 @@ mod tests {
                 source: None,
                 tags: None,
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
 
@@ -1207,6 +1234,7 @@ mod tests {
                 source: None,
                 tags: Some(vec!["old".into()]),
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
 
@@ -1233,6 +1261,7 @@ mod tests {
                 source: None,
                 tags: None,
             supersedes: None,
+            skip_dedup: None,
             })
             .unwrap();
 
@@ -1287,5 +1316,18 @@ mod tests {
         assert!(db.get(&a.id).unwrap().is_none());
         assert!(db.get(&b.id).unwrap().is_none());
         assert_eq!(db.get(&c.id).unwrap().unwrap().content, "fact version 3 (final)");
+    }
+
+    #[test]
+    fn skip_dedup_allows_similar() {
+        let db = test_db();
+        let a = db.insert(MemoryInput::new("the sky is blue today")).unwrap();
+        // Without skip_dedup, this would merge into `a`
+        let b = db
+            .insert(MemoryInput::new("the sky is blue today").skip_dedup())
+            .unwrap();
+        assert_ne!(a.id, b.id, "should create separate memories");
+        assert!(db.get(&a.id).unwrap().is_some());
+        assert!(db.get(&b.id).unwrap().is_some());
     }
 }
