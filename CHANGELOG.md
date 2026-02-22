@@ -1,52 +1,40 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+## 0.4.0
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+- **Body size limit**: 64KB cap on all requests (tower-http)
+- **Batch embedding**: extract endpoint now generates all embeddings in a single API call
+- **Tests**: consolidated and recall core logic now have dedicated unit tests (42 total)
+- **Clippy clean**: zero warnings on stable toolchain
+- **README**: updated with merge, rerank, time-filtered recall, and /recent docs
 
-## [Unreleased]
+## 0.3.0
 
-## [0.3.0] - 2026-02-23
+- **LLM-powered merge**: consolidation finds semantically similar memories (cosine > 0.68) and merges them via LLM
+- **LLM recall rerank**: `rerank: true` in recall requests re-ranks results using the LLM for better relevance
+- **Episodic memory**: time-filtered recall (`since`/`until`), `sort_by` parameter, `/recent` endpoint
+- **CJK dedup fix**: near-duplicate detection now uses bigram tokenization for Chinese/Japanese/Korean text
+- **Batch update**: `update_fields` uses a single query instead of multiple roundtrips
+- **Embedding optimization**: `row_to_memory` skips deserializing embedding blobs unless explicitly needed
 
-### Added
-- `GET /search?q=&limit=` — lightweight keyword search without recall scoring
-- `GET /memories?tag=X` — filter memory list by tag
-- `GET /export` / `POST /import` — full backup and restore
-- Near-duplicate detection on insert (Jaccard similarity > 0.8 auto-merges)
-- CJK bigram indexing — Chinese/Japanese/Korean full-text search actually works now
-- Age-based Working→Core promotion in consolidation (7 days + importance ≥ 0.5)
-- Configurable buffer TTL and working age thresholds for consolidation
-- Consolidation response includes promoted/dropped memory ids
-- `engram_search` tool in MCP server
-- 11 new integration tests (60 total)
+## 0.2.1
 
-### Fixed
-- CJK characters were not indexed by FTS5 unicode61 tokenizer — fixed via bigram preprocessing
-- `budget_tokens=0` now correctly returns empty results (was returning 1)
-- Recall `touch()` only fires for genuinely relevant results (relevance > 0.2)
-- Core memory fallback uses low baseline relevance instead of 0 to avoid inflated access counts
-- Extract prompt preserves input language and skips trivial metadata
+- **CJK bigram FTS**: full-text search works for Chinese/Japanese/Korean via bigram indexing at insert and query time
+- **Near-duplicate detection**: Jaccard similarity check on insert prevents storing redundant memories
+- **Tag filtering**: list and recall support `tag` parameter
+- **Quick search**: `GET /search?q=term` for simple keyword lookup
+- **Export/import**: `GET /export` and `POST /import` for backup and migration
+- **Auth**: optional Bearer token with constant-time comparison
+- **Consolidation improvements**: age-based promotion, access-count promotion, decay-based cleanup
+- **Error handling**: structured error types with proper HTTP status codes
+- **Extract**: LLM-powered memory extraction from raw text
+- **Dockerfile + CI**: containerized deployment, GitHub Actions workflow
 
-### Changed
-- FTS management moved from SQLite triggers to application-level (required for bigram preprocessing)
-- FTS index auto-rebuilds on startup only when CJK bigrams are missing
-- Constant-time Bearer token comparison (via `subtle` crate)
-- Simplified error enum: merged specific validation variants into `Validation(String)`
+## 0.1.0
 
-## [0.2.1] - 2026-02-23
-
-Initial public release.
-
-### Features
-- Three-layer hierarchical memory: Buffer → Working → Core
-- Exponential decay with layer-specific rates
-- Budget-aware recall with composite scoring (importance + recency + relevance)
-- Hybrid search: semantic (cosine similarity) + keyword (FTS5 BM25)
-- LLM-based memory extraction from raw text
-- CJK tokenization support
-- REST API with full CRUD
-- Optional Bearer token auth
-- Optional AI integration (OpenAI-compatible embeddings + chat)
-- MCP server for Claude/Cursor integration
-- SQLite WAL storage, single ~4 MB binary
+- Initial release
+- Three-layer memory model (Buffer → Working → Core)
+- Hybrid recall (semantic embeddings + FTS5 keyword search)
+- Budget-aware retrieval with composite scoring
+- Configurable decay rates per layer
+- OpenAI-compatible embedding and LLM backends
