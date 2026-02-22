@@ -46,20 +46,23 @@ const server = new McpServer({
 
 server.tool(
   "engram_store",
-  "Store a memory. Layer 1=buffer (transient), 2=working (active), 3=core (permanent).",
+  "Store a memory. Layer 1=buffer (transient), 2=working (active), 3=core (permanent). " +
+    "Use supersedes to replace outdated memories by their ids.",
   {
     content: z.string().describe("Memory content text"),
     importance: z.number().min(0).max(1).optional().describe("Importance 0-1"),
     layer: z.number().int().min(1).max(3).optional().describe("1=buffer, 2=working, 3=core"),
     tags: z.array(z.string()).optional().describe("Tags for categorization"),
     source: z.string().optional().describe("Source identifier"),
+    supersedes: z.array(z.string()).optional().describe("IDs of old memories this one replaces"),
   },
-  async ({ content, importance, layer, tags, source }) => {
+  async ({ content, importance, layer, tags, source, supersedes }) => {
     const body: Record<string, unknown> = { content };
     if (importance !== undefined) body.importance = importance;
     if (layer !== undefined) body.layer = layer;
     if (tags !== undefined) body.tags = tags;
     if (source !== undefined) body.source = source;
+    if (supersedes !== undefined) body.supersedes = supersedes;
 
     const result = await engramFetch("/memories", body);
     return {

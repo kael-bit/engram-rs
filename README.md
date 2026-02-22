@@ -27,6 +27,7 @@ Memories promote upward through access frequency and importance, and decay natur
 - Budget-aware recall with composite scoring
 - CJK tokenization support (bigram indexing for Chinese/Japanese/Korean)
 - Near-duplicate detection on insert
+- Supersede: replace outdated memories by id
 - Optional Bearer token auth
 - AI-optional: works without AI (pure FTS), gains semantic search + LLM features with it
 - Single binary, ~4 MB, <10 MB RSS
@@ -57,6 +58,11 @@ Requires Rust 1.75+.
 curl -X POST http://localhost:3917/memories \
   -H 'Content-Type: application/json' \
   -d '{"content": "prefers dark mode and vim keybindings", "importance": 0.8, "layer": 2}'
+
+# Replace old memories with updated info
+curl -X POST http://localhost:3917/memories \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "now uses v0.4.0", "supersedes": ["<old-memory-id>"]}'
 ```
 
 ### Recall
