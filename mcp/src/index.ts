@@ -56,8 +56,9 @@ server.tool(
     source: z.string().optional().describe("Source identifier"),
     supersedes: z.array(z.string()).optional().describe("IDs of old memories this one replaces"),
     skip_dedup: z.boolean().optional().describe("Skip near-duplicate detection"),
+    namespace: z.string().optional().describe("Namespace for multi-agent isolation"),
   },
-  async ({ content, importance, layer, tags, source, supersedes, skip_dedup }) => {
+  async ({ content, importance, layer, tags, source, supersedes, skip_dedup, namespace }) => {
     const body: Record<string, unknown> = { content };
     if (importance !== undefined) body.importance = importance;
     if (layer !== undefined) body.layer = layer;
@@ -65,6 +66,7 @@ server.tool(
     if (source !== undefined) body.source = source;
     if (supersedes !== undefined) body.supersedes = supersedes;
     if (skip_dedup !== undefined) body.skip_dedup = skip_dedup;
+    if (namespace !== undefined) body.namespace = namespace;
 
     const result = await engramFetch("/memories", body);
     return {
@@ -89,8 +91,9 @@ server.tool(
     rerank: z.boolean().optional().describe("Re-rank results using LLM"),
     source: z.string().optional().describe("Filter by source (e.g. session, extract, api)"),
     tags: z.array(z.string()).optional().describe("Filter by tags (must have ALL specified)"),
+    namespace: z.string().optional().describe("Filter by namespace"),
   },
-  async ({ query, budget_tokens, layers, min_importance, limit, since, until, sort_by, rerank, source, tags }) => {
+  async ({ query, budget_tokens, layers, min_importance, limit, since, until, sort_by, rerank, source, tags, namespace }) => {
     const body: Record<string, unknown> = { query };
     if (budget_tokens !== undefined) body.budget_tokens = budget_tokens;
     if (layers !== undefined) body.layers = layers;
@@ -102,6 +105,7 @@ server.tool(
     if (rerank !== undefined) body.rerank = rerank;
     if (source !== undefined) body.source = source;
     if (tags !== undefined) body.tags = tags;
+    if (namespace !== undefined) body.namespace = namespace;
 
     const result = await engramFetch("/recall", body);
     return {
