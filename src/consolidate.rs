@@ -149,7 +149,10 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
             continue;
         }
 
-        let clusters = find_clusters(&layer_mems, 0.75);
+        // text-embedding-3-small produces lower cosine scores for short CJK text,
+        // so 0.75 was too aggressive. 0.68 catches real semantic duplicates without
+        // merging unrelated memories (validated on actual CJK memory pairs).
+        let clusters = find_clusters(&layer_mems, 0.68);
 
         for cluster in clusters {
             if cluster.len() < 2 {
