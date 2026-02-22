@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0
+
+- **Connection pool**: replaced `Mutex<Connection>` with r2d2 pool (8 connections). Concurrent reads no longer block each other. 702 recalls/s, 956 stats/s under load.
+- **Namespace isolation**: memories now have a `namespace` field for multi-agent use. Set via JSON body or `X-Namespace` header. Filter with `?ns=` on list/recent, `namespace` field on recall.
+- **Supersede**: `POST /memories` accepts `supersedes: [id, ...]` to atomically replace old memories.
+- **Query embedding cache**: LRU cache (128 entries) cuts repeated semantic recalls from 1.1s to 22ms.
+- **Merge improvements**: consolidation now picks the newest memory as winner (not highest importance) and preserves max importance from the cluster.
+- **API tests**: 13 integration tests covering auth, CRUD, recall, namespace, batch delete.
+- **61 tests total**, 0 clippy warnings.
+
 ## 0.4.0
 
 - **Body size limit**: 64KB cap on all requests (tower-http)
