@@ -392,28 +392,40 @@ async fn do_resume(
         let recent = d.list_since(since_ms, 20).unwrap_or_default();
 
         // session memories — what happened in recent sessions
-        let sessions: Vec<db::Memory> = d
+        let all_session: Vec<db::Memory> = d
             .list_since(since_ms, 50)
             .unwrap_or_default()
             .into_iter()
             .filter(|m| m.source == "session")
-            .take(10)
             .collect();
 
-        (identity, recent, sessions)
+        let mut next_actions = Vec::new();
+        let mut sessions = Vec::new();
+        for m in all_session {
+            if m.tags.iter().any(|t| t == "next-action") {
+                next_actions.push(m);
+            } else {
+                sessions.push(m);
+            }
+        }
+        sessions.truncate(10);
+
+        (identity, recent, sessions, next_actions)
     })
     .await
     .map_err(|e| EngramError::Internal(e.to_string()))?;
 
-    let (identity, recent, sessions) = sections;
+    let (identity, recent, sessions, next_actions) = sections;
     Ok(Json(serde_json::json!({
         "identity": identity,
         "recent": recent,
         "sessions": sessions,
+        "next_actions": next_actions,
         "hours": hours,
         "identity_count": identity.len(),
         "recent_count": recent.len(),
         "session_count": sessions.len(),
+        "next_action_count": next_actions.len(),
     })))
 }
 
