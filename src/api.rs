@@ -702,6 +702,7 @@ mod tests {
             .unwrap()
     }
 
+    #[allow(dead_code)]
     fn authed_json_req(
         method: &str,
         uri: &str,

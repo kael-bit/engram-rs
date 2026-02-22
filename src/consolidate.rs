@@ -444,7 +444,7 @@ mod tests {
         let valuable = mem_with_ts("save-me", Layer::Buffer, 0.5, 0, two_hours_ago, two_hours_ago);
         db.import(&[expendable, valuable]).unwrap();
 
-        let result = consolidate_sync(&db, None);
+        let _result = consolidate_sync(&db, None);
         // "bye" either gets dropped by decay or by TTL
         assert!(db.get("bye").unwrap().is_none(), "low importance buffer should be gone");
         // "save-me" should survive (promoted from buffer to working)
