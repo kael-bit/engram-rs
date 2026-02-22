@@ -309,6 +309,7 @@ mod tests {
                 decay_rate: 1.0,
                 source: "test".into(),
                 tags: vec![],
+                namespace: "default".into(),
                 embedding: None,
             },
             emb,
@@ -391,6 +392,7 @@ mod tests {
             decay_rate: layer.default_decay(),
             source: "test".into(),
             tags: vec![],
+            namespace: "default".into(),
             embedding: None,
         }
     }

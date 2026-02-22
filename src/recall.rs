@@ -33,6 +33,8 @@ pub struct RecallRequest {
     pub source: Option<String>,
     /// Filter by tags — memory must have ALL specified tags.
     pub tags: Option<Vec<String>>,
+    /// Filter by namespace.
+    pub namespace: Option<String>,
 }
 
 /// Recall response with scored memories and metadata.
@@ -143,6 +145,11 @@ pub fn recall(
         }
         if let Some(ref required_tags) = req.tags {
             if !required_tags.iter().all(|t| mem.tags.contains(t)) {
+                return false;
+            }
+        }
+        if let Some(ref ns) = req.namespace {
+            if mem.namespace != *ns {
                 return false;
             }
         }
@@ -387,6 +394,7 @@ mod tests {
             importance: Some(0.95),
             source: None,
             tags: None,
+            namespace: None,
         supersedes: None,
         skip_dedup: None,
         }).unwrap();
@@ -396,6 +404,7 @@ mod tests {
             importance: Some(0.1),
             source: None,
             tags: None,
+            namespace: None,
         supersedes: None,
         skip_dedup: None,
         }).unwrap();
@@ -405,6 +414,7 @@ mod tests {
             importance: Some(0.5),
             source: None,
             tags: None,
+            namespace: None,
         supersedes: None,
         skip_dedup: None,
         }).unwrap();
@@ -424,6 +434,7 @@ mod tests {
             until: None,
             sort_by: None,
             rerank: None, source: None, tags: None,
+            namespace: None,
         };
         let result = recall(&db, &req, None);
         assert!(result.memories.len() >= 2);
@@ -446,6 +457,7 @@ mod tests {
             until: None,
             sort_by: None,
             rerank: None, source: None, tags: None,
+            namespace: None,
         };
         let result = recall(&db, &req, None);
         assert!(result.memories.len() <= 2, "budget should limit results");
@@ -465,6 +477,7 @@ mod tests {
             until: None,
             sort_by: None,
             rerank: None, source: None, tags: None,
+            namespace: None,
         };
         let result = recall(&db, &req, None);
         assert!(result.memories.is_empty());
@@ -487,6 +500,7 @@ mod tests {
             decay_rate: 0.05,
             source: "test".into(),
             tags: vec![],
+            namespace: "default".into(),
             embedding: None,
         };
         let recent = Memory {
@@ -500,6 +514,7 @@ mod tests {
             decay_rate: 0.05,
             source: "test".into(),
             tags: vec![],
+            namespace: "default".into(),
             embedding: None,
         };
         db.import(&[old, recent]).unwrap();
@@ -514,6 +529,7 @@ mod tests {
             until: None,
             sort_by: None,
             rerank: None, source: None, tags: None,
+            namespace: None,
         };
         let result = recall(&db, &req, None);
         assert_eq!(result.memories.len(), 1);
@@ -527,6 +543,7 @@ mod tests {
             content: "from the API".into(),
             layer: Some(3), importance: Some(0.9),
             source: Some("api".into()), tags: None,
+            namespace: None,
         supersedes: None,
         skip_dedup: None,
         }).unwrap();
@@ -534,6 +551,7 @@ mod tests {
             content: "from a session".into(),
             layer: Some(2), importance: Some(0.7),
             source: Some("session".into()), tags: None,
+            namespace: None,
         supersedes: None,
         skip_dedup: None,
         }).unwrap();
@@ -544,6 +562,7 @@ mod tests {
             layers: None, min_importance: None, limit: Some(10),
             since: None, until: None, sort_by: None, rerank: None,
             source: Some("session".into()), tags: None,
+            namespace: None,
         };
         let result = recall(&db, &req, None);
         assert_eq!(result.memories.len(), 1);
@@ -559,6 +578,7 @@ mod tests {
             source: None, tags: Some(vec!["rust".into(), "engram".into()]),
         supersedes: None,
         skip_dedup: None,
+        namespace: None,
         }).unwrap();
         db.insert(MemoryInput {
             content: "python script notes".into(),
@@ -566,6 +586,7 @@ mod tests {
             source: None, tags: Some(vec!["python".into()]),
         supersedes: None,
         skip_dedup: None,
+        namespace: None,
         }).unwrap();
 
         let req = RecallRequest {
@@ -574,6 +595,7 @@ mod tests {
             layers: None, min_importance: None, limit: Some(10),
             since: None, until: None, sort_by: None, rerank: None,
             source: None, tags: Some(vec!["rust".into()]),
+            namespace: None,
         };
         let result = recall(&db, &req, None);
         assert_eq!(result.memories.len(), 1);

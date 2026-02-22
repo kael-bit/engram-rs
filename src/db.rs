@@ -72,8 +72,14 @@ pub struct Memory {
     pub decay_rate: f64,
     pub source: String,
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "is_default_ns")]
+    pub namespace: String,
     #[serde(skip)]
     pub embedding: Option<Vec<f64>>,
+}
+
+fn is_default_ns(ns: &str) -> bool {
+    ns == "default"
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +95,9 @@ pub struct MemoryInput {
     /// Skip near-duplicate detection. Useful when storing intentionally similar memories.
     #[serde(default)]
     pub skip_dedup: Option<bool>,
+    /// Namespace for multi-agent isolation.
+    #[serde(default)]
+    pub namespace: Option<String>,
 }
 
 impl MemoryInput {
@@ -101,6 +110,7 @@ impl MemoryInput {
             tags: None,
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
         }
     }
 
@@ -131,6 +141,11 @@ impl MemoryInput {
 
     pub fn skip_dedup(mut self) -> Self {
         self.skip_dedup = Some(true);
+        self
+    }
+
+    pub fn namespace(mut self, ns: impl Into<String>) -> Self {
+        self.namespace = Some(ns.into());
         self
     }
 }
@@ -237,6 +252,7 @@ CREATE TABLE IF NOT EXISTS memories (
     decay_rate REAL NOT NULL DEFAULT 1.0,
     source TEXT NOT NULL DEFAULT 'manual',
     tags TEXT NOT NULL DEFAULT '[]',
+    namespace TEXT NOT NULL DEFAULT 'default',
     embedding BLOB
 );
 
@@ -278,6 +294,17 @@ impl MemoryDB {
         // Migration: add embedding column if missing
         if conn.prepare("SELECT embedding FROM memories LIMIT 0").is_err() {
             conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB", [])?;
+        }
+        // Migration: add namespace column if missing
+        if conn.prepare("SELECT namespace FROM memories LIMIT 0").is_err() {
+            conn.execute(
+                "ALTER TABLE memories ADD COLUMN namespace TEXT NOT NULL DEFAULT 'default'",
+                [],
+            )?;
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_namespace ON memories(namespace)",
+                [],
+            )?;
         }
         let db = Self { conn };
         db.rebuild_fts()?;
@@ -435,11 +462,13 @@ impl MemoryDB {
         let tags = input.tags.unwrap_or_default();
         let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
 
+        let namespace = input.namespace.unwrap_or_else(|| "default".into());
+
         self.conn.execute(
             "INSERT INTO memories \
              (id, content, layer, importance, created_at, last_accessed, \
-              access_count, decay_rate, source, tags) \
-             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9)",
+              access_count, decay_rate, source, tags, namespace) \
+             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10)",
             params![
                 id,
                 input.content,
@@ -449,7 +478,8 @@ impl MemoryDB {
                 now,
                 layer.default_decay(),
                 source,
-                tags_json
+                tags_json,
+                namespace
             ],
         )?;
 
@@ -475,6 +505,7 @@ impl MemoryDB {
             decay_rate: layer.default_decay(),
             source,
             tags,
+            namespace,
             embedding: None,
         })
     }
@@ -546,16 +577,38 @@ impl MemoryDB {
 
     /// List all memories with pagination.
     pub fn list_all(&self, limit: usize, offset: usize) -> Result<Vec<Memory>, EngramError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT * FROM memories ORDER BY last_accessed DESC LIMIT ?1 OFFSET ?2",
-        )?;
-        let rows = stmt
-            .query_map(params![limit as i64, offset as i64], |row| {
-                row_to_memory(row)
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
+        self.list_all_ns(limit, offset, None)
+    }
+
+    pub fn list_all_ns(
+        &self,
+        limit: usize,
+        offset: usize,
+        ns: Option<&str>,
+    ) -> Result<Vec<Memory>, EngramError> {
+        match ns {
+            Some(ns) => {
+                let mut stmt = self.conn.prepare(
+                    "SELECT * FROM memories WHERE namespace = ?3 \
+                     ORDER BY last_accessed DESC LIMIT ?1 OFFSET ?2",
+                )?;
+                let rows: Vec<Memory> = stmt
+                    .query_map(params![limit as i64, offset as i64, ns], row_to_memory)?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(rows)
+            }
+            None => {
+                let mut stmt = self.conn.prepare(
+                    "SELECT * FROM memories ORDER BY last_accessed DESC LIMIT ?1 OFFSET ?2",
+                )?;
+                let rows: Vec<Memory> = stmt
+                    .query_map(params![limit as i64, offset as i64], row_to_memory)?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(rows)
+            }
+        }
     }
 
     /// List memories created since a given timestamp, ordered by creation time descending.
@@ -636,7 +689,29 @@ impl MemoryDB {
         s
     }
 
-    pub fn update_fields(
+    pub fn stats_ns(&self, ns: &str) -> Stats {
+        let mut s = Stats { total: 0, buffer: 0, working: 0, core: 0 };
+        let Ok(mut stmt) = self.conn.prepare(
+            "SELECT layer, COUNT(*) FROM memories WHERE namespace = ?1 GROUP BY layer",
+        ) else {
+            return s;
+        };
+        let Ok(rows) = stmt.query_map(params![ns], |row| {
+            Ok((row.get::<_, u8>(0)?, row.get::<_, i64>(1)? as usize))
+        }) else {
+            return s;
+        };
+        for r in rows.flatten() {
+            s.total += r.1;
+            match r.0 {
+                1 => s.buffer = r.1,
+                2 => s.working = r.1,
+                3 => s.core = r.1,
+                _ => {}
+            }
+        }
+        s
+    }    pub fn update_fields(
         &self,
         id: &str,
         content: Option<&str>,
@@ -897,6 +972,7 @@ fn row_to_memory_impl(row: &rusqlite::Row, include_embedding: bool) -> rusqlite:
         decay_rate: row.get("decay_rate")?,
         source: row.get("source")?,
         tags: serde_json::from_str(&tags_str).unwrap_or_default(),
+        namespace: row.get::<_, String>("namespace").unwrap_or_else(|_| "default".into()),
         embedding,
     })
 }
@@ -922,6 +998,7 @@ mod tests {
                 tags: Some(vec!["test".into()]),
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
 
@@ -951,6 +1028,7 @@ mod tests {
                 tags: None,
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
 
@@ -970,6 +1048,7 @@ mod tests {
             tags: None,
         supersedes: None,
         skip_dedup: None,
+        namespace: None,
         });
         assert!(result.is_err());
     }
@@ -985,6 +1064,7 @@ mod tests {
             tags: None,
         supersedes: None,
         skip_dedup: None,
+        namespace: None,
         });
         assert!(result.is_err());
     }
@@ -1001,6 +1081,7 @@ mod tests {
                 tags: None,
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
         assert!((mem.importance - 1.0).abs() < f64::EPSILON);
@@ -1018,6 +1099,7 @@ mod tests {
                 tags: None,
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
 
@@ -1036,6 +1118,7 @@ mod tests {
             tags: None,
         supersedes: None,
         skip_dedup: None,
+        namespace: None,
         })
         .unwrap();
 
@@ -1054,6 +1137,7 @@ mod tests {
             tags: None,
         supersedes: None,
         skip_dedup: None,
+        namespace: None,
         })
         .unwrap();
 
@@ -1081,6 +1165,7 @@ mod tests {
                 tags: None,
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
         }
@@ -1104,6 +1189,7 @@ mod tests {
                 tags: None,
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
 
@@ -1128,6 +1214,7 @@ mod tests {
                 tags: None,
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
         }
@@ -1151,6 +1238,7 @@ mod tests {
                 tags: Some(vec!["habit".into()]),
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
 
@@ -1164,6 +1252,7 @@ mod tests {
                 tags: Some(vec!["preference".into()]),
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
 
@@ -1192,6 +1281,7 @@ mod tests {
                 tags: Some(vec!["学习".into()]),
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
 
@@ -1205,6 +1295,7 @@ mod tests {
                 tags: None,
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
 
@@ -1235,6 +1326,7 @@ mod tests {
                 tags: Some(vec!["old".into()]),
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
 
@@ -1262,6 +1354,7 @@ mod tests {
                 tags: None,
             supersedes: None,
             skip_dedup: None,
+            namespace: None,
             })
             .unwrap();
 
@@ -1329,5 +1422,41 @@ mod tests {
         assert_ne!(a.id, b.id, "should create separate memories");
         assert!(db.get(&a.id).unwrap().is_some());
         assert!(db.get(&b.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn namespace_isolation() {
+        let db = test_db();
+        let a = db
+            .insert(MemoryInput::new("agent-a's secret").namespace("agent-a"))
+            .unwrap();
+        let b = db
+            .insert(MemoryInput::new("agent-b's data").namespace("agent-b"))
+            .unwrap();
+        let c = db
+            .insert(MemoryInput::new("default ns memory"))
+            .unwrap();
+
+        // list_all_ns filters by namespace
+        let a_mems = db.list_all_ns(50, 0, Some("agent-a")).unwrap();
+        assert_eq!(a_mems.len(), 1);
+        assert_eq!(a_mems[0].id, a.id);
+
+        let b_mems = db.list_all_ns(50, 0, Some("agent-b")).unwrap();
+        assert_eq!(b_mems.len(), 1);
+        assert_eq!(b_mems[0].id, b.id);
+
+        // default namespace
+        let def_mems = db.list_all_ns(50, 0, Some("default")).unwrap();
+        assert_eq!(def_mems.len(), 1);
+        assert_eq!(def_mems[0].id, c.id);
+
+        // no namespace filter returns all
+        let all = db.list_all_ns(50, 0, None).unwrap();
+        assert_eq!(all.len(), 3);
+
+        // stats_ns
+        let s = db.stats_ns("agent-a");
+        assert_eq!(s.total, 1);
     }
 }

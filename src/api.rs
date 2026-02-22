@@ -12,6 +12,15 @@ use tracing::{debug, warn};
 use crate::error::EngramError;
 use crate::{ai, consolidate, db, lock_db, recall, AppState};
 
+/// Extract namespace from X-Namespace header, defaulting to None (= all namespaces).
+fn get_namespace(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get("x-namespace")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Auth middleware: checks Bearer token if ENGRAM_API_KEY is configured.
 async fn require_auth(
     State(state): State<AppState>,
@@ -152,8 +161,13 @@ fn spawn_embed_batch(db: crate::SharedDB, cfg: ai::AiConfig, items: Vec<(String,
 
 async fn create_memory(
     State(state): State<AppState>,
-    Json(input): Json<db::MemoryInput>,
+    headers: axum::http::HeaderMap,
+    Json(mut input): Json<db::MemoryInput>,
 ) -> Result<(StatusCode, Json<db::Memory>), EngramError> {
+    // Body namespace takes precedence, then X-Namespace header
+    if input.namespace.is_none() {
+        input.namespace = get_namespace(&headers);
+    }
     let db = state.db.clone();
     let mem = tokio::task::spawn_blocking(move || lock_db(&db).insert(input))
         .await
@@ -255,6 +269,7 @@ async fn batch_delete(
 struct ListQuery {
     layer: Option<u8>,
     tag: Option<String>,
+    ns: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
 }
@@ -283,6 +298,10 @@ async fn list_memories(
         // filter by tag if specified
         if let Some(ref tag) = q.tag {
             memories.retain(|m| m.tags.iter().any(|t| t == tag));
+        }
+        // filter by namespace
+        if let Some(ref ns) = q.ns {
+            memories.retain(|m| m.namespace == *ns);
         }
 
         let count = memories.len();
@@ -351,6 +370,8 @@ struct RecentQuery {
     min_importance: Option<f64>,
     /// Filter by source (e.g. "session")
     source: Option<String>,
+    /// Filter by namespace
+    ns: Option<String>,
 }
 
 async fn list_recent(
@@ -362,6 +383,7 @@ async fn list_recent(
     let layer_filter = q.layer;
     let min_imp = q.min_importance.unwrap_or(0.0);
     let source_filter = q.source;
+    let ns_filter = q.ns;
     let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
 
     let db = state.db.clone();
@@ -376,6 +398,9 @@ async fn list_recent(
         }
         if let Some(ref src) = source_filter {
             memories.retain(|m| m.source == *src);
+        }
+        if let Some(ref ns) = ns_filter {
+            memories.retain(|m| m.namespace == *ns);
         }
         Ok::<_, EngramError>(memories)
     })
@@ -562,6 +587,7 @@ async fn do_extract(
             tags: em.tags,
         supersedes: None,
         skip_dedup: None,
+        namespace: None,
         };
 
         let db = state.db.clone();
