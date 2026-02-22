@@ -316,6 +316,8 @@ struct RecentQuery {
     limit: Option<usize>,
     /// Filter by layer (optional)
     layer: Option<u8>,
+    /// Skip memories below this importance (e.g. 0.3 to filter noise)
+    min_importance: Option<f64>,
 }
 
 async fn list_recent(
@@ -325,6 +327,7 @@ async fn list_recent(
     let hours = q.hours.unwrap_or(2.0);
     let limit = q.limit.unwrap_or(20).min(100);
     let layer_filter = q.layer;
+    let min_imp = q.min_importance.unwrap_or(0.0);
     let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
 
     let db = state.db.clone();
@@ -333,6 +336,9 @@ async fn list_recent(
         let mut memories = d.list_since(since_ms, limit)?;
         if let Some(l) = layer_filter {
             memories.retain(|m| m.layer as u8 == l);
+        }
+        if min_imp > 0.0 {
+            memories.retain(|m| m.importance >= min_imp);
         }
         Ok::<_, EngramError>(memories)
     })
