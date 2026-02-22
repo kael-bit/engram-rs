@@ -490,7 +490,7 @@ impl MemoryDB {
             "SELECT * FROM memories WHERE created_at >= ?1 ORDER BY created_at DESC LIMIT ?2",
         )?;
         let rows = stmt
-            .query_map(params![since_ms, limit as i64], |row| row_to_memory(row))?
+            .query_map(params![since_ms, limit as i64], row_to_memory)?
             .filter_map(|r| r.ok())
             .collect();
         Ok(rows)
@@ -778,7 +778,7 @@ impl MemoryDB {
 fn tokenize_for_dedup(text: &str) -> std::collections::HashSet<String> {
     let mut tokens: std::collections::HashSet<String> = text
         .split_whitespace()
-        .filter(|w| !w.chars().all(|c| is_cjk(c))) // pure CJK chunks are handled by bigrams below
+        .filter(|w| !w.chars().all(is_cjk)) // pure CJK chunks are handled by bigrams below
         .map(|w| w.to_lowercase())
         .collect();
 

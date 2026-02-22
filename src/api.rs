@@ -341,7 +341,7 @@ async fn do_recall(
     }
 
     let do_rerank =
-        req.rerank.unwrap_or(false) && state.ai.as_ref().map_or(false, |c| c.has_llm());
+        req.rerank.unwrap_or(false) && state.ai.as_ref().is_some_and(|c| c.has_llm());
     let query_text = req.query.clone();
     let final_limit = req.limit.unwrap_or(20).min(100);
 
@@ -351,7 +351,7 @@ async fn do_recall(
 
     let query_emb = if let Some(ref cfg) = state.ai {
         if cfg.has_embed() {
-            match ai::get_embeddings(cfg, &[query_text.clone()]).await {
+            match ai::get_embeddings(cfg, std::slice::from_ref(&query_text)).await {
                 Ok(mut v) => v.pop(),
                 Err(e) => {
                     warn!(error = %e, "embedding lookup failed, falling back to FTS");
