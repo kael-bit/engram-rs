@@ -43,7 +43,7 @@ ENGRAM_LLM_KEY=sk-xxx \
 ./target/release/engram --port 3917
 ```
 
-Requires Rust 1.85+.
+Requires Rust 1.75+.
 
 ## API
 
@@ -119,7 +119,7 @@ cd mcp && npm install && npm run build
 }
 ```
 
-Tools: `engram_store`, `engram_recall`, `engram_extract`, `engram_consolidate`.
+Tools: `engram_store`, `engram_recall`, `engram_search`, `engram_extract`, `engram_consolidate`.
 
 ## Configuration
 
