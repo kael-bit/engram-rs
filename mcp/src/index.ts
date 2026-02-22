@@ -55,14 +55,16 @@ server.tool(
     tags: z.array(z.string()).optional().describe("Tags for categorization"),
     source: z.string().optional().describe("Source identifier"),
     supersedes: z.array(z.string()).optional().describe("IDs of old memories this one replaces"),
+    skip_dedup: z.boolean().optional().describe("Skip near-duplicate detection"),
   },
-  async ({ content, importance, layer, tags, source, supersedes }) => {
+  async ({ content, importance, layer, tags, source, supersedes, skip_dedup }) => {
     const body: Record<string, unknown> = { content };
     if (importance !== undefined) body.importance = importance;
     if (layer !== undefined) body.layer = layer;
     if (tags !== undefined) body.tags = tags;
     if (source !== undefined) body.source = source;
     if (supersedes !== undefined) body.supersedes = supersedes;
+    if (skip_dedup !== undefined) body.skip_dedup = skip_dedup;
 
     const result = await engramFetch("/memories", body);
     return {
