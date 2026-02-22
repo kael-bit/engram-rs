@@ -41,34 +41,17 @@ async function engramFetch(path: string, body?: unknown): Promise<unknown> {
 
 const server = new McpServer({
   name: "engram",
-  version: "0.1.0",
+  version: "0.4.0",
 });
-
-// -- engram_store --
 
 server.tool(
   "engram_store",
-  "Store a memory in the engram hierarchical memory engine. " +
-    "Layer 1 = buffer (transient), 2 = working (active), 3 = core (permanent).",
+  "Store a memory. Layer 1=buffer (transient), 2=working (active), 3=core (permanent).",
   {
     content: z.string().describe("Memory content text"),
-    importance: z
-      .number()
-      .min(0)
-      .max(1)
-      .optional()
-      .describe("Importance score 0-1 (default ~0.5)"),
-    layer: z
-      .number()
-      .int()
-      .min(1)
-      .max(3)
-      .optional()
-      .describe("Memory layer: 1=buffer, 2=working, 3=core"),
-    tags: z
-      .array(z.string())
-      .optional()
-      .describe("Optional tags for categorization"),
+    importance: z.number().min(0).max(1).optional().describe("Importance 0-1"),
+    layer: z.number().int().min(1).max(3).optional().describe("1=buffer, 2=working, 3=core"),
+    tags: z.array(z.string()).optional().describe("Tags for categorization"),
     source: z.string().optional().describe("Source identifier"),
   },
   async ({ content, importance, layer, tags, source }) => {
@@ -85,44 +68,35 @@ server.tool(
   }
 );
 
-// -- engram_recall --
-
 server.tool(
   "engram_recall",
-  "Recall memories from engram using hybrid semantic + keyword search. " +
-    "Supports budget-aware retrieval — specify a token budget and get the " +
-    "most relevant memories that fit.",
+  "Hybrid semantic + keyword search with budget-aware retrieval. " +
+    "Supports time filtering, source/tag filtering, and LLM re-ranking.",
   {
     query: z.string().describe("Search query"),
-    budget_tokens: z
-      .number()
-      .int()
-      .positive()
-      .optional()
-      .describe("Max token budget for returned memories"),
-    layers: z
-      .array(z.number().int().min(1).max(3))
-      .optional()
-      .describe("Filter by layers (e.g. [2, 3])"),
-    min_importance: z
-      .number()
-      .min(0)
-      .max(1)
-      .optional()
-      .describe("Minimum importance threshold"),
-    limit: z
-      .number()
-      .int()
-      .positive()
-      .optional()
-      .describe("Max number of memories to return"),
+    budget_tokens: z.number().int().positive().optional().describe("Max token budget"),
+    layers: z.array(z.number().int().min(1).max(3)).optional().describe("Filter by layers"),
+    min_importance: z.number().min(0).max(1).optional().describe("Min importance threshold"),
+    limit: z.number().int().positive().optional().describe("Max results"),
+    since: z.number().int().optional().describe("Only memories created after this unix ms timestamp"),
+    until: z.number().int().optional().describe("Only memories created before this unix ms timestamp"),
+    sort_by: z.enum(["score", "recent", "accessed"]).optional().describe("Sort order (default: score)"),
+    rerank: z.boolean().optional().describe("Re-rank results using LLM"),
+    source: z.string().optional().describe("Filter by source (e.g. session, extract, api)"),
+    tags: z.array(z.string()).optional().describe("Filter by tags (must have ALL specified)"),
   },
-  async ({ query, budget_tokens, layers, min_importance, limit }) => {
+  async ({ query, budget_tokens, layers, min_importance, limit, since, until, sort_by, rerank, source, tags }) => {
     const body: Record<string, unknown> = { query };
     if (budget_tokens !== undefined) body.budget_tokens = budget_tokens;
     if (layers !== undefined) body.layers = layers;
     if (min_importance !== undefined) body.min_importance = min_importance;
     if (limit !== undefined) body.limit = limit;
+    if (since !== undefined) body.since = since;
+    if (until !== undefined) body.until = until;
+    if (sort_by !== undefined) body.sort_by = sort_by;
+    if (rerank !== undefined) body.rerank = rerank;
+    if (source !== undefined) body.source = source;
+    if (tags !== undefined) body.tags = tags;
 
     const result = await engramFetch("/recall", body);
     return {
@@ -131,19 +105,34 @@ server.tool(
   }
 );
 
-// -- engram_extract --
+server.tool(
+  "engram_recent",
+  "List recent memories by creation time. Good for session context recovery.",
+  {
+    hours: z.number().positive().optional().describe("Look back N hours (default 2)"),
+    limit: z.number().int().min(1).max(100).optional().describe("Max results (default 20)"),
+    layer: z.number().int().min(1).max(3).optional().describe("Filter by layer"),
+  },
+  async ({ hours, limit, layer }) => {
+    const params = new URLSearchParams();
+    if (hours !== undefined) params.set("hours", String(hours));
+    if (limit !== undefined) params.set("limit", String(limit));
+    if (layer !== undefined) params.set("layer", String(layer));
+    const qs = params.toString();
+    const result = await engramFetch(`/recent${qs ? "?" + qs : ""}`);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
 
 server.tool(
   "engram_extract",
   "Extract structured memories from raw text using LLM. " +
-    "Feed conversation logs or notes, and engram will identify and store " +
-    "individual memories with appropriate importance and layer assignments.",
+    "Feed conversation logs or notes and get individual memories.",
   {
     text: z.string().describe("Raw text to extract memories from"),
-    auto_embed: z
-      .boolean()
-      .optional()
-      .describe("Generate embeddings for extracted memories (default true)"),
+    auto_embed: z.boolean().optional().describe("Generate embeddings (default true)"),
   },
   async ({ text, auto_embed }) => {
     const body: Record<string, unknown> = { text };
@@ -156,12 +145,9 @@ server.tool(
   }
 );
 
-// -- engram_search --
-
 server.tool(
   "engram_search",
-  "Quick keyword search across memories. Lighter than recall — " +
-    "no scoring, no budget logic, just find memories matching a term.",
+  "Quick keyword search. Lighter than recall — no scoring or budget logic.",
   {
     q: z.string().describe("Search query"),
     limit: z.number().int().min(1).max(50).optional().describe("Max results (default 10)"),
@@ -176,42 +162,37 @@ server.tool(
   }
 );
 
-// -- engram_consolidate --
-
 server.tool(
   "engram_consolidate",
-  "Run a memory consolidation cycle. Promotes frequently-accessed important " +
-    "memories from working (L2) to core (L3), and cleans up decayed buffer entries.",
+  "Run a memory consolidation cycle. Promotes important memories upward, " +
+    "drops decayed entries. With merge=true, uses LLM to merge similar memories.",
   {
-    promote_threshold: z
-      .number()
-      .int()
-      .positive()
-      .optional()
-      .describe("Min access count to promote L2→L3 (default 3)"),
-    promote_min_importance: z
-      .number()
-      .min(0)
-      .max(1)
-      .optional()
-      .describe("Min importance to promote (default 0.6)"),
-    decay_drop_threshold: z
-      .number()
-      .min(0)
-      .max(1)
-      .optional()
-      .describe("Drop memories with recency score below this (default 0.01)"),
+    merge: z.boolean().optional().describe("Use LLM to merge similar memories"),
+    promote_threshold: z.number().int().positive().optional().describe("Min access count to promote (default 3)"),
+    promote_min_importance: z.number().min(0).max(1).optional().describe("Min importance to promote (default 0.6)"),
+    decay_drop_threshold: z.number().min(0).max(1).optional().describe("Drop below this recency (default 0.01)"),
   },
-  async ({ promote_threshold, promote_min_importance, decay_drop_threshold }) => {
+  async ({ merge, promote_threshold, promote_min_importance, decay_drop_threshold }) => {
     const body: Record<string, unknown> = {};
+    if (merge !== undefined) body.merge = merge;
     if (promote_threshold !== undefined) body.promote_threshold = promote_threshold;
-    if (promote_min_importance !== undefined)
-      body.promote_min_importance = promote_min_importance;
-    if (decay_drop_threshold !== undefined)
-      body.decay_drop_threshold = decay_drop_threshold;
+    if (promote_min_importance !== undefined) body.promote_min_importance = promote_min_importance;
+    if (decay_drop_threshold !== undefined) body.decay_drop_threshold = decay_drop_threshold;
 
     const hasBody = Object.keys(body).length > 0;
     const result = await engramFetch("/consolidate", hasBody ? body : undefined);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "engram_stats",
+  "Get memory statistics: counts per layer, AI status, version.",
+  {},
+  async () => {
+    const result = await engramFetch("/stats");
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };

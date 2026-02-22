@@ -27,6 +27,10 @@ pub struct RecallRequest {
     pub sort_by: Option<String>,
     /// Whether to use LLM to re-rank results.
     pub rerank: Option<bool>,
+    /// Filter by source (e.g. "session", "extract", "api").
+    pub source: Option<String>,
+    /// Filter by tags — memory must have ALL specified tags.
+    pub tags: Option<Vec<String>>,
 }
 
 /// Recall response with scored memories and metadata.
@@ -118,6 +122,31 @@ pub fn recall(
         true
     };
 
+    let passes_filters = |mem: &Memory| -> bool {
+        if mem.importance < min_imp {
+            return false;
+        }
+        if !time_ok(mem) {
+            return false;
+        }
+        if let Some(ref lf) = layer_filter {
+            if !lf.contains(&mem.layer) {
+                return false;
+            }
+        }
+        if let Some(ref src) = req.source {
+            if mem.source != *src {
+                return false;
+            }
+        }
+        if let Some(ref required_tags) = req.tags {
+            if !required_tags.iter().all(|t| mem.tags.contains(t)) {
+                return false;
+            }
+        }
+        true
+    };
+
     let mut scored: Vec<ScoredMemory> = Vec::new();
     let mut seen = HashSet::new();
     let mut search_mode = "fts".to_string();
@@ -133,16 +162,8 @@ pub fn recall(
                 .fold(0.001_f64, f64::max);
             for (id, sim) in &semantic_results {
                 if let Ok(Some(mem)) = db.get(id) {
-                    if mem.importance < min_imp {
+                    if !passes_filters(&mem) {
                         continue;
-                    }
-                    if !time_ok(&mem) {
-                        continue;
-                    }
-                    if let Some(ref lf) = layer_filter {
-                        if !lf.contains(&mem.layer) {
-                            continue;
-                        }
                     }
                     let relevance = sim / max_sim;
                     seen.insert(id.clone());
@@ -161,16 +182,8 @@ pub fn recall(
             continue;
         }
         if let Ok(Some(mem)) = db.get(id) {
-            if mem.importance < min_imp {
+            if !passes_filters(&mem) {
                 continue;
-            }
-            if !time_ok(&mem) {
-                continue;
-            }
-            if let Some(ref lf) = layer_filter {
-                if !lf.contains(&mem.layer) {
-                    continue;
-                }
             }
             let relevance = bm25 / max_bm25;
             seen.insert(id.clone());
@@ -185,16 +198,8 @@ pub fn recall(
             if seen.contains(&mem.id) {
                 continue;
             }
-            if mem.importance < min_imp {
+            if !passes_filters(&mem) {
                 continue;
-            }
-            if !time_ok(&mem) {
-                continue;
-            }
-            if let Some(ref lf) = layer_filter {
-                if !lf.contains(&Layer::Core) {
-                    continue;
-                }
             }
             scored.push(score_memory(&mem, 0.1));
         }
@@ -410,7 +415,7 @@ mod tests {
             since: None,
             until: None,
             sort_by: None,
-            rerank: None,
+            rerank: None, source: None, tags: None,
         };
         let result = recall(&db, &req, None);
         assert!(result.memories.len() >= 2);
@@ -432,7 +437,7 @@ mod tests {
             since: None,
             until: None,
             sort_by: None,
-            rerank: None,
+            rerank: None, source: None, tags: None,
         };
         let result = recall(&db, &req, None);
         assert!(result.memories.len() <= 2, "budget should limit results");
@@ -451,7 +456,7 @@ mod tests {
             since: None,
             until: None,
             sort_by: None,
-            rerank: None,
+            rerank: None, source: None, tags: None,
         };
         let result = recall(&db, &req, None);
         assert!(result.memories.is_empty());
@@ -500,10 +505,62 @@ mod tests {
             since: Some(now - 3600_000), // last hour only
             until: None,
             sort_by: None,
-            rerank: None,
+            rerank: None, source: None, tags: None,
         };
         let result = recall(&db, &req, None);
         assert_eq!(result.memories.len(), 1);
         assert_eq!(result.memories[0].memory.id, "new-one");
+    }
+
+    #[test]
+    fn filter_by_source() {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        db.insert(MemoryInput {
+            content: "from the API".into(),
+            layer: Some(3), importance: Some(0.9),
+            source: Some("api".into()), tags: None,
+        }).unwrap();
+        db.insert(MemoryInput {
+            content: "from a session".into(),
+            layer: Some(2), importance: Some(0.7),
+            source: Some("session".into()), tags: None,
+        }).unwrap();
+
+        let req = RecallRequest {
+            query: "from".into(),
+            budget_tokens: Some(2000),
+            layers: None, min_importance: None, limit: Some(10),
+            since: None, until: None, sort_by: None, rerank: None,
+            source: Some("session".into()), tags: None,
+        };
+        let result = recall(&db, &req, None);
+        assert_eq!(result.memories.len(), 1);
+        assert!(result.memories[0].memory.content.contains("session"));
+    }
+
+    #[test]
+    fn filter_by_tags() {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        db.insert(MemoryInput {
+            content: "rust project details".into(),
+            layer: Some(3), importance: Some(0.9),
+            source: None, tags: Some(vec!["rust".into(), "engram".into()]),
+        }).unwrap();
+        db.insert(MemoryInput {
+            content: "python script notes".into(),
+            layer: Some(2), importance: Some(0.7),
+            source: None, tags: Some(vec!["python".into()]),
+        }).unwrap();
+
+        let req = RecallRequest {
+            query: "project".into(),
+            budget_tokens: Some(2000),
+            layers: None, min_importance: None, limit: Some(10),
+            since: None, until: None, sort_by: None, rerank: None,
+            source: None, tags: Some(vec!["rust".into()]),
+        };
+        let result = recall(&db, &req, None);
+        assert_eq!(result.memories.len(), 1);
+        assert!(result.memories[0].memory.content.contains("rust"));
     }
 }
