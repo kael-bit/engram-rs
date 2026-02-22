@@ -149,7 +149,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
             continue;
         }
 
-        let clusters = find_clusters(&layer_mems, 0.85);
+        let clusters = find_clusters(&layer_mems, 0.75);
 
         for cluster in clusters {
             if cluster.len() < 2 {

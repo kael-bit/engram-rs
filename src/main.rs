@@ -1,7 +1,5 @@
-//! engram: hierarchical memory engine for AI agents.
-//!
-//! Three-layer model based on Atkinson-Shiffrin memory theory:
-//! buffer (sensory) → working (short-term) → core (long-term).
+//! engram — three-layer memory engine for AI agents.
+//! buffer → working → core, with decay + promotion.
 
 mod ai;
 mod api;

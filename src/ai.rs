@@ -1,6 +1,5 @@
-//! Optional AI backend integration (OpenAI-compatible API).
-//! Provides embedding generation and LLM-based memory extraction.
-//! engram works without this module — pure FTS is the fallback.
+//! Talks to OpenAI-compatible APIs for embeddings and LLM calls.
+//! All optional — see AiConfig::from_env().
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -147,7 +146,7 @@ pub async fn extract_memories(
     debug!(model = %cfg.llm_model, "extracting memories");
 
     let raw = llm_chat(cfg, EXTRACT_SYSTEM_PROMPT, text).await?;
-    let json_str = extract_json_from_response(&raw);
+    let json_str = unwrap_json(&raw);
     let memories: Vec<ExtractedMemory> = serde_json::from_str(&json_str)
         .map_err(|e| format!("failed to parse extracted memories: {e}\nraw: {raw}"))?;
 
@@ -156,7 +155,7 @@ pub async fn extract_memories(
 }
 
 /// Extract a JSON array from LLM output that may be wrapped in markdown code blocks.
-fn extract_json_from_response(raw: &str) -> String {
+fn unwrap_json(raw: &str) -> String {
     let trimmed = raw.trim();
     if let Some(start) = trimmed.find('[') {
         if let Some(end) = trimmed.rfind(']') {
@@ -274,14 +273,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cosine_identical_vectors() {
+    fn cosine_same_vec() {
         let v = vec![1.0, 2.0, 3.0];
         let sim = cosine_similarity(&v, &v);
         assert!((sim - 1.0).abs() < 1e-10);
     }
 
     #[test]
-    fn cosine_orthogonal_vectors() {
+    fn cosine_perpendicular() {
         let a = vec![1.0, 0.0];
         let b = vec![0.0, 1.0];
         let sim = cosine_similarity(&a, &b);
@@ -289,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn cosine_empty_vectors() {
+    fn cosine_empty() {
         assert_eq!(cosine_similarity(&[], &[]), 0.0);
     }
 
@@ -302,16 +301,16 @@ mod tests {
     }
 
     #[test]
-    fn extract_json_from_markdown_block() {
+    fn unwrap_json_from_markdown() {
         let raw = "```json\n[{\"content\": \"test\"}]\n```";
-        let result = extract_json_from_response(raw);
+        let result = unwrap_json(raw);
         assert_eq!(result, "[{\"content\": \"test\"}]");
     }
 
     #[test]
-    fn extract_json_bare_array() {
+    fn unwrap_json_bare() {
         let raw = "[{\"content\": \"test\"}]";
-        let result = extract_json_from_response(raw);
+        let result = unwrap_json(raw);
         assert_eq!(result, raw);
     }
 }

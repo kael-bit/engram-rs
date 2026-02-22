@@ -6,9 +6,10 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
 
-const W_IMPORTANCE: f64 = 0.4;
-const W_RECENCY: f64 = 0.3;
-const W_RELEVANCE: f64 = 0.3;
+// scoring weights — should add up to 1.0
+const WEIGHT_IMPORTANCE: f64 = 0.4;
+const WEIGHT_RECENCY: f64 = 0.3;
+const WEIGHT_RELEVANCE: f64 = 0.3;
 
 /// Recall request parameters.
 #[derive(Debug, Deserialize)]
@@ -47,9 +48,7 @@ pub struct TimeFilter {
     pub sort_by: String,
 }
 
-/// Estimate token count for mixed CJK/ASCII text.
-///
-/// CJK characters average ~1.5 tokens each; Latin text averages ~4 bytes per token.
+/// CJK chars ≈ 1.5 tokens each, Latin text ≈ 4 bytes per token.
 pub fn estimate_tokens(text: &str) -> usize {
     let mut cjk_count = 0_usize;
     let mut other_bytes = 0_usize;
@@ -71,12 +70,11 @@ fn recency_score(last_accessed: i64, decay_rate: f64) -> f64 {
     (-decay_rate * hours / 168.0).exp()
 }
 
-/// Compute the composite score for a memory given its relevance.
 fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {
     let recency = recency_score(mem.last_accessed, mem.decay_rate);
     let bonus = mem.layer.score_bonus();
     let score =
-        (W_IMPORTANCE * mem.importance + W_RECENCY * recency + W_RELEVANCE * relevance) * bonus;
+        (WEIGHT_IMPORTANCE * mem.importance + WEIGHT_RECENCY * recency + WEIGHT_RELEVANCE * relevance) * bonus;
 
     ScoredMemory {
         memory: mem.clone(),
@@ -124,7 +122,7 @@ pub fn recall(
     let mut seen = HashSet::new();
     let mut search_mode = "fts".to_string();
 
-    // Phase 1: Semantic search (if embedding available)
+    // Semantic search (if embedding available)
     if let Some(qemb) = query_emb {
         let semantic_results = db.search_semantic(qemb, limit * 3);
         if !semantic_results.is_empty() {
@@ -154,7 +152,7 @@ pub fn recall(
         }
     }
 
-    // Phase 2: FTS keyword search (always runs)
+    // FTS keyword search (always runs)
     let fts = db.search_fts(&req.query, limit * 3);
     let max_bm25 = fts.iter().map(|r| r.1).fold(0.001_f64, f64::max);
 
@@ -180,9 +178,8 @@ pub fn recall(
         }
     }
 
-    // Phase 3: Include unseen core memories as fallback (low baseline relevance).
-    // These pad results when semantic+FTS don't cover enough, but won't outrank
-    // genuinely relevant hits due to the low relevance=0.1 baseline.
+    // Pad with unseen core memories when we don't have enough hits.
+    // Low relevance=0.1 means they won't outrank real matches.
     if scored.len() < limit {
         for mem in db.list_by_layer(Layer::Core) {
             if seen.contains(&mem.id) {

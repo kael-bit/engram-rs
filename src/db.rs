@@ -13,11 +13,7 @@ const MAX_TAGS: usize = 20;
 const MAX_TAG_LEN: usize = 32;
 
 
-/// Three cognitive memory layers with increasing permanence.
-///
-/// Based on the Atkinson-Shiffrin model: sensory (buffer) →
-/// short-term (working) → long-term (core). Each layer has a different
-/// default decay rate and scoring bonus during recall.
+/// Buffer → Working → Core, each with different decay and recall bonus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u8", into = "u8")]
 pub enum Layer {
