@@ -578,6 +578,7 @@ impl MemoryDB {
             return Ok(None);
         }
 
+        // Validate everything before touching the DB
         if let Some(c) = content {
             if c.trim().is_empty() {
                 return Err(EngramError::EmptyContent);
@@ -585,22 +586,11 @@ impl MemoryDB {
             if c.chars().count() > MAX_CONTENT_LEN {
                 return Err(EngramError::ContentTooLong);
             }
-            self.conn
-                .execute("UPDATE memories SET content=?1 WHERE id=?2", params![c, id])?;
         }
         if let Some(l) = layer {
             if !(1..=3).contains(&l) {
                 return Err(EngramError::InvalidLayer(l));
             }
-            self.conn
-                .execute("UPDATE memories SET layer=?1 WHERE id=?2", params![l, id])?;
-        }
-        if let Some(i) = importance {
-            let clamped = i.clamp(0.0, 1.0);
-            self.conn.execute(
-                "UPDATE memories SET importance=?1 WHERE id=?2",
-                params![clamped, id],
-            )?;
         }
         if let Some(t) = tags {
             if t.len() > MAX_TAGS {
@@ -609,10 +599,39 @@ impl MemoryDB {
             if let Some(tag) = t.iter().find(|tag| tag.chars().count() > MAX_TAG_LEN) {
                 return Err(EngramError::Validation(format!("tag '{}' too long", tag)));
             }
-            let j = serde_json::to_string(t).unwrap_or_else(|_| "[]".into());
-            self.conn
-                .execute("UPDATE memories SET tags=?1 WHERE id=?2", params![j, id])?;
         }
+
+        let mut set_clauses: Vec<String> = Vec::new();
+        let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(c) = content {
+            set_clauses.push("content=?".into());
+            values.push(Box::new(c.to_string()));
+        }
+        if let Some(l) = layer {
+            set_clauses.push("layer=?".into());
+            values.push(Box::new(l));
+        }
+        if let Some(i) = importance {
+            set_clauses.push("importance=?".into());
+            values.push(Box::new(i.clamp(0.0, 1.0)));
+        }
+        if let Some(t) = tags {
+            set_clauses.push("tags=?".into());
+            let j = serde_json::to_string(t).unwrap_or_else(|_| "[]".into());
+            values.push(Box::new(j));
+        }
+
+        if !set_clauses.is_empty() {
+            values.push(Box::new(id.to_string()));
+            let sql = format!(
+                "UPDATE memories SET {} WHERE id=?",
+                set_clauses.join(", ")
+            );
+            let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
+            self.conn.execute(&sql, params.as_slice())?;
+        }
+
         // Rebuild FTS entry if content or tags changed
         if content.is_some() || tags.is_some() {
             if let Ok(Some(mem)) = self.get(id) {
@@ -643,12 +662,17 @@ impl MemoryDB {
         };
 
         stmt.query_map([], |row| {
-            let mem = row_to_memory(row)?;
-            let blob: Vec<u8> = row.get("embedding")?;
-            let emb = crate::ai::bytes_to_embedding(&blob);
-            Ok((mem, emb))
+            let mem = row_to_memory_with_embedding(row)?;
+            Ok(mem)
         })
-        .map(|iter| iter.filter_map(|r| r.ok()).collect())
+        .map(|iter| {
+            iter.filter_map(|r| r.ok())
+                .filter_map(|m| {
+                    let emb = m.embedding.clone()?;
+                    Some((m, emb))
+                })
+                .collect()
+        })
         .unwrap_or_default()
     }
 
@@ -672,26 +696,23 @@ impl MemoryDB {
     }
 
     /// Check if content is a near-duplicate of an existing memory.
-    /// Uses word-level Jaccard similarity (threshold ~0.8).
+    /// Uses token-level Jaccard similarity (threshold ~0.8).
     fn find_near_duplicate(&self, content: &str) -> Option<Memory> {
-        // Quick FTS lookup to narrow candidates
         let candidates = self.search_fts(content, 5);
         if candidates.is_empty() {
             return None;
         }
 
-        let new_words: std::collections::HashSet<&str> = content.split_whitespace().collect();
-        if new_words.len() < 3 {
-            // Too short to reliably dedup — could match too aggressively
+        let new_tokens = tokenize_for_dedup(content);
+        if new_tokens.len() < 3 {
             return None;
         }
 
         for (id, _) in &candidates {
             if let Ok(Some(mem)) = self.get(id) {
-                let old_words: std::collections::HashSet<&str> =
-                    mem.content.split_whitespace().collect();
-                let intersection = new_words.intersection(&old_words).count();
-                let union = new_words.union(&old_words).count();
+                let old_tokens = tokenize_for_dedup(&mem.content);
+                let intersection = new_tokens.intersection(&old_tokens).count();
+                let union = new_tokens.union(&old_tokens).count();
                 if union > 0 {
                     let jaccard = intersection as f64 / union as f64;
                     if jaccard > 0.8 {
@@ -755,11 +776,46 @@ impl MemoryDB {
     }
 }
 
+/// Tokenize text for dedup comparison. Whitespace-splits for Latin text,
+/// and also generates CJK bigrams so Chinese/Japanese/Korean content gets
+/// meaningful tokens instead of nothing.
+fn tokenize_for_dedup(text: &str) -> std::collections::HashSet<String> {
+    let mut tokens: std::collections::HashSet<String> = text
+        .split_whitespace()
+        .filter(|w| !w.chars().all(|c| is_cjk(c))) // pure CJK chunks are handled by bigrams below
+        .map(|w| w.to_lowercase())
+        .collect();
+
+    let chars: Vec<char> = text.chars().collect();
+    for i in 0..chars.len().saturating_sub(1) {
+        if is_cjk(chars[i]) && is_cjk(chars[i + 1]) {
+            let mut bigram = String::with_capacity(8);
+            bigram.push(chars[i]);
+            bigram.push(chars[i + 1]);
+            tokens.insert(bigram);
+        }
+    }
+
+    tokens
+}
+
 fn row_to_memory(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
+    row_to_memory_impl(row, false)
+}
+
+fn row_to_memory_with_embedding(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
+    row_to_memory_impl(row, true)
+}
+
+fn row_to_memory_impl(row: &rusqlite::Row, include_embedding: bool) -> rusqlite::Result<Memory> {
     let layer_val: u8 = row.get("layer")?;
     let tags_str: String = row.get("tags")?;
-    let emb_blob: Option<Vec<u8>> = row.get("embedding").ok();
-    let embedding = emb_blob.map(|b| crate::ai::bytes_to_embedding(&b));
+    let embedding = if include_embedding {
+        let blob: Option<Vec<u8>> = row.get("embedding").ok();
+        blob.map(|b| crate::ai::bytes_to_embedding(&b))
+    } else {
+        None
+    };
     Ok(Memory {
         id: row.get("id")?,
         content: row.get("content")?,
@@ -1026,5 +1082,94 @@ mod tests {
         assert_eq!(deduped.layer, Layer::Working);
         // Total count should still be 1
         assert_eq!(db.stats().total, 1);
+    }
+
+    #[test]
+    fn cjk_dedup_catches_similar_chinese() {
+        let db = test_db();
+        let original = db
+            .insert(MemoryInput {
+                content: "今天下午学习了如何使用向量数据库进行语义搜索和检索任务".into(),
+                layer: Some(1),
+                importance: Some(0.5),
+                source: None,
+                tags: Some(vec!["学习".into()]),
+            })
+            .unwrap();
+
+        // Same meaning, last word changed
+        let result = db
+            .insert(MemoryInput {
+                content: "今天下午学习了如何使用向量数据库进行语义搜索和检索工作".into(),
+                layer: Some(2),
+                importance: Some(0.7),
+                source: None,
+                tags: None,
+            })
+            .unwrap();
+
+        assert_eq!(result.id, original.id, "should dedup CJK near-duplicate");
+        assert_eq!(db.stats().total, 1);
+    }
+
+    #[test]
+    fn tokenize_for_dedup_handles_mixed_text() {
+        let tokens = tokenize_for_dedup("hello 世界你好 world");
+        assert!(tokens.contains("hello"));
+        assert!(tokens.contains("world"));
+        // CJK bigrams
+        assert!(tokens.contains("世界"));
+        assert!(tokens.contains("界你"));
+        assert!(tokens.contains("你好"));
+    }
+
+    #[test]
+    fn update_fields_all_at_once() {
+        let db = test_db();
+        let mem = db
+            .insert(MemoryInput {
+                content: "before update".into(),
+                layer: Some(1),
+                importance: Some(0.3),
+                source: None,
+                tags: Some(vec!["old".into()]),
+            })
+            .unwrap();
+
+        let new_tags = vec!["new".into(), "shiny".into()];
+        let updated = db
+            .update_fields(&mem.id, Some("after update"), Some(3), Some(0.95), Some(&new_tags))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(updated.content, "after update");
+        assert_eq!(updated.layer, Layer::Core);
+        assert!((updated.importance - 0.95).abs() < f64::EPSILON);
+        assert_eq!(updated.tags, vec!["new", "shiny"]);
+    }
+
+    #[test]
+    fn row_to_memory_skips_embedding_by_default() {
+        let db = test_db();
+        let mem = db
+            .insert(MemoryInput {
+                content: "embedding test".into(),
+                layer: None,
+                importance: None,
+                source: None,
+                tags: None,
+            })
+            .unwrap();
+
+        db.set_embedding(&mem.id, &[1.0, 2.0, 3.0]).unwrap();
+
+        // Normal get() should not deserialize the embedding
+        let got = db.get(&mem.id).unwrap().unwrap();
+        assert!(got.embedding.is_none());
+
+        // But get_all_with_embeddings should have it
+        let with_emb = db.get_all_with_embeddings();
+        assert_eq!(with_emb.len(), 1);
+        assert_eq!(with_emb[0].1, vec![1.0, 2.0, 3.0]);
     }
 }
