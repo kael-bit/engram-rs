@@ -168,8 +168,11 @@ pub fn recall(
 
     for sm in scored {
         let tokens = estimate_tokens(&sm.memory.content);
-        if total_tokens + tokens > budget && !selected.is_empty() {
-            break;
+        if total_tokens + tokens > budget {
+            // always return at least one result, unless budget is explicitly 0
+            if !selected.is_empty() || budget == 0 {
+                break;
+            }
         }
         if selected.len() >= limit {
             break;

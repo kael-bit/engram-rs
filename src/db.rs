@@ -220,6 +220,7 @@ impl MemoryDB {
 
     pub fn insert(&self, input: MemoryInput) -> Result<Memory, EngramError> {
         validate_input(&input)?;
+        // TODO: check for near-duplicate content before inserting?
 
         let now = now_ms();
         let layer_val = input.layer.unwrap_or(1);
