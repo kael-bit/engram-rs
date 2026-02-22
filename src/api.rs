@@ -421,6 +421,7 @@ async fn list_recent(
 #[derive(Deserialize)]
 struct ResumeQuery {
     hours: Option<f64>,
+    ns: Option<String>,
 }
 
 async fn do_resume(
@@ -428,29 +429,37 @@ async fn do_resume(
     Query(q): Query<ResumeQuery>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let hours = q.hours.unwrap_or(4.0);
+    let ns_filter = q.ns;
     let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
 
     let db = state.db.clone();
     let sections = tokio::task::spawn_blocking(move || {
         let d = db;
+        let ns_ok = |m: &db::Memory| -> bool {
+            ns_filter.as_ref().is_none_or(|ns| m.namespace == *ns)
+        };
 
         // core identity — always relevant
         let identity: Vec<db::Memory> = d
             .list_by_layer(db::Layer::Core, 100, 0)
             .into_iter()
-            .filter(|m| m.importance >= 0.8)
+            .filter(|m| m.importance >= 0.8 && ns_ok(m))
             .take(10)
             .collect();
 
         // recent activity — time window
-        let recent = d.list_since(since_ms, 20).unwrap_or_default();
+        let recent: Vec<db::Memory> = d.list_since(since_ms, 50).unwrap_or_default()
+            .into_iter()
+            .filter(|m| ns_ok(m))
+            .take(20)
+            .collect();
 
         // session memories — what happened in recent sessions
         let all_session: Vec<db::Memory> = d
-            .list_since(since_ms, 50)
+            .list_since(since_ms, 100)
             .unwrap_or_default()
             .into_iter()
-            .filter(|m| m.source == "session")
+            .filter(|m| m.source == "session" && ns_ok(m))
             .collect();
 
         let mut next_actions = Vec::new();
