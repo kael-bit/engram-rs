@@ -651,3 +651,239 @@ async fn do_import(
         "skipped": memories_val.as_array().map(|a| a.len()).unwrap_or(0).saturating_sub(imported),
     })))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    fn test_state(api_key: Option<&str>) -> AppState {
+        let mdb = db::MemoryDB::open(":memory:").unwrap();
+        AppState {
+            db: std::sync::Arc::new(std::sync::Mutex::new(mdb)),
+            ai: None,
+            api_key: api_key.map(|s| s.to_string()),
+        }
+    }
+
+    async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn json_req(method: &str, uri: &str, body: serde_json::Value) -> axum::http::Request<Body> {
+        axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    }
+
+    fn authed_json_req(
+        method: &str,
+        uri: &str,
+        body: serde_json::Value,
+        token: &str,
+    ) -> axum::http::Request<Body> {
+        axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    }
+
+    fn get_req(uri: &str, token: Option<&str>) -> axum::http::Request<Body> {
+        let mut b = axum::http::Request::builder().method("GET").uri(uri);
+        if let Some(t) = token {
+            b = b.header("authorization", format!("Bearer {t}"));
+        }
+        b.body(Body::empty()).unwrap()
+    }
+
+    // --- Auth ---
+
+    #[tokio::test]
+    async fn auth_rejects_no_token() {
+        let app = router(test_state(Some("secret123")));
+        let resp = app.oneshot(get_req("/recent?hours=1", None)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_rejects_wrong_token() {
+        let app = router(test_state(Some("secret123")));
+        let resp = app
+            .oneshot(get_req("/recent?hours=1", Some("wrongtoken")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_passes_correct_token() {
+        let app = router(test_state(Some("secret123")));
+        let resp = app
+            .oneshot(get_req("/recent?hours=1", Some("secret123")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn stats_no_auth_needed() {
+        let app = router(test_state(Some("secret123")));
+        let resp = app.oneshot(get_req("/stats", None)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert_eq!(j["total"], 0);
+    }
+
+    // --- Create ---
+
+    #[tokio::test]
+    async fn create_memory_returns_201() {
+        let state = test_state(None);
+        let app = router(state);
+        let resp = app
+            .oneshot(json_req(
+                "POST",
+                "/memories",
+                serde_json::json!({"content": "hello world"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let j = body_json(resp).await;
+        assert_eq!(j["content"], "hello world");
+        assert!(j["id"].is_string());
+    }
+
+    #[tokio::test]
+    async fn create_empty_content_returns_400() {
+        let app = router(test_state(None));
+        let resp = app
+            .oneshot(json_req(
+                "POST",
+                "/memories",
+                serde_json::json!({"content": ""}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // --- Get / Delete ---
+
+    #[tokio::test]
+    async fn get_missing_returns_404() {
+        let app = router(test_state(None));
+        let resp = app
+            .oneshot(get_req("/memories/nonexistent-id", None))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_missing_returns_404() {
+        let app = router(test_state(None));
+        let req = axum::http::Request::builder()
+            .method("DELETE")
+            .uri("/memories/nonexistent-id")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // --- Recall ---
+
+    #[tokio::test]
+    async fn recall_empty_query_returns_400() {
+        let app = router(test_state(None));
+        let resp = app
+            .oneshot(json_req(
+                "POST",
+                "/recall",
+                serde_json::json!({"query": ""}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn recall_valid_query_returns_200() {
+        let app = router(test_state(None));
+        let resp = app
+            .oneshot(json_req(
+                "POST",
+                "/recall",
+                serde_json::json!({"query": "test"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert!(j["memories"].is_array());
+    }
+
+    // --- Consolidate ---
+
+    #[tokio::test]
+    async fn consolidate_empty_body() {
+        let app = router(test_state(None));
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/consolidate")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // --- Batch delete ---
+
+    #[tokio::test]
+    async fn batch_delete_returns_count() {
+        let app = router(test_state(None));
+        let resp = app
+            .oneshot(json_req(
+                "DELETE",
+                "/memories",
+                serde_json::json!({"ids": ["nope1", "nope2"]}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert_eq!(j["deleted"], 0);
+    }
+
+    // --- Namespace ---
+
+    #[tokio::test]
+    async fn namespace_via_header() {
+        let state = test_state(None);
+        let app = router(state.clone());
+
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/memories")
+            .header("content-type", "application/json")
+            .header("x-namespace", "test-ns")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({"content": "namespaced"})).unwrap(),
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let j = body_json(resp).await;
+        assert_eq!(j["namespace"], "test-ns");
+    }
+}
