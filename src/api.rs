@@ -54,6 +54,7 @@ pub fn router(state: AppState) -> Router {
         .route("/recall", post(do_recall))
         .route("/search", get(quick_search))
         .route("/recent", get(list_recent))
+        .route("/resume", get(do_resume))
         .route("/consolidate", post(do_consolidate))
         .route("/extract", post(do_extract))
         .route("/export", get(do_export))
@@ -90,6 +91,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "POST /recall": "hybrid search (semantic + keyword)",
             "GET /search?q=term": "quick keyword search",
             "GET /recent?hours=2": "recent memories by time",
+            "GET /resume?hours=4": "session recovery (identity + recent + sessions)",
             "POST /consolidate": "run maintenance cycle",
             "POST /extract": "LLM-extract memories from text",
             "GET /export": "export all memories as JSON",
@@ -318,6 +320,8 @@ struct RecentQuery {
     layer: Option<u8>,
     /// Skip memories below this importance (e.g. 0.3 to filter noise)
     min_importance: Option<f64>,
+    /// Filter by source (e.g. "session")
+    source: Option<String>,
 }
 
 async fn list_recent(
@@ -328,6 +332,7 @@ async fn list_recent(
     let limit = q.limit.unwrap_or(20).min(100);
     let layer_filter = q.layer;
     let min_imp = q.min_importance.unwrap_or(0.0);
+    let source_filter = q.source;
     let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
 
     let db = state.db.clone();
@@ -340,6 +345,9 @@ async fn list_recent(
         if min_imp > 0.0 {
             memories.retain(|m| m.importance >= min_imp);
         }
+        if let Some(ref src) = source_filter {
+            memories.retain(|m| m.source == *src);
+        }
         Ok::<_, EngramError>(memories)
     })
     .await
@@ -351,6 +359,61 @@ async fn list_recent(
         "count": count,
         "since_ms": since_ms,
         "hours": hours,
+    })))
+}
+
+/// One-call session recovery: combines recent memories, core identity, and session context.
+/// GET /resume?hours=4
+#[derive(Deserialize)]
+struct ResumeQuery {
+    hours: Option<f64>,
+}
+
+async fn do_resume(
+    State(state): State<AppState>,
+    Query(q): Query<ResumeQuery>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let hours = q.hours.unwrap_or(4.0);
+    let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
+
+    let db = state.db.clone();
+    let sections = tokio::task::spawn_blocking(move || {
+        let d = lock_db(&db);
+
+        // core identity — always relevant
+        let identity: Vec<db::Memory> = d
+            .list_by_layer(db::Layer::Core)
+            .into_iter()
+            .filter(|m| m.importance >= 0.8)
+            .take(10)
+            .collect();
+
+        // recent activity — time window
+        let recent = d.list_since(since_ms, 20).unwrap_or_default();
+
+        // session memories — what happened in recent sessions
+        let sessions: Vec<db::Memory> = d
+            .list_since(since_ms, 50)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| m.source == "session")
+            .take(10)
+            .collect();
+
+        (identity, recent, sessions)
+    })
+    .await
+    .map_err(|e| EngramError::Internal(e.to_string()))?;
+
+    let (identity, recent, sessions) = sections;
+    Ok(Json(serde_json::json!({
+        "identity": identity,
+        "recent": recent,
+        "sessions": sessions,
+        "hours": hours,
+        "identity_count": identity.len(),
+        "recent_count": recent.len(),
+        "session_count": sessions.len(),
     })))
 }
 
