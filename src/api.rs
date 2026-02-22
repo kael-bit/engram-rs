@@ -10,7 +10,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{debug, warn};
 
 use crate::error::EngramError;
-use crate::{ai, consolidate, db, lock_db, recall, AppState};
+use crate::{ai, consolidate, db, recall, AppState};
 
 /// Extract namespace from X-Namespace header, defaulting to None (= all namespaces).
 fn get_namespace(headers: &axum::http::HeaderMap) -> Option<String> {
@@ -80,7 +80,7 @@ pub fn router(state: AppState) -> Router {
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let db = state.db.clone();
-    let s = tokio::task::spawn_blocking(move || lock_db(&db).stats())
+    let s = tokio::task::spawn_blocking(move || db.stats())
         .await
         .unwrap_or(db::Stats { total: 0, buffer: 0, working: 0, core: 0 });
 
@@ -112,7 +112,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
 
 async fn stats(State(state): State<AppState>) -> Json<db::Stats> {
     let db = state.db.clone();
-    let s = tokio::task::spawn_blocking(move || lock_db(&db).stats())
+    let s = tokio::task::spawn_blocking(move || db.stats())
         .await
         .unwrap_or(db::Stats { total: 0, buffer: 0, working: 0, core: 0 });
     Json(s)
@@ -125,7 +125,7 @@ fn spawn_embed(db: crate::SharedDB, cfg: ai::AiConfig, id: String, content: Stri
             Ok(embs) if !embs.is_empty() => {
                 if let Some(emb) = embs.into_iter().next() {
                     let _ = tokio::task::spawn_blocking(move || {
-                        lock_db(&db).set_embedding(&id, &emb)
+                        db.set_embedding(&id, &emb)
                     })
                     .await;
                 }
@@ -149,7 +149,7 @@ fn spawn_embed_batch(db: crate::SharedDB, cfg: ai::AiConfig, items: Vec<(String,
                     let db = db.clone();
                     let id = id.clone();
                     let _ = tokio::task::spawn_blocking(move || {
-                        lock_db(&db).set_embedding(&id, &emb)
+                        db.set_embedding(&id, &emb)
                     })
                     .await;
                 }
@@ -169,7 +169,7 @@ async fn create_memory(
         input.namespace = get_namespace(&headers);
     }
     let db = state.db.clone();
-    let mem = tokio::task::spawn_blocking(move || lock_db(&db).insert(input))
+    let mem = tokio::task::spawn_blocking(move || db.insert(input))
         .await
         .map_err(|e| EngramError::Internal(e.to_string()))??;
 
@@ -187,7 +187,7 @@ async fn get_memory(
     Path(id): Path<String>,
 ) -> Result<Json<db::Memory>, EngramError> {
     let db = state.db.clone();
-    let mem = tokio::task::spawn_blocking(move || lock_db(&db).get(&id))
+    let mem = tokio::task::spawn_blocking(move || db.get(&id))
         .await
         .map_err(|e| EngramError::Internal(e.to_string()))??;
     mem.ok_or(EngramError::NotFound).map(Json)
@@ -208,7 +208,7 @@ async fn update_memory(
 ) -> Result<Json<db::Memory>, EngramError> {
     let db = state.db.clone();
     let mem = tokio::task::spawn_blocking(move || {
-        lock_db(&db).update_fields(
+        db.update_fields(
             &id,
             body.content.as_deref(),
             body.layer,
@@ -227,7 +227,7 @@ async fn delete_memory(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
-    let deleted = tokio::task::spawn_blocking(move || lock_db(&db).delete(&id))
+    let deleted = tokio::task::spawn_blocking(move || db.delete(&id))
         .await
         .map_err(|e| EngramError::Internal(e.to_string()))??;
 
@@ -250,7 +250,7 @@ async fn batch_delete(
     let db = state.db.clone();
     let ids = body.ids;
     let deleted = tokio::task::spawn_blocking(move || {
-        let d = lock_db(&db);
+        let d = db;
         let mut count = 0usize;
         for id in &ids {
             if d.delete(id).unwrap_or(false) {
@@ -280,7 +280,7 @@ async fn list_memories(
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let d = lock_db(&db);
+        let d = db;
         let limit = q.limit.unwrap_or(50).min(200);
         let offset = q.offset.unwrap_or(0);
 
@@ -338,7 +338,7 @@ async fn quick_search(
     let db = state.db.clone();
     let query = sq.q.clone();
     let results = tokio::task::spawn_blocking(move || {
-        let d = lock_db(&db);
+        let d = db;
         let hits = d.search_fts(&query, limit);
         let memories: Vec<db::Memory> = hits
             .into_iter()
@@ -388,7 +388,7 @@ async fn list_recent(
 
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let d = lock_db(&db);
+        let d = db;
         let mut memories = d.list_since(since_ms, limit)?;
         if let Some(l) = layer_filter {
             memories.retain(|m| m.layer as u8 == l);
@@ -432,7 +432,7 @@ async fn do_resume(
 
     let db = state.db.clone();
     let sections = tokio::task::spawn_blocking(move || {
-        let d = lock_db(&db);
+        let d = db;
 
         // core identity — always relevant
         let identity: Vec<db::Memory> = d
@@ -535,7 +535,7 @@ async fn do_recall(
 
     let db = state.db.clone();
     let mut result = tokio::task::spawn_blocking(move || {
-        recall::recall(&lock_db(&db), &req, query_emb.as_deref())
+        recall::recall(&db, &req, query_emb.as_deref())
     })
     .await
     .map_err(|e| EngramError::Internal(e.to_string()))?;
@@ -608,7 +608,7 @@ async fn do_extract(
         };
 
         let db = state.db.clone();
-        let mem = tokio::task::spawn_blocking(move || lock_db(&db).insert(input))
+        let mem = tokio::task::spawn_blocking(move || db.insert(input))
             .await
             .map_err(|e| EngramError::Internal(e.to_string()))??;
 
@@ -635,7 +635,7 @@ async fn do_export(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
-    let memories = tokio::task::spawn_blocking(move || lock_db(&db).export_all())
+    let memories = tokio::task::spawn_blocking(move || db.export_all())
         .await
         .map_err(|e| EngramError::Internal(e.to_string()))??;
 
@@ -659,7 +659,7 @@ async fn do_import(
         .map_err(|e| EngramError::Validation(format!("invalid memories format: {e}")))?;
 
     let db = state.db.clone();
-    let imported = tokio::task::spawn_blocking(move || lock_db(&db).import(&memories))
+    let imported = tokio::task::spawn_blocking(move || db.import(&memories))
         .await
         .map_err(|e| EngramError::Internal(e.to_string()))??;
 
@@ -679,7 +679,7 @@ mod tests {
     fn test_state(api_key: Option<&str>) -> AppState {
         let mdb = db::MemoryDB::open(":memory:").unwrap();
         AppState {
-            db: std::sync::Arc::new(std::sync::Mutex::new(mdb)),
+            db: std::sync::Arc::new(mdb),
             ai: None,
             api_key: api_key.map(|s| s.to_string()),
             embed_cache: std::sync::Arc::new(std::sync::Mutex::new(

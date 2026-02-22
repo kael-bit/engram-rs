@@ -23,6 +23,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.32.0"
 
 [dev-dependencies]
 tempfile = "3"

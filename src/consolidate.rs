@@ -1,6 +1,6 @@
 use crate::ai::{self, AiConfig, cosine_similarity};
 use crate::db::{Layer, Memory, MemoryDB};
-use crate::{lock_db, SharedDB};
+use crate::SharedDB;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -37,7 +37,7 @@ pub async fn consolidate(
 
     let db2 = db.clone();
     let mut result = tokio::task::spawn_blocking(move || {
-        consolidate_sync(&lock_db(&db2), req.as_ref())
+        consolidate_sync(&db2, req.as_ref())
     })
     .await
     .unwrap_or_default();
@@ -132,7 +132,7 @@ const MERGE_SYSTEM: &str = "Merge these memories into one concise entry. \
 
 async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
     let db2 = db.clone();
-    let all = tokio::task::spawn_blocking(move || lock_db(&db2).get_all_with_embeddings())
+    let all = tokio::task::spawn_blocking(move || db2.get_all_with_embeddings())
         .await
         .unwrap_or_default();
 
@@ -212,7 +212,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                 let tags = all_tags;
                 let imp = max_importance;
                 let ok = tokio::task::spawn_blocking(move || {
-                    lock_db(&db2).update_fields(&id, Some(&content), None, Some(imp), Some(&tags))
+                    db2.update_fields(&id, Some(&content), None, Some(imp), Some(&tags))
                 })
                 .await
                 .ok()
@@ -232,7 +232,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                             let db2 = db.clone();
                             let id = best_id.clone();
                             let _ = tokio::task::spawn_blocking(move || {
-                                lock_db(&db2).set_embedding(&id, &emb)
+                                db2.set_embedding(&id, &emb)
                             })
                             .await;
                         }
@@ -249,7 +249,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                 }
                 let id = layer_mems[idx].0.id.clone();
                 let db2 = db.clone();
-                let _ = tokio::task::spawn_blocking(move || lock_db(&db2).delete(&id)).await;
+                let _ = tokio::task::spawn_blocking(move || db2.delete(&id)).await;
             }
 
             merged_total += 1;

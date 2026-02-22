@@ -9,7 +9,7 @@ mod error;
 mod recall;
 
 use clap::Parser;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -25,14 +25,7 @@ struct Args {
     db: String,
 }
 
-pub type SharedDB = Arc<Mutex<db::MemoryDB>>;
-
-pub fn lock_db(db: &SharedDB) -> std::sync::MutexGuard<'_, db::MemoryDB> {
-    db.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("recovering from poisoned mutex");
-        poisoned.into_inner()
-    })
-}
+pub type SharedDB = Arc<db::MemoryDB>;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -90,7 +83,7 @@ async fn main() {
 
     let args = Args::parse();
     let mdb = db::MemoryDB::open(&args.db).expect("failed to open database");
-    let shared: SharedDB = Arc::new(Mutex::new(mdb));
+    let shared: SharedDB = Arc::new(mdb);
 
     let ai_cfg = ai::AiConfig::from_env();
     let ai_status = match &ai_cfg {
@@ -129,7 +122,7 @@ async fn main() {
             loop {
                 let db = bg_state.db.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    consolidate::consolidate_sync(&lock_db(&db), None)
+                    consolidate::consolidate_sync(&db, None)
                 })
                 .await;
                 match result {

@@ -1,8 +1,12 @@
 //! SQLite-backed memory storage with FTS5 full-text search.
 
-use rusqlite::{params, Connection};
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+type PooledConn = r2d2::PooledConnection<SqliteConnectionManager>;
 
 use crate::error::EngramError;
 
@@ -277,25 +281,34 @@ const DROP_TRIGGERS: [&str; 3] = [
 
 /// SQLite-backed memory store.
 pub struct MemoryDB {
-    conn: Connection,
+    pool: Pool<SqliteConnectionManager>,
 }
 
 impl MemoryDB {
+    fn conn(&self) -> PooledConn {
+        self.pool.get().expect("db pool exhausted")
+    }
+
     /// Open (or create) a database at the given path.
+    /// Pool size defaults to 8 (1 writer + 7 readers in WAL mode).
     pub fn open(path: &str) -> Result<Self, EngramError> {
-        let conn = Connection::open(path)?;
+        let manager = SqliteConnectionManager::file(path);
+        let pool = Pool::builder()
+            .max_size(8)
+            .build(manager)
+            .map_err(|e| EngramError::Internal(format!("pool: {e}")))?;
+
+        // initialize schema on a fresh connection
+        let conn = pool.get().map_err(|e| EngramError::Internal(e.to_string()))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
         conn.execute(FTS_SCHEMA, [])?;
-        // migrate away from trigger-based FTS
         for t in &DROP_TRIGGERS {
             conn.execute(t, [])?;
         }
-        // Migration: add embedding column if missing
         if conn.prepare("SELECT embedding FROM memories LIMIT 0").is_err() {
             conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB", [])?;
         }
-        // Migration: add namespace column if missing
         if conn.prepare("SELECT namespace FROM memories LIMIT 0").is_err() {
             conn.execute(
                 "ALTER TABLE memories ADD COLUMN namespace TEXT NOT NULL DEFAULT 'default'",
@@ -306,7 +319,8 @@ impl MemoryDB {
                 [],
             )?;
         }
-        let db = Self { conn };
+        drop(conn);
+        let db = Self { pool };
         db.rebuild_fts()?;
         Ok(db)
     }
@@ -314,7 +328,7 @@ impl MemoryDB {
     /// Insert a row into FTS with CJK bigram preprocessing.
     fn fts_insert(&self, id: &str, content: &str, tags_json: &str) -> Result<(), EngramError> {
         let processed = append_cjk_bigrams(content);
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
             params![id, processed, tags_json],
         )?;
@@ -322,7 +336,7 @@ impl MemoryDB {
     }
 
     fn fts_delete(&self, id: &str) -> Result<(), EngramError> {
-        self.conn
+        self.conn()
             .execute("DELETE FROM memories_fts WHERE id = ?1", params![id])?;
         Ok(())
     }
@@ -330,10 +344,10 @@ impl MemoryDB {
     /// Rebuild FTS index from scratch (idempotent, runs on startup).
     fn rebuild_fts(&self) -> Result<(), EngramError> {
         let fts_count: i64 = self
-            .conn
+            .conn()
             .query_row("SELECT COUNT(*) FROM memories_fts", [], |r| r.get(0))?;
         let mem_count: i64 = self
-            .conn
+            .conn()
             .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))?;
 
         if mem_count == 0 {
@@ -344,7 +358,7 @@ impl MemoryDB {
         let needs_rebuild = fts_count != mem_count || {
             // Sample a CJK-containing memory from the FTS table
             let has_cjk_content: bool = self
-                .conn
+                .conn()
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM memories WHERE content GLOB '*[一-龥]*' LIMIT 1)",
                     [],
@@ -355,7 +369,7 @@ impl MemoryDB {
             if has_cjk_content {
                 // If there's CJK content, check if FTS has longer content (bigrams appended)
                 let sample: Option<(i64, i64)> = self
-                    .conn
+                    .conn()
                     .query_row(
                         "SELECT LENGTH(m.content), LENGTH(f.content) \
                          FROM memories m JOIN memories_fts f ON m.id = f.id \
@@ -379,9 +393,9 @@ impl MemoryDB {
         }
 
         // Full rebuild
-        self.conn.execute("DELETE FROM memories_fts", [])?;
-        let mut stmt = self
-            .conn
+        self.conn().execute("DELETE FROM memories_fts", [])?;
+        let conn = self.conn();
+        let mut stmt = conn
             .prepare("SELECT id, content, tags FROM memories")?;
         let rows: Vec<(String, String, String)> = stmt
             .query_map([], |row| {
@@ -464,7 +478,7 @@ impl MemoryDB {
 
         let namespace = input.namespace.unwrap_or_else(|| "default".into());
 
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO memories \
              (id, content, layer, importance, created_at, last_accessed, \
               access_count, decay_rate, source, tags, namespace) \
@@ -511,7 +525,8 @@ impl MemoryDB {
     }
 
     pub fn get(&self, id: &str) -> Result<Option<Memory>, EngramError> {
-        let mut stmt = self.conn.prepare("SELECT * FROM memories WHERE id = ?1")?;
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT * FROM memories WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         match rows.next()? {
             Some(row) => Ok(Some(row_to_memory(row)?)),
@@ -521,12 +536,12 @@ impl MemoryDB {
 
     pub fn delete(&self, id: &str) -> Result<bool, EngramError> {
         self.fts_delete(id)?;
-        let n = self.conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
+        let n = self.conn().execute("DELETE FROM memories WHERE id = ?1", params![id])?;
         Ok(n > 0)
     }
 
     pub fn touch(&self, id: &str) -> Result<(), EngramError> {
-        self.conn.execute(
+        self.conn().execute(
             "UPDATE memories SET last_accessed = ?1, access_count = access_count + 1 WHERE id = ?2",
             params![now_ms(), id],
         )?;
@@ -548,7 +563,8 @@ impl MemoryDB {
         let processed = append_cjk_bigrams(sanitized);
         let fts_query: String = processed.split_whitespace().collect::<Vec<_>>().join(" OR ");
 
-        let Ok(mut stmt) = self.conn.prepare(
+        let conn = self.conn();
+        let Ok(mut stmt) = conn.prepare(
             "SELECT id, rank FROM memories_fts \
              WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2",
         ) else {
@@ -564,7 +580,8 @@ impl MemoryDB {
 
     /// List all memories in a given layer, ordered by importance descending.
     pub fn list_by_layer(&self, layer: Layer, limit: usize, offset: usize) -> Vec<Memory> {
-        let Ok(mut stmt) = self.conn.prepare(
+        let conn = self.conn();
+        let Ok(mut stmt) = conn.prepare(
             "SELECT * FROM memories WHERE layer = ?1 ORDER BY importance DESC LIMIT ?2 OFFSET ?3",
         ) else {
             return vec![];
@@ -588,7 +605,8 @@ impl MemoryDB {
     ) -> Result<Vec<Memory>, EngramError> {
         match ns {
             Some(ns) => {
-                let mut stmt = self.conn.prepare(
+                let conn = self.conn();
+                let mut stmt = conn.prepare(
                     "SELECT * FROM memories WHERE namespace = ?3 \
                      ORDER BY last_accessed DESC LIMIT ?1 OFFSET ?2",
                 )?;
@@ -599,7 +617,8 @@ impl MemoryDB {
                 Ok(rows)
             }
             None => {
-                let mut stmt = self.conn.prepare(
+                let conn = self.conn();
+                let mut stmt = conn.prepare(
                     "SELECT * FROM memories ORDER BY last_accessed DESC LIMIT ?1 OFFSET ?2",
                 )?;
                 let rows: Vec<Memory> = stmt
@@ -613,7 +632,8 @@ impl MemoryDB {
 
     /// List memories created since a given timestamp, ordered by creation time descending.
     pub fn list_since(&self, since_ms: i64, limit: usize) -> Result<Vec<Memory>, EngramError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT * FROM memories WHERE created_at >= ?1 ORDER BY created_at DESC LIMIT ?2",
         )?;
         let rows = stmt
@@ -626,7 +646,8 @@ impl MemoryDB {
     /// Find memories whose decay score has fallen below a threshold.
     pub fn get_decayed(&self, threshold: f64) -> Vec<Memory> {
         let now = now_ms();
-        let Ok(mut stmt) = self.conn.prepare("SELECT * FROM memories WHERE layer < 3") else {
+        let conn = self.conn();
+        let Ok(mut stmt) = conn.prepare("SELECT * FROM memories WHERE layer < 3") else {
             return vec![];
         };
         stmt.query_map([], row_to_memory)
@@ -651,7 +672,7 @@ impl MemoryDB {
             return Ok(Some(m));
         }
 
-        self.conn.execute(
+        self.conn().execute(
             "UPDATE memories SET layer = ?1, decay_rate = ?2, last_accessed = ?3 WHERE id = ?4",
             params![target as u8, target.default_decay(), now_ms(), id],
         )?;
@@ -665,8 +686,8 @@ impl MemoryDB {
             working: 0,
             core: 0,
         };
-        let Ok(mut stmt) = self
-            .conn
+        let conn = self.conn();
+        let Ok(mut stmt) = conn
             .prepare("SELECT layer, COUNT(*) FROM memories GROUP BY layer")
         else {
             return s;
@@ -691,7 +712,8 @@ impl MemoryDB {
 
     pub fn stats_ns(&self, ns: &str) -> Stats {
         let mut s = Stats { total: 0, buffer: 0, working: 0, core: 0 };
-        let Ok(mut stmt) = self.conn.prepare(
+        let conn = self.conn();
+        let Ok(mut stmt) = conn.prepare(
             "SELECT layer, COUNT(*) FROM memories WHERE namespace = ?1 GROUP BY layer",
         ) else {
             return s;
@@ -774,7 +796,7 @@ impl MemoryDB {
                 set_clauses.join(", ")
             );
             let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
-            self.conn.execute(&sql, params.as_slice())?;
+            self.conn().execute(&sql, params.as_slice())?;
         }
 
         // Rebuild FTS entry if content or tags changed
@@ -791,7 +813,7 @@ impl MemoryDB {
 
     pub fn set_embedding(&self, id: &str, embedding: &[f64]) -> Result<(), EngramError> {
         let bytes = crate::ai::embedding_to_bytes(embedding);
-        self.conn.execute(
+        self.conn().execute(
             "UPDATE memories SET embedding = ?1 WHERE id = ?2",
             params![bytes, id],
         )?;
@@ -799,8 +821,8 @@ impl MemoryDB {
     }
 
     pub fn get_all_with_embeddings(&self) -> Vec<(Memory, Vec<f64>)> {
-        let Ok(mut stmt) = self
-            .conn
+        let conn = self.conn();
+        let Ok(mut stmt) = conn
             .prepare("SELECT * FROM memories WHERE embedding IS NOT NULL")
         else {
             return vec![];
@@ -872,8 +894,8 @@ impl MemoryDB {
     /// Export all memories as a JSON-serializable vec (for backup/migration).
     /// Embeddings are excluded to keep exports portable.
     pub fn export_all(&self) -> Result<Vec<Memory>, EngramError> {
-        let mut stmt = self
-            .conn
+        let conn = self.conn();
+        let mut stmt = conn
             .prepare("SELECT * FROM memories ORDER BY created_at ASC")?;
         let rows = stmt
             .query_map([], row_to_memory)?
@@ -896,7 +918,7 @@ impl MemoryDB {
                 continue;
             }
             let tags_json = serde_json::to_string(&m.tags).unwrap_or_else(|_| "[]".into());
-            self.conn.execute(
+            self.conn().execute(
                 "INSERT INTO memories \
                  (id, content, layer, importance, created_at, last_accessed, \
                   access_count, decay_rate, source, tags) \
