@@ -520,14 +520,14 @@ impl MemoryDB {
     }
 
     /// List all memories in a given layer, ordered by importance descending.
-    pub fn list_by_layer(&self, layer: Layer) -> Vec<Memory> {
+    pub fn list_by_layer(&self, layer: Layer, limit: usize, offset: usize) -> Vec<Memory> {
         let Ok(mut stmt) = self.conn.prepare(
-            "SELECT * FROM memories WHERE layer = ?1 ORDER BY importance DESC",
+            "SELECT * FROM memories WHERE layer = ?1 ORDER BY importance DESC LIMIT ?2 OFFSET ?3",
         ) else {
             return vec![];
         };
 
-        stmt.query_map(params![layer as u8], row_to_memory)
+        stmt.query_map(params![layer as u8, limit as i64, offset as i64], row_to_memory)
             .map(|iter| iter.filter_map(|r| r.ok()).collect())
             .unwrap_or_default()
     }

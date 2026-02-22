@@ -196,7 +196,7 @@ pub fn recall(
     // Pad with unseen core memories when we don't have enough hits.
     // Low relevance=0.1 means they won't outrank real matches.
     if scored.len() < limit {
-        for mem in db.list_by_layer(Layer::Core) {
+        for mem in db.list_by_layer(Layer::Core, 10000, 0) {
             if seen.contains(&mem.id) {
                 continue;
             }

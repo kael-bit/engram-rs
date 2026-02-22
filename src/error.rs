@@ -6,6 +6,9 @@ pub enum EngramError {
     #[error("content must not be empty")]
     EmptyContent,
 
+    #[error("query must not be empty")]
+    EmptyQuery,
+
     #[error("content exceeds maximum length")]
     ContentTooLong,
 

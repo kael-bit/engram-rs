@@ -46,7 +46,7 @@ pub fn router(state: AppState) -> Router {
         .route("/stats", get(stats));
 
     let protected = Router::new()
-        .route("/memories", post(create_memory).get(list_memories))
+        .route("/memories", post(create_memory).get(list_memories).delete(batch_delete))
         .route(
             "/memories/{id}",
             get(get_memory).patch(update_memory).delete(delete_memory),
@@ -88,6 +88,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /memories/:id": "get a memory by id",
             "PATCH /memories/:id": "update a memory",
             "DELETE /memories/:id": "delete a memory",
+            "DELETE /memories": "batch delete (body: {ids: [...]})",
             "POST /recall": "hybrid search (semantic + keyword)",
             "GET /search?q=term": "quick keyword search",
             "GET /recent?hours=2": "recent memories by time",
@@ -113,11 +114,12 @@ fn spawn_embed(db: crate::SharedDB, cfg: ai::AiConfig, id: String, content: Stri
     tokio::spawn(async move {
         match ai::get_embeddings(&cfg, &[content]).await {
             Ok(embs) if !embs.is_empty() => {
-                let emb = embs.into_iter().next().unwrap();
-                let _ = tokio::task::spawn_blocking(move || {
-                    lock_db(&db).set_embedding(&id, &emb)
-                })
-                .await;
+                if let Some(emb) = embs.into_iter().next() {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        lock_db(&db).set_embedding(&id, &emb)
+                    })
+                    .await;
+                }
             }
             Err(e) => warn!(error = %e, "embedding generation failed"),
             _ => {}
@@ -223,6 +225,33 @@ async fn delete_memory(
 }
 
 #[derive(Deserialize)]
+struct BatchDeleteBody {
+    ids: Vec<String>,
+}
+
+async fn batch_delete(
+    State(state): State<AppState>,
+    Json(body): Json<BatchDeleteBody>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let db = state.db.clone();
+    let ids = body.ids;
+    let deleted = tokio::task::spawn_blocking(move || {
+        let d = lock_db(&db);
+        let mut count = 0usize;
+        for id in &ids {
+            if d.delete(id).unwrap_or(false) {
+                count += 1;
+            }
+        }
+        count
+    })
+    .await
+    .map_err(|e| EngramError::Internal(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({"deleted": deleted})))
+}
+
+#[derive(Deserialize)]
 struct ListQuery {
     layer: Option<u8>,
     tag: Option<String>,
@@ -243,7 +272,7 @@ async fn list_memories(
         // filter by layer if specified
         let mut memories = if let Some(layer_val) = q.layer {
             if let Ok(layer) = layer_val.try_into() {
-                d.list_by_layer(layer)
+                d.list_by_layer(layer, limit, offset)
             } else {
                 vec![]
             }
@@ -284,7 +313,7 @@ async fn quick_search(
     Query(sq): Query<SearchQuery>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     if sq.q.trim().is_empty() {
-        return Err(EngramError::EmptyContent);
+        return Err(EngramError::EmptyQuery);
     }
     let limit = sq.limit.unwrap_or(10).min(50);
     let db = state.db.clone();
@@ -382,7 +411,7 @@ async fn do_resume(
 
         // core identity — always relevant
         let identity: Vec<db::Memory> = d
-            .list_by_layer(db::Layer::Core)
+            .list_by_layer(db::Layer::Core, 100, 0)
             .into_iter()
             .filter(|m| m.importance >= 0.8)
             .take(10)
@@ -434,7 +463,7 @@ async fn do_recall(
     Json(mut req): Json<recall::RecallRequest>,
 ) -> Result<Json<recall::RecallResponse>, EngramError> {
     if req.query.is_empty() {
-        return Err(EngramError::EmptyContent);
+        return Err(EngramError::EmptyQuery);
     }
 
     let do_rerank =
@@ -470,8 +499,9 @@ async fn do_recall(
     .map_err(|e| EngramError::Internal(e.to_string()))?;
 
     if do_rerank {
-        let cfg = state.ai.as_ref().unwrap();
-        recall::rerank_results(&mut result, &query_text, final_limit, cfg).await;
+        if let Some(cfg) = state.ai.as_ref() {
+            recall::rerank_results(&mut result, &query_text, final_limit, cfg).await;
+        }
     }
 
     Ok(Json(result))
@@ -591,6 +621,6 @@ async fn do_import(
 
     Ok(Json(serde_json::json!({
         "imported": imported,
-        "skipped": memories_val.as_array().map(|a| a.len()).unwrap_or(0) - imported,
+        "skipped": memories_val.as_array().map(|a| a.len()).unwrap_or(0).saturating_sub(imported),
     })))
 }

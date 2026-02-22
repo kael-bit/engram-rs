@@ -65,7 +65,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     let mut dropped_ids = Vec::new();
 
     // Promote high-value Working → Core (access-based)
-    for mem in db.list_by_layer(Layer::Working) {
+    for mem in db.list_by_layer(Layer::Working, 10000, 0) {
         if mem.access_count >= promote_threshold && mem.importance >= promote_min_imp
             && db.promote(&mem.id, Layer::Core).is_ok() {
                 promoted_ids.push(mem.id.clone());
@@ -74,7 +74,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     }
 
     // Age-based Working → Core promotion
-    for mem in db.list_by_layer(Layer::Working) {
+    for mem in db.list_by_layer(Layer::Working, 10000, 0) {
         if promoted_ids.contains(&mem.id) {
             continue;
         }
@@ -95,7 +95,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     }
 
     // Buffer TTL — old L1 entries promote or drop
-    for mem in db.list_by_layer(Layer::Buffer) {
+    for mem in db.list_by_layer(Layer::Buffer, 10000, 0) {
         let age = now - mem.created_at;
         if age > buffer_ttl {
             if mem.importance > 0.3 {
@@ -180,10 +180,12 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
 
             // keep the most recently created entry as the winner —
             // if two memories conflict, the newer one is more likely correct
-            let best_idx = *cluster
+            let Some(&best_idx) = cluster
                 .iter()
                 .max_by_key(|&&i| layer_mems[i].0.created_at)
-                .unwrap();
+            else {
+                continue;
+            };
 
             // take the highest importance from the cluster
             let max_importance = cluster
@@ -226,13 +228,14 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
             if cfg.has_embed() {
                 match ai::get_embeddings(cfg, &[merged_content]).await {
                     Ok(embs) if !embs.is_empty() => {
-                        let emb = embs.into_iter().next().unwrap();
-                        let db2 = db.clone();
-                        let id = best_id.clone();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            lock_db(&db2).set_embedding(&id, &emb)
-                        })
-                        .await;
+                        if let Some(emb) = embs.into_iter().next() {
+                            let db2 = db.clone();
+                            let id = best_id.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                lock_db(&db2).set_embedding(&id, &emb)
+                            })
+                            .await;
+                        }
                     }
                     Err(e) => warn!(error = %e, "embedding for merged memory failed"),
                     _ => {}
