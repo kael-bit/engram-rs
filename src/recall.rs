@@ -387,6 +387,7 @@ mod tests {
             importance: Some(0.95),
             source: None,
             tags: None,
+        supersedes: None,
         }).unwrap();
         db.insert(MemoryInput {
             content: "trivial note about lunch".into(),
@@ -394,6 +395,7 @@ mod tests {
             importance: Some(0.1),
             source: None,
             tags: None,
+        supersedes: None,
         }).unwrap();
         db.insert(MemoryInput {
             content: "medium importance work log about rust compiler".into(),
@@ -401,6 +403,7 @@ mod tests {
             importance: Some(0.5),
             source: None,
             tags: None,
+        supersedes: None,
         }).unwrap();
         db
     }
@@ -521,11 +524,13 @@ mod tests {
             content: "from the API".into(),
             layer: Some(3), importance: Some(0.9),
             source: Some("api".into()), tags: None,
+        supersedes: None,
         }).unwrap();
         db.insert(MemoryInput {
             content: "from a session".into(),
             layer: Some(2), importance: Some(0.7),
             source: Some("session".into()), tags: None,
+        supersedes: None,
         }).unwrap();
 
         let req = RecallRequest {
@@ -547,11 +552,13 @@ mod tests {
             content: "rust project details".into(),
             layer: Some(3), importance: Some(0.9),
             source: None, tags: Some(vec!["rust".into(), "engram".into()]),
+        supersedes: None,
         }).unwrap();
         db.insert(MemoryInput {
             content: "python script notes".into(),
             layer: Some(2), importance: Some(0.7),
             source: None, tags: Some(vec!["python".into()]),
+        supersedes: None,
         }).unwrap();
 
         let req = RecallRequest {

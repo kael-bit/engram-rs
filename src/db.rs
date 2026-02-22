@@ -83,6 +83,47 @@ pub struct MemoryInput {
     pub importance: Option<f64>,
     pub source: Option<String>,
     pub tags: Option<Vec<String>>,
+    /// If set, the new memory replaces these old ones (by id). They get deleted.
+    #[serde(default)]
+    pub supersedes: Option<Vec<String>>,
+}
+
+impl MemoryInput {
+    pub fn new(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            layer: None,
+            importance: None,
+            source: None,
+            tags: None,
+            supersedes: None,
+        }
+    }
+
+    pub fn layer(mut self, l: u8) -> Self {
+        self.layer = Some(l);
+        self
+    }
+
+    pub fn importance(mut self, i: f64) -> Self {
+        self.importance = Some(i);
+        self
+    }
+
+    pub fn source(mut self, s: impl Into<String>) -> Self {
+        self.source = Some(s.into());
+        self
+    }
+
+    pub fn tags(mut self, t: Vec<String>) -> Self {
+        self.tags = Some(t);
+        self
+    }
+
+    pub fn supersedes(mut self, ids: Vec<String>) -> Self {
+        self.supersedes = Some(ids);
+        self
+    }
 }
 
 /// A memory with its computed relevance score.
@@ -357,8 +398,20 @@ impl MemoryDB {
                     Some(layer),
                     Some(imp),
                     Some(&merged_tags),
-                )?
-                .ok_or(EngramError::Internal("update after dedup failed".into()));
+                )
+                .and_then(|opt| {
+                    // handle supersedes even in dedup path
+                    if let Some(ref old_ids) = input.supersedes {
+                        for old_id in old_ids {
+                            if old_id != &existing.id {
+                                if let Err(e) = self.delete(old_id) {
+                                    tracing::warn!(old_id, error = %e, "supersede delete failed");
+                                }
+                            }
+                        }
+                    }
+                    opt.ok_or(EngramError::Internal("update after dedup failed".into()))
+                });
         }
 
         let now = now_ms();
@@ -389,6 +442,15 @@ impl MemoryDB {
         )?;
 
         self.fts_insert(&id, &input.content, &tags_json)?;
+
+        // supersede: delete old memories that this one replaces
+        if let Some(ref old_ids) = input.supersedes {
+            for old_id in old_ids {
+                if let Err(e) = self.delete(old_id) {
+                    tracing::warn!(old_id, error = %e, "failed to delete superseded memory");
+                }
+            }
+        }
 
         Ok(Memory {
             id,
@@ -846,6 +908,7 @@ mod tests {
                 importance: Some(0.8),
                 source: None,
                 tags: Some(vec!["test".into()]),
+            supersedes: None,
             })
             .unwrap();
 
@@ -873,6 +936,7 @@ mod tests {
                 importance: None,
                 source: None,
                 tags: None,
+            supersedes: None,
             })
             .unwrap();
 
@@ -890,6 +954,7 @@ mod tests {
             importance: None,
             source: None,
             tags: None,
+        supersedes: None,
         });
         assert!(result.is_err());
     }
@@ -903,6 +968,7 @@ mod tests {
             importance: None,
             source: None,
             tags: None,
+        supersedes: None,
         });
         assert!(result.is_err());
     }
@@ -917,6 +983,7 @@ mod tests {
                 importance: Some(1.5),
                 source: None,
                 tags: None,
+            supersedes: None,
             })
             .unwrap();
         assert!((mem.importance - 1.0).abs() < f64::EPSILON);
@@ -932,6 +999,7 @@ mod tests {
                 importance: Some(0.9),
                 source: None,
                 tags: None,
+            supersedes: None,
             })
             .unwrap();
 
@@ -948,6 +1016,7 @@ mod tests {
             importance: None,
             source: None,
             tags: None,
+        supersedes: None,
         })
         .unwrap();
 
@@ -964,6 +1033,7 @@ mod tests {
             importance: None,
             source: None,
             tags: None,
+        supersedes: None,
         })
         .unwrap();
 
@@ -989,6 +1059,7 @@ mod tests {
                 importance: None,
                 source: None,
                 tags: None,
+            supersedes: None,
             })
             .unwrap();
         }
@@ -1010,6 +1081,7 @@ mod tests {
                 importance: Some(0.5),
                 source: None,
                 tags: None,
+            supersedes: None,
             })
             .unwrap();
 
@@ -1032,6 +1104,7 @@ mod tests {
                 importance: None,
                 source: None,
                 tags: None,
+            supersedes: None,
             })
             .unwrap();
         }
@@ -1053,6 +1126,7 @@ mod tests {
                 importance: Some(0.5),
                 source: None,
                 tags: Some(vec!["habit".into()]),
+            supersedes: None,
             })
             .unwrap();
 
@@ -1064,6 +1138,7 @@ mod tests {
                 importance: Some(0.7),
                 source: None,
                 tags: Some(vec!["preference".into()]),
+            supersedes: None,
             })
             .unwrap();
 
@@ -1090,6 +1165,7 @@ mod tests {
                 importance: Some(0.5),
                 source: None,
                 tags: Some(vec!["学习".into()]),
+            supersedes: None,
             })
             .unwrap();
 
@@ -1101,6 +1177,7 @@ mod tests {
                 importance: Some(0.7),
                 source: None,
                 tags: None,
+            supersedes: None,
             })
             .unwrap();
 
@@ -1129,6 +1206,7 @@ mod tests {
                 importance: Some(0.3),
                 source: None,
                 tags: Some(vec!["old".into()]),
+            supersedes: None,
             })
             .unwrap();
 
@@ -1154,6 +1232,7 @@ mod tests {
                 importance: None,
                 source: None,
                 tags: None,
+            supersedes: None,
             })
             .unwrap();
 
@@ -1167,5 +1246,46 @@ mod tests {
         let with_emb = db.get_all_with_embeddings();
         assert_eq!(with_emb.len(), 1);
         assert_eq!(with_emb[0].1, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn supersede_deletes_old() {
+        let db = test_db();
+        let old = db
+            .insert(MemoryInput::new("engram v0.2.1 deployed"))
+            .unwrap();
+        let old2 = db
+            .insert(MemoryInput::new("engram uses port 3917"))
+            .unwrap();
+
+        // new memory supersedes the first one
+        let new = db
+            .insert(
+                MemoryInput::new("engram v0.4.0 deployed with /resume endpoint")
+                    .supersedes(vec![old.id.clone()]),
+            )
+            .unwrap();
+
+        assert!(db.get(&old.id).unwrap().is_none(), "old should be deleted");
+        assert!(db.get(&old2.id).unwrap().is_some(), "unrelated should stay");
+        assert!(db.get(&new.id).unwrap().is_some(), "new should exist");
+    }
+
+    #[test]
+    fn supersede_multiple() {
+        let db = test_db();
+        let a = db.insert(MemoryInput::new("fact version 1")).unwrap();
+        let b = db.insert(MemoryInput::new("fact version 2")).unwrap();
+
+        let c = db
+            .insert(
+                MemoryInput::new("fact version 3 (final)")
+                    .supersedes(vec![a.id.clone(), b.id.clone()]),
+            )
+            .unwrap();
+
+        assert!(db.get(&a.id).unwrap().is_none());
+        assert!(db.get(&b.id).unwrap().is_none());
+        assert_eq!(db.get(&c.id).unwrap().unwrap().content, "fact version 3 (final)");
     }
 }

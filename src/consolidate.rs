@@ -178,17 +178,18 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                 continue;
             }
 
-            // keep the entry with highest importance
+            // keep the most recently created entry as the winner —
+            // if two memories conflict, the newer one is more likely correct
             let best_idx = *cluster
                 .iter()
-                .max_by(|&&a, &&b| {
-                    layer_mems[a]
-                        .0
-                        .importance
-                        .partial_cmp(&layer_mems[b].0.importance)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+                .max_by_key(|&&i| layer_mems[i].0.created_at)
                 .unwrap();
+
+            // take the highest importance from the cluster
+            let max_importance = cluster
+                .iter()
+                .map(|&i| layer_mems[i].0.importance)
+                .fold(0.0_f64, f64::max);
 
             // merge all tags
             let mut all_tags: Vec<String> = Vec::new();
@@ -207,8 +208,9 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                 let id = best_id.clone();
                 let content = merged_content.clone();
                 let tags = all_tags;
+                let imp = max_importance;
                 let ok = tokio::task::spawn_blocking(move || {
-                    lock_db(&db2).update_fields(&id, Some(&content), None, None, Some(&tags))
+                    lock_db(&db2).update_fields(&id, Some(&content), None, Some(imp), Some(&tags))
                 })
                 .await
                 .ok()

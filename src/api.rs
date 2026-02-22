@@ -530,6 +530,7 @@ async fn do_extract(
             importance: em.importance,
             source: Some("extract".into()),
             tags: em.tags,
+        supersedes: None,
         };
 
         let db = state.db.clone();
