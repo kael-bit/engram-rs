@@ -1,0 +1,9 @@
+/target
+/engram.db
+*.db-wal
+*.db-shm
+
+# MCP
+/mcp/node_modules
+/mcp/dist
+.sync_state

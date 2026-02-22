@@ -1,0 +1,33 @@
+[package]
+name = "engram"
+version = "0.2.1"
+edition = "2021"
+description = "Hierarchical memory engine for AI agents"
+license = "MIT"
+repository = "https://github.com/kael-bit/engram"
+keywords = ["ai", "memory", "agent", "hierarchical", "cognitive"]
+categories = ["database", "command-line-utilities"]
+readme = "README.md"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+clap = { version = "4", features = ["derive", "env"] }
+subtle = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
