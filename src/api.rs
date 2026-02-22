@@ -79,6 +79,22 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "ai_enabled": state.ai.is_some(),
         "stats": s,
+        "endpoints": {
+            "GET /": "this health check",
+            "GET /stats": "memory counts per layer",
+            "POST /memories": "create a memory",
+            "GET /memories": "list memories (optional ?layer=N&tag=X&limit=N)",
+            "GET /memories/:id": "get a memory by id",
+            "PATCH /memories/:id": "update a memory",
+            "DELETE /memories/:id": "delete a memory",
+            "POST /recall": "hybrid search (semantic + keyword)",
+            "GET /search?q=term": "quick keyword search",
+            "GET /recent?hours=2": "recent memories by time",
+            "POST /consolidate": "run maintenance cycle",
+            "POST /extract": "LLM-extract memories from text",
+            "GET /export": "export all memories as JSON",
+            "POST /import": "import memories from JSON",
+        },
     }))
 }
 

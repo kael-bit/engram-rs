@@ -72,8 +72,39 @@ async fn main() {
     let api_key = std::env::var("ENGRAM_API_KEY").ok();
     let auth_status = if api_key.is_some() { "enabled" } else { "disabled" };
 
-    let state = AppState { db: shared, ai: ai_cfg, api_key };
-    let app = api::router(state);
+    let state = AppState { db: shared.clone(), ai: ai_cfg, api_key };
+    let app = api::router(state.clone());
+
+    // background consolidation — runs every ENGRAM_CONSOLIDATE_MINS (default 30)
+    let consolidate_mins: u64 = std::env::var("ENGRAM_CONSOLIDATE_MINS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+    if consolidate_mins > 0 {
+        let bg_state = state.clone();
+        tokio::spawn(async move {
+            let interval = std::time::Duration::from_secs(consolidate_mins * 60);
+            // wait a bit before first run so startup isn't slowed
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            loop {
+                let db = bg_state.db.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    consolidate::consolidate_sync(&lock_db(&db), None)
+                })
+                .await;
+                match result {
+                    Ok(r) => {
+                        if r.promoted > 0 || r.decayed > 0 {
+                            info!(promoted = r.promoted, decayed = r.decayed, "auto-consolidate");
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "auto-consolidate failed"),
+                }
+                tokio::time::sleep(interval).await;
+            }
+        });
+        info!(every_mins = consolidate_mins, "background consolidation enabled");
+    }
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
