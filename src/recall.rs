@@ -16,6 +16,12 @@ pub struct RecallRequest {
     pub layers: Option<Vec<u8>>,
     pub min_importance: Option<f64>,
     pub limit: Option<usize>,
+    /// Only include memories created at or after this timestamp (unix ms).
+    pub since: Option<i64>,
+    /// Only include memories created at or before this timestamp (unix ms).
+    pub until: Option<i64>,
+    /// Sort order: "score" (default), "recent" (by created_at desc), "accessed" (by last_accessed desc).
+    pub sort_by: Option<String>,
 }
 
 /// Recall response with scored memories and metadata.
@@ -25,6 +31,16 @@ pub struct RecallResponse {
     pub total_tokens: usize,
     pub layer_breakdown: HashMap<u8, usize>,
     pub search_mode: String,
+    /// Applied time filter, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_filter: Option<TimeFilter>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TimeFilter {
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+    pub sort_by: String,
 }
 
 /// Estimate token count for mixed CJK/ASCII text.
@@ -78,11 +94,27 @@ pub fn recall(
     let budget = req.budget_tokens.unwrap_or(2000);
     let limit = req.limit.unwrap_or(20).min(100);
     let min_imp = req.min_importance.unwrap_or(0.0);
+    let sort_by = req.sort_by.as_deref().unwrap_or("score");
     let layer_filter: Option<Vec<Layer>> = req.layers.as_ref().map(|ls| {
         ls.iter()
             .filter_map(|&l| l.try_into().ok())
             .collect()
     });
+
+    // Time filter closure
+    let time_ok = |mem: &Memory| -> bool {
+        if let Some(since) = req.since {
+            if mem.created_at < since {
+                return false;
+            }
+        }
+        if let Some(until) = req.until {
+            if mem.created_at > until {
+                return false;
+            }
+        }
+        true
+    };
 
     let mut scored: Vec<ScoredMemory> = Vec::new();
     let mut seen = HashSet::new();
@@ -100,6 +132,9 @@ pub fn recall(
             for (id, sim) in &semantic_results {
                 if let Ok(Some(mem)) = db.get(id) {
                     if mem.importance < min_imp {
+                        continue;
+                    }
+                    if !time_ok(&mem) {
                         continue;
                     }
                     if let Some(ref lf) = layer_filter {
@@ -127,6 +162,9 @@ pub fn recall(
             if mem.importance < min_imp {
                 continue;
             }
+            if !time_ok(&mem) {
+                continue;
+            }
             if let Some(ref lf) = layer_filter {
                 if !lf.contains(&mem.layer) {
                     continue;
@@ -149,6 +187,9 @@ pub fn recall(
             if mem.importance < min_imp {
                 continue;
             }
+            if !time_ok(&mem) {
+                continue;
+            }
             if let Some(ref lf) = layer_filter {
                 if !lf.contains(&Layer::Core) {
                     continue;
@@ -158,12 +199,20 @@ pub fn recall(
         }
     }
 
-    // Sort by score descending
-    scored.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // Sort based on requested order
+    match sort_by {
+        "recent" => scored.sort_by(|a, b| {
+            b.memory.created_at.cmp(&a.memory.created_at)
+        }),
+        "accessed" => scored.sort_by(|a, b| {
+            b.memory.last_accessed.cmp(&a.memory.last_accessed)
+        }),
+        _ => scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+    }
 
     // Budget-aware selection
     let mut selected = Vec::new();
@@ -193,11 +242,22 @@ pub fn recall(
         selected.push(sm);
     }
 
+    let time_filter = if req.since.is_some() || req.until.is_some() || sort_by != "score" {
+        Some(TimeFilter {
+            since: req.since,
+            until: req.until,
+            sort_by: sort_by.to_string(),
+        })
+    } else {
+        None
+    };
+
     RecallResponse {
         memories: selected,
         total_tokens,
         layer_breakdown: breakdown,
         search_mode,
+        time_filter,
     }
 }
 

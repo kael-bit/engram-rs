@@ -56,6 +56,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/recall", post(do_recall))
         .route("/search", get(quick_search))
+        .route("/recent", get(list_recent))
         .route("/consolidate", post(do_consolidate))
         .route("/extract", post(do_extract))
         .route("/export", get(do_export))
@@ -259,6 +260,48 @@ async fn quick_search(
     Ok(Json(serde_json::json!({
         "memories": results,
         "count": count,
+    })))
+}
+
+/// List memories created within a recent time window.
+/// GET /recent?hours=2&limit=20
+#[derive(Deserialize)]
+struct RecentQuery {
+    /// Hours to look back (default 2)
+    hours: Option<f64>,
+    /// Max results (default 20)
+    limit: Option<usize>,
+    /// Filter by layer (optional)
+    layer: Option<u8>,
+}
+
+async fn list_recent(
+    State(state): State<AppState>,
+    Query(q): Query<RecentQuery>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let hours = q.hours.unwrap_or(2.0);
+    let limit = q.limit.unwrap_or(20).min(100);
+    let layer_filter = q.layer;
+    let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
+
+    let db = state.db.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let d = lock_db(&db);
+        let mut memories = d.list_since(since_ms, limit)?;
+        if let Some(l) = layer_filter {
+            memories.retain(|m| m.layer as u8 == l);
+        }
+        Ok::<_, EngramError>(memories)
+    })
+    .await
+    .map_err(|e| EngramError::Internal(e.to_string()))??;
+
+    let count = result.len();
+    Ok(Json(serde_json::json!({
+        "memories": result,
+        "count": count,
+        "since_ms": since_ms,
+        "hours": hours,
     })))
 }
 

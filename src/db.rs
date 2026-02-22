@@ -488,6 +488,18 @@ impl MemoryDB {
         Ok(rows)
     }
 
+    /// List memories created since a given timestamp, ordered by creation time descending.
+    pub fn list_since(&self, since_ms: i64, limit: usize) -> Result<Vec<Memory>, EngramError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM memories WHERE created_at >= ?1 ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![since_ms, limit as i64], |row| row_to_memory(row))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     /// Find memories whose decay score has fallen below a threshold.
     pub fn get_decayed(&self, threshold: f64) -> Vec<Memory> {
         let now = now_ms();
