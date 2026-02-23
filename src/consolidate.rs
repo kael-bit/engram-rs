@@ -26,6 +26,8 @@ pub struct ConsolidateResponse {
     pub merged: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub importance_decayed: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub gate_rejected: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub promoted_ids: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -33,6 +35,9 @@ pub struct ConsolidateResponse {
     /// IDs of memories that absorbed others during merge (winners).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub merged_ids: Vec<String>,
+    /// IDs that passed access/age thresholds but await LLM gate review.
+    #[serde(skip)]
+    pub(crate) promotion_candidates: Vec<(String, String)>, // (id, content)
 }
 
 fn is_zero(n: &usize) -> bool { *n == 0 }
@@ -53,6 +58,46 @@ pub async fn consolidate(
         warn!(error = %e, "consolidate_sync task panicked");
         ConsolidateResponse::default()
     });
+
+    // LLM gate: review promotion candidates before moving to Core.
+    // Without AI config, promote all candidates directly (backward compat).
+    let candidates = std::mem::take(&mut result.promotion_candidates);
+    if !candidates.is_empty() {
+        match &ai {
+            Some(cfg) => {
+                for (id, content) in &candidates {
+                    match llm_promotion_gate(cfg, content).await {
+                        Ok(true) => {
+                            if db.promote(id, Layer::Core).is_ok() {
+                                result.promoted_ids.push(id.clone());
+                                result.promoted += 1;
+                                debug!(id = %id, "LLM approved promotion to Core");
+                            }
+                        }
+                        Ok(false) => {
+                            result.gate_rejected += 1;
+                            // Prevent repeated LLM calls: drop importance below promote threshold
+                            let _ = db.update_fields(id, None, None, Some(0.4), None);
+                            debug!(id = %id, "LLM rejected promotion, importance reduced to 0.4");
+                        }
+                        Err(e) => {
+                            // LLM error → skip this round, don't promote blindly
+                            warn!(id = %id, error = %e, "LLM gate failed, skipping");
+                        }
+                    }
+                }
+            }
+            None => {
+                // No AI configured — promote all (legacy behavior)
+                for (id, _) in &candidates {
+                    if db.promote(id, Layer::Core).is_ok() {
+                        result.promoted_ids.push(id.clone());
+                        result.promoted += 1;
+                    }
+                }
+            }
+        }
+    }
 
     if do_merge {
         if let Some(cfg) = ai {
@@ -89,6 +134,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     let mut decayed = 0_usize;
     let mut promoted_ids = Vec::new();
     let mut dropped_ids = Vec::new();
+    let mut promotion_candidates = Vec::new();
 
     // Demote session notes that shouldn't be in Core.
     // Session logs are episodic — they belong in Working at most.
@@ -100,24 +146,10 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
             }
     }
 
-    // Working → Core: access-based or age-based (single pass)
-    // Session notes (source="session") are capped at Working — they're
-    // episodic work logs, not core knowledge.
-    // Operational records (bug fixes, audits, code reviews) are also capped —
-    // they're useful short-term but not identity-level knowledge.
+    // Working → Core: collect candidates for LLM gate review.
+    // Session notes and ephemeral tags are always blocked.
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0) {
         if mem.source == "session" || mem.tags.iter().any(|t| t == "ephemeral") {
-            continue;
-        }
-        // Block operational/log-type content from reaching Core
-        let is_operational = mem.tags.iter().any(|t| {
-            matches!(t.as_str(), "bug-fix" | "audit" | "code-review" | "refactor")
-        }) || {
-            let lc = mem.content.to_lowercase();
-            lc.starts_with("bug fix") || lc.contains("bug fixes")
-                || lc.contains("audit fix") || lc.contains("performance fix")
-        };
-        if is_operational {
             continue;
         }
         let dominated_by_access = mem.access_count >= promote_threshold
@@ -126,11 +158,8 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
             && mem.access_count > 0
             && mem.importance >= promote_min_imp;
 
-        if (dominated_by_access || aged_in)
-            && db.promote(&mem.id, Layer::Core).is_ok()
-        {
-            promoted_ids.push(mem.id.clone());
-            promoted += 1;
+        if dominated_by_access || aged_in {
+            promotion_candidates.push((mem.id.clone(), mem.content.clone()));
         }
     }
 
@@ -197,10 +226,43 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         demoted,
         merged: 0,
         importance_decayed,
+        gate_rejected: 0,
         promoted_ids,
         dropped_ids,
         merged_ids: vec![],
+        promotion_candidates,
     }
+}
+
+const GATE_SYSTEM: &str = "You are a memory curator for an AI agent's long-term memory system.\n\
+    The agent has a three-layer memory: Buffer (temporary), Working (useful), Core (permanent identity-level knowledge).\n\
+    \n\
+    A memory is being considered for promotion to Core (permanent). Decide if it belongs there.\n\
+    \n\
+    APPROVE for Core if it is:\n\
+    - Identity: who the agent/user is, preferences, principles\n\
+    - Strategic: long-term goals, key decisions, important lessons learned\n\
+    - Relational: important facts about people, relationships, constraints\n\
+    - Architectural: fundamental design decisions that shape the project\n\
+    \n\
+    REJECT (keep in Working) if it is:\n\
+    - Operational: bug fixes, code changes, version bumps, deployment logs\n\
+    - Ephemeral: session summaries, daily progress, temporary status\n\
+    - Technical detail: specific code patterns, API signatures, config values\n\
+    - Duplicate: restates something that's obviously already known\n\
+    \n\
+    Reply with ONLY one word: APPROVE or REJECT";
+
+async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<bool, String> {
+    let truncated = if content.len() > 500 {
+        &content[..content.char_indices().take(500).last()
+            .map(|(i, c)| i + c.len_utf8()).unwrap_or(500)]
+    } else {
+        content
+    };
+    let response = ai::llm_chat_as(cfg, "gate", GATE_SYSTEM, truncated).await?;
+    let decision = response.trim().to_uppercase();
+    Ok(decision.starts_with("APPROVE"))
 }
 
 const MERGE_SYSTEM: &str = "Merge these related memory entries into a single concise note. Rules:\n\
@@ -560,16 +622,21 @@ mod tests {
     fn promote_high_access_working() {
         let db = test_db();
         let now = crate::db::now_ms();
-        // working memory with enough accesses and importance → should promote
+        // working memory with enough accesses and importance → should be a candidate
         let good = mem_with_ts("promote-me", Layer::Working, 0.8, 5, now - 1000, now);
-        // working memory with low access → should stay
+        // working memory with low access → should not be a candidate
         let meh = mem_with_ts("leave-me", Layer::Working, 0.8, 1, now - 1000, now);
         db.import(&[good, meh]).unwrap();
 
         let result = consolidate_sync(&db, None);
-        assert_eq!(result.promoted, 1);
-        assert!(result.promoted_ids.contains(&"promote-me".to_string()));
+        // Without LLM, candidates are collected but not promoted
+        assert_eq!(result.promotion_candidates.len(), 1);
+        assert_eq!(result.promotion_candidates[0].0, "promote-me");
 
+        // Simulate no-AI fallback: promote candidates directly
+        for (id, _) in &result.promotion_candidates {
+            db.promote(id, Layer::Core).unwrap();
+        }
         let promoted = db.get("promote-me").unwrap().unwrap();
         assert_eq!(promoted.layer, Layer::Core);
         let stayed = db.get("leave-me").unwrap().unwrap();
@@ -581,15 +648,16 @@ mod tests {
         let db = test_db();
         let now = crate::db::now_ms();
         let eight_days_ago = now - 8 * 86_400_000;
-        // old working memory with decent importance → should promote by age
+        // old working memory with decent importance → should be a candidate by age
         let old = mem_with_ts("old-but-worthy", Layer::Working, 0.6, 1, eight_days_ago, now);
-        // fresh working memory → should stay
+        // fresh working memory → should not be a candidate
         let fresh = mem_with_ts("too-young", Layer::Working, 0.6, 1, now - 1000, now);
         db.import(&[old, fresh]).unwrap();
 
         let result = consolidate_sync(&db, None);
-        assert!(result.promoted_ids.contains(&"old-but-worthy".to_string()));
-        assert!(!result.promoted_ids.contains(&"too-young".to_string()));
+        let candidate_ids: Vec<&str> = result.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(candidate_ids.contains(&"old-but-worthy"));
+        assert!(!candidate_ids.contains(&"too-young"));
     }
 
     #[test]
@@ -669,32 +737,25 @@ mod tests {
         let db = test_db();
         let now = crate::db::now_ms();
 
-        // Operational memory tagged bug-fix — high importance and access count,
-        // but must NOT be promoted to Core.
-        let mut operational = mem_with_ts("bug-fix-mem", Layer::Working, 0.9, 5, now - 1000, now);
-        operational.tags = vec!["bug-fix".into()];
+        // Session-tagged memory — high importance and access count,
+        // but must NOT become a candidate (blocked before LLM gate).
+        let mut session_mem = mem_with_ts("session-mem", Layer::Working, 0.9, 5, now - 1000, now);
+        session_mem.source = "session".into();
 
-        // Normal working memory with identical importance/access — SHOULD promote.
+        // Normal working memory with identical importance/access — SHOULD be a candidate.
         let normal = mem_with_ts("normal-mem", Layer::Working, 0.9, 5, now - 1000, now);
 
-        db.import(&[operational, normal]).unwrap();
+        // Ephemeral-tagged memory — also blocked.
+        let mut ephemeral = mem_with_ts("ephemeral-mem", Layer::Working, 0.9, 5, now - 1000, now);
+        ephemeral.tags = vec!["ephemeral".into()];
+
+        db.import(&[session_mem, normal, ephemeral]).unwrap();
 
         let result = consolidate_sync(&db, None);
+        let candidate_ids: Vec<&str> = result.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
 
-        // Normal memory promoted to Core
-        assert!(
-            result.promoted_ids.contains(&"normal-mem".to_string()),
-            "normal working memory should be promoted to Core"
-        );
-        let normal_after = db.get("normal-mem").unwrap().unwrap();
-        assert_eq!(normal_after.layer, Layer::Core, "normal memory should be in Core");
-
-        // Operational memory stays in Working
-        assert!(
-            !result.promoted_ids.contains(&"bug-fix-mem".to_string()),
-            "bug-fix tagged memory must not be promoted to Core"
-        );
-        let operational_after = db.get("bug-fix-mem").unwrap().unwrap();
-        assert_eq!(operational_after.layer, Layer::Working, "bug-fix memory must stay in Working");
+        assert!(candidate_ids.contains(&"normal-mem"), "normal memory should be a candidate");
+        assert!(!candidate_ids.contains(&"session-mem"), "session memory must not be a candidate");
+        assert!(!candidate_ids.contains(&"ephemeral-mem"), "ephemeral memory must not be a candidate");
     }
 }
