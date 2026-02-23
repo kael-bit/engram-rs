@@ -103,8 +103,21 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Working → Core: access-based or age-based (single pass)
     // Session notes (source="session") are capped at Working — they're
     // episodic work logs, not core knowledge.
+    // Operational records (bug fixes, audits, code reviews) are also capped —
+    // they're useful short-term but not identity-level knowledge.
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0) {
         if mem.source == "session" || mem.tags.iter().any(|t| t == "ephemeral") {
+            continue;
+        }
+        // Block operational/log-type content from reaching Core
+        let is_operational = mem.tags.iter().any(|t| {
+            matches!(t.as_str(), "bug-fix" | "audit" | "code-review" | "refactor")
+        }) || {
+            let lc = mem.content.to_lowercase();
+            lc.starts_with("bug fix") || lc.contains("bug fixes")
+                || lc.contains("audit fix") || lc.contains("performance fix")
+        };
+        if is_operational {
             continue;
         }
         let dominated_by_access = mem.access_count >= promote_threshold
@@ -649,5 +662,39 @@ mod tests {
         let r = consolidate_sync(&db, None);
         assert!(r.decayed >= 1);
         assert!(db.get("forgotten").unwrap().is_none());
+    }
+
+    #[test]
+    fn operational_tag_blocks_working_to_core_promotion() {
+        let db = test_db();
+        let now = crate::db::now_ms();
+
+        // Operational memory tagged bug-fix — high importance and access count,
+        // but must NOT be promoted to Core.
+        let mut operational = mem_with_ts("bug-fix-mem", Layer::Working, 0.9, 5, now - 1000, now);
+        operational.tags = vec!["bug-fix".into()];
+
+        // Normal working memory with identical importance/access — SHOULD promote.
+        let normal = mem_with_ts("normal-mem", Layer::Working, 0.9, 5, now - 1000, now);
+
+        db.import(&[operational, normal]).unwrap();
+
+        let result = consolidate_sync(&db, None);
+
+        // Normal memory promoted to Core
+        assert!(
+            result.promoted_ids.contains(&"normal-mem".to_string()),
+            "normal working memory should be promoted to Core"
+        );
+        let normal_after = db.get("normal-mem").unwrap().unwrap();
+        assert_eq!(normal_after.layer, Layer::Core, "normal memory should be in Core");
+
+        // Operational memory stays in Working
+        assert!(
+            !result.promoted_ids.contains(&"bug-fix-mem".to_string()),
+            "bug-fix tagged memory must not be promoted to Core"
+        );
+        let operational_after = db.get("bug-fix-mem").unwrap().unwrap();
+        assert_eq!(operational_after.layer, Layer::Working, "bug-fix memory must stay in Working");
     }
 }
