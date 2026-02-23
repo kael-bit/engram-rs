@@ -43,8 +43,14 @@ impl AiConfig {
         let llm_key = std::env::var("ENGRAM_LLM_KEY").unwrap_or_default();
         let llm_model =
             std::env::var("ENGRAM_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
-        let embed_url = std::env::var("ENGRAM_EMBED_URL")
-            .unwrap_or_else(|_| llm_url.replace("/chat/completions", "/embeddings"));
+        let embed_url = std::env::var("ENGRAM_EMBED_URL").unwrap_or_else(|_| {
+            // Only rewrite if this looks like a chat completions endpoint
+            if llm_url.contains("/chat/completions") {
+                llm_url.replace("/chat/completions", "/embeddings")
+            } else {
+                format!("{}/embeddings", llm_url.trim_end_matches('/'))
+            }
+        });
         let embed_key =
             std::env::var("ENGRAM_EMBED_KEY").unwrap_or_else(|_| llm_key.clone());
         let embed_model = std::env::var("ENGRAM_EMBED_MODEL")
@@ -194,7 +200,7 @@ pub async fn extract_memories(
     cfg: &AiConfig,
     text: &str,
 ) -> Result<Vec<ExtractedMemory>, String> {
-    debug!(model = %cfg.llm_model, "extracting memories");
+    debug!(model = %cfg.model_for("extract"), "extracting memories");
 
     let raw = llm_chat_as(cfg, "extract", EXTRACT_SYSTEM_PROMPT, text).await?;
     let json_str = unwrap_json(&raw);
@@ -276,7 +282,15 @@ pub async fn get_embeddings(
         .await
         .map_err(|e| format!("embedding response parse failed: {e}"))?;
 
-    Ok(embed_resp.data.into_iter().map(|d| d.embedding).collect())
+    let embeddings: Vec<Vec<f64>> = embed_resp.data.into_iter().map(|d| d.embedding).collect();
+    if embeddings.len() != texts.len() {
+        return Err(format!(
+            "embedding count mismatch: sent {} texts, got {} embeddings",
+            texts.len(),
+            embeddings.len()
+        ));
+    }
+    Ok(embeddings)
 }
 
 
