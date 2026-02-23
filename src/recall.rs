@@ -444,34 +444,19 @@ mod tests {
             content: "very important fact about rust".into(),
             layer: Some(3),
             importance: Some(0.95),
-            source: None,
-            tags: None,
-            namespace: None,
-            sync_embed: None,
-        supersedes: None,
-        skip_dedup: None,
+            ..Default::default()
         }).unwrap();
         db.insert(MemoryInput {
             content: "trivial note about lunch".into(),
             layer: Some(1),
             importance: Some(0.1),
-            source: None,
-            tags: None,
-            namespace: None,
-            sync_embed: None,
-        supersedes: None,
-        skip_dedup: None,
+            ..Default::default()
         }).unwrap();
         db.insert(MemoryInput {
             content: "medium importance work log about rust compiler".into(),
             layer: Some(2),
             importance: Some(0.5),
-            source: None,
-            tags: None,
-            namespace: None,
-            sync_embed: None,
-        supersedes: None,
-        skip_dedup: None,
+            ..Default::default()
         }).unwrap();
         db
     }
@@ -606,19 +591,13 @@ mod tests {
             content: "from the API".into(),
             layer: Some(3), importance: Some(0.9),
             source: Some("api".into()), tags: None,
-            namespace: None,
-            sync_embed: None,
-        supersedes: None,
-        skip_dedup: None,
+            ..Default::default()
         }).unwrap();
         db.insert(MemoryInput {
             content: "from a session".into(),
             layer: Some(2), importance: Some(0.7),
             source: Some("session".into()), tags: None,
-            namespace: None,
-            sync_embed: None,
-        supersedes: None,
-        skip_dedup: None,
+            ..Default::default()
         }).unwrap();
 
         let req = RecallRequest {
@@ -643,19 +622,13 @@ mod tests {
             content: "rust project details".into(),
             layer: Some(3), importance: Some(0.9),
             source: None, tags: Some(vec!["rust".into(), "engram".into()]),
-        supersedes: None,
-        skip_dedup: None,
-        namespace: None,
-        sync_embed: None,
+        ..Default::default()
         }).unwrap();
         db.insert(MemoryInput {
             content: "python script notes".into(),
             layer: Some(2), importance: Some(0.7),
             source: None, tags: Some(vec!["python".into()]),
-        supersedes: None,
-        skip_dedup: None,
-        namespace: None,
-        sync_embed: None,
+        ..Default::default()
         }).unwrap();
 
         let req = RecallRequest {
@@ -675,7 +648,6 @@ mod tests {
 
     #[test]
     fn score_combined_recalc() {
-        // Verify the standalone score_combined function produces reasonable values
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -684,5 +656,185 @@ mod tests {
         let old = score_combined(0.8, 0.9, now - 72 * 3_600_000);
         assert!(recent > old, "recent memory should score higher");
         assert!(recent > 0.0);
+    }
+
+    #[test]
+    fn min_score_filters_low() {
+        let db = test_db_with_data();
+        // Without min_score, we get results
+        let req_all = RecallRequest {
+            query: "rust".into(),
+            limit: Some(10),
+            ..Default::default()
+        };
+        let all = recall(&db, &req_all, None, None);
+        assert!(all.memories.len() >= 2);
+
+        // With impossibly high min_score, we get nothing
+        let req_high = RecallRequest {
+            query: "rust".into(),
+            limit: Some(10),
+            min_score: Some(99.0),
+            ..Default::default()
+        };
+        let filtered = recall(&db, &req_high, None, None);
+        assert_eq!(filtered.memories.len(), 0, "min_score=99 should filter everything");
+    }
+
+    #[test]
+    fn empty_query_returns_something() {
+        let db = test_db_with_data();
+        let req = RecallRequest {
+            query: "".into(),
+            limit: Some(5),
+            ..Default::default()
+        };
+        // Empty query shouldn't panic — FTS returns nothing, but that's fine
+        let result = recall(&db, &req, None, None);
+        // May or may not find results, but must not crash
+        assert!(result.memories.len() <= 5);
+    }
+
+    #[test]
+    fn sort_by_recent() {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        db.insert(MemoryInput {
+            content: "older entry about databases".into(),
+            importance: Some(0.9),
+            ..Default::default()
+        }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        db.insert(MemoryInput {
+            content: "newer entry about databases".into(),
+            importance: Some(0.3),
+            ..Default::default()
+        }).unwrap();
+
+        let req = RecallRequest {
+            query: "databases".into(),
+            sort_by: Some("recent".into()),
+            limit: Some(2),
+            ..Default::default()
+        };
+        let result = recall(&db, &req, None, None);
+        assert_eq!(result.memories.len(), 2);
+        assert!(result.memories[0].memory.content.contains("newer"),
+            "sort_by=recent should put newer first");
+    }
+
+    #[test]
+    fn namespace_isolation() {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        db.insert(MemoryInput {
+            content: "secret agent data".into(),
+            namespace: Some("agent-a".into()),
+            ..Default::default()
+        }).unwrap();
+        db.insert(MemoryInput {
+            content: "different agent data".into(),
+            namespace: Some("agent-b".into()),
+            ..Default::default()
+        }).unwrap();
+
+        let req = RecallRequest {
+            query: "agent data".into(),
+            namespace: Some("agent-a".into()),
+            limit: Some(10),
+            ..Default::default()
+        };
+        let result = recall(&db, &req, None, None);
+        assert_eq!(result.memories.len(), 1);
+        assert!(result.memories[0].memory.content.contains("secret"));
+    }
+
+    #[test]
+    fn since_until_filters() {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        let m1 = db.insert(MemoryInput {
+            content: "early log entry".into(),
+            ..Default::default()
+        }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let midpoint = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        db.insert(MemoryInput {
+            content: "late log entry".into(),
+            ..Default::default()
+        }).unwrap();
+
+        // Only memories after midpoint
+        let req = RecallRequest {
+            query: "log entry".into(),
+            since: Some(midpoint),
+            limit: Some(10),
+            ..Default::default()
+        };
+        let result = recall(&db, &req, None, None);
+        assert_eq!(result.memories.len(), 1);
+        assert!(result.memories[0].memory.content.contains("late"));
+
+        // Only memories before midpoint
+        let req2 = RecallRequest {
+            query: "log entry".into(),
+            until: Some(midpoint),
+            limit: Some(10),
+            ..Default::default()
+        };
+        let result2 = recall(&db, &req2, None, None);
+        assert_eq!(result2.memories.len(), 1);
+        assert!(result2.memories[0].memory.content.contains("early"));
+    }
+
+    #[test]
+    fn source_filter() {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        db.insert(MemoryInput {
+            content: "manual note about performance".into(),
+            source: Some("api".into()),
+            ..Default::default()
+        }).unwrap();
+        db.insert(MemoryInput {
+            content: "extracted note about performance".into(),
+            source: Some("extract".into()),
+            ..Default::default()
+        }).unwrap();
+
+        let req = RecallRequest {
+            query: "performance".into(),
+            source: Some("extract".into()),
+            limit: Some(10),
+            ..Default::default()
+        };
+        let result = recall(&db, &req, None, None);
+        assert_eq!(result.memories.len(), 1);
+        assert!(result.memories[0].memory.content.contains("extracted"));
+    }
+
+    #[test]
+    fn layer_filter() {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        db.insert(MemoryInput {
+            content: "buffer thought about testing".into(),
+            layer: Some(1),
+            ..Default::default()
+        }).unwrap();
+        db.insert(MemoryInput {
+            content: "core fact about testing".into(),
+            layer: Some(3),
+            ..Default::default()
+        }).unwrap();
+
+        let req = RecallRequest {
+            query: "testing".into(),
+            layers: Some(vec![3]),
+            limit: Some(10),
+            ..Default::default()
+        };
+        let result = recall(&db, &req, None, None);
+        assert_eq!(result.memories.len(), 1);
+        assert!(result.memories[0].memory.content.contains("core"));
     }
 }

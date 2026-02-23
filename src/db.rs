@@ -1145,10 +1145,7 @@ mod tests {
                 importance: Some(0.8),
                 source: None,
                 tags: Some(vec!["test".into()]),
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+            ..Default::default()
             })
             .unwrap();
 
@@ -1174,12 +1171,7 @@ mod tests {
                 content: "touchable".into(),
                 layer: None,
                 importance: None,
-                source: None,
-                tags: None,
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -1195,12 +1187,7 @@ mod tests {
             content: "   ".into(),
             layer: None,
             importance: None,
-            source: None,
-            tags: None,
-        supersedes: None,
-        skip_dedup: None,
-        namespace: None,
-        sync_embed: None,
+            ..Default::default()
         });
         assert!(result.is_err());
     }
@@ -1212,12 +1199,7 @@ mod tests {
             content: "test".into(),
             layer: Some(5),
             importance: None,
-            source: None,
-            tags: None,
-        supersedes: None,
-        skip_dedup: None,
-        namespace: None,
-        sync_embed: None,
+            ..Default::default()
         });
         assert!(result.is_err());
     }
@@ -1230,12 +1212,7 @@ mod tests {
                 content: "clamped".into(),
                 layer: None,
                 importance: Some(1.5),
-                source: None,
-                tags: None,
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+                ..Default::default()
             })
             .unwrap();
         assert!((mem.importance - 1.0).abs() < f64::EPSILON);
@@ -1249,12 +1226,7 @@ mod tests {
                 content: "promotable".into(),
                 layer: Some(1),
                 importance: Some(0.9),
-                source: None,
-                tags: None,
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -1269,12 +1241,7 @@ mod tests {
             content: "the quick brown fox jumps".into(),
             layer: None,
             importance: None,
-            source: None,
-            tags: None,
-        supersedes: None,
-        skip_dedup: None,
-        namespace: None,
-        sync_embed: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -1289,12 +1256,7 @@ mod tests {
             content: "今天天气很好适合出门散步".into(),
             layer: None,
             importance: None,
-            source: None,
-            tags: None,
-        supersedes: None,
-        skip_dedup: None,
-        namespace: None,
-        sync_embed: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -1318,12 +1280,7 @@ mod tests {
                 content: content.into(),
                 layer: Some(layer),
                 importance: None,
-                source: None,
-                tags: None,
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+                ..Default::default()
             })
             .unwrap();
         }
@@ -1343,12 +1300,7 @@ mod tests {
                 content: "original".into(),
                 layer: Some(1),
                 importance: Some(0.5),
-                source: None,
-                tags: None,
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -1369,12 +1321,7 @@ mod tests {
                 content: format!("paginated {i}"),
                 layer: None,
                 importance: None,
-                source: None,
-                tags: None,
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+                ..Default::default()
             })
             .unwrap();
         }
@@ -1396,10 +1343,7 @@ mod tests {
                 importance: Some(0.5),
                 source: None,
                 tags: Some(vec!["habit".into()]),
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+            ..Default::default()
             })
             .unwrap();
 
@@ -1411,10 +1355,7 @@ mod tests {
                 importance: Some(0.7),
                 source: None,
                 tags: Some(vec!["preference".into()]),
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+            ..Default::default()
             })
             .unwrap();
 
@@ -1441,10 +1382,7 @@ mod tests {
                 importance: Some(0.5),
                 source: None,
                 tags: Some(vec!["学习".into()]),
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+            ..Default::default()
             })
             .unwrap();
 
@@ -1454,12 +1392,7 @@ mod tests {
                 content: "今天下午学习了如何使用向量数据库进行语义搜索和检索工作".into(),
                 layer: Some(2),
                 importance: Some(0.7),
-                source: None,
-                tags: None,
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -1488,10 +1421,7 @@ mod tests {
                 importance: Some(0.3),
                 source: None,
                 tags: Some(vec!["old".into()]),
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+            ..Default::default()
             })
             .unwrap();
 
@@ -1515,12 +1445,7 @@ mod tests {
                 content: "embedding test".into(),
                 layer: None,
                 importance: None,
-                source: None,
-                tags: None,
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
-            sync_embed: None,
+                ..Default::default()
             })
             .unwrap();
 
