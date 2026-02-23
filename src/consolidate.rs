@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn cluster_similar_vectors() {
-        let mems = vec![
+        let mems = [
             make_mem("a", Layer::Working, 0.5, vec![1.0, 0.0, 0.0]),
             make_mem("b", Layer::Working, 0.5, vec![0.999, 0.01, 0.0]),
             make_mem("c", Layer::Working, 0.5, vec![0.0, 1.0, 0.0]),
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn cluster_all_different() {
-        let mems = vec![
+        let mems = [
             make_mem("a", Layer::Working, 0.5, vec![1.0, 0.0, 0.0]),
             make_mem("b", Layer::Working, 0.5, vec![0.0, 1.0, 0.0]),
             make_mem("c", Layer::Working, 0.5, vec![0.0, 0.0, 1.0]),
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn cluster_all_identical() {
-        let mems = vec![
+        let mems = [
             make_mem("a", Layer::Working, 0.5, vec![1.0, 0.0]),
             make_mem("b", Layer::Working, 0.5, vec![1.0, 0.0]),
             make_mem("c", Layer::Working, 0.5, vec![1.0, 0.0]),
@@ -571,7 +571,7 @@ mod tests {
     fn drop_expired_low_importance_buffer() {
         let db = test_db();
         let now = crate::db::now_ms();
-        let two_hours_ago = now - 7200_000;
+        let two_hours_ago = now - 7_200_000;
         // old buffer, never accessed → should be dropped
         let expendable = mem_with_ts("bye", Layer::Buffer, 0.2, 0, two_hours_ago, two_hours_ago);
         // old buffer, accessed once → should be rescued to working

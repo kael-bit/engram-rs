@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn embedding_roundtrip() {
-        let original = vec![1.0, -2.5, 3.14159, 0.0, f64::MAX];
+        let original = vec![1.0, -2.5, 3.125, 0.0, f64::MAX];
         let bytes = embedding_to_bytes(&original);
         let decoded = bytes_to_embedding(&bytes);
         assert_eq!(original, decoded);

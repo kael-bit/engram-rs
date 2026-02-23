@@ -1407,7 +1407,7 @@ mod tests {
         ).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let j = body_json(resp).await;
-        assert!(j["memories"].as_array().unwrap().len() >= 1);
+        assert!(!j["memories"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

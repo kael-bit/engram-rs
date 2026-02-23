@@ -405,6 +405,24 @@ fn parse_rerank_response(raw: &str, count: usize) -> Vec<usize> {
         .collect()
 }
 
+/// Check if content is semantically duplicate of an existing memory.
+/// Uses embedding cosine similarity (threshold 0.78).
+pub async fn quick_semantic_dup(
+    ai_cfg: &AiConfig,
+    db: &MemoryDB,
+    content: &str,
+) -> Result<bool, String> {
+    let embeddings = ai::get_embeddings(ai_cfg, &[content.to_string()]).await?;
+    let emb = embeddings.first().ok_or("no embedding returned")?;
+    let candidates = db.search_semantic(emb, 3);
+    for (_, score) in &candidates {
+        if *score > 0.78 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -414,14 +432,14 @@ mod tests {
     fn tokens_ascii() {
         // "hello world" = 11 bytes / 4 ≈ 3 tokens
         let tokens = estimate_tokens("hello world");
-        assert!(tokens >= 2 && tokens <= 4);
+        assert!((2..=4).contains(&tokens));
     }
 
     #[test]
     fn tokens_cjk() {
         // 4 CJK chars / 1.5 ≈ 3 tokens
         let tokens = estimate_tokens("你好世界");
-        assert!(tokens >= 2 && tokens <= 4);
+        assert!((2..=4).contains(&tokens));
     }
 
     #[test]
@@ -588,7 +606,7 @@ mod tests {
             layers: None,
             min_importance: None,
             limit: Some(10),
-            since: Some(now - 3600_000), // last hour only
+            since: Some(now - 3_600_000), // last hour only
             until: None,
             sort_by: None,
             rerank: None, source: None, tags: None,
@@ -767,7 +785,7 @@ mod tests {
     #[test]
     fn since_until_filters() {
         let db = MemoryDB::open(":memory:").expect("in-memory db");
-        let m1 = db.insert(MemoryInput {
+        let _m1 = db.insert(MemoryInput {
             content: "early log entry".into(),
             ..Default::default()
         }).unwrap();
@@ -897,22 +915,4 @@ mod tests {
         assert_eq!(result.memories.len(), 1);
         assert!(result.memories[0].memory.content.contains("high"));
     }
-}
-
-/// Check if content is semantically duplicate of an existing memory.
-/// Uses embedding cosine similarity (threshold 0.85).
-pub async fn quick_semantic_dup(
-    ai_cfg: &AiConfig,
-    db: &MemoryDB,
-    content: &str,
-) -> Result<bool, String> {
-    let embeddings = ai::get_embeddings(ai_cfg, &[content.to_string()]).await?;
-    let emb = embeddings.first().ok_or("no embedding returned")?;
-    let candidates = db.search_semantic(emb, 3);
-    for (_, score) in &candidates {
-        if *score > 0.78 {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
