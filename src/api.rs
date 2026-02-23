@@ -686,24 +686,23 @@ async fn do_resume(
             .take(10)
             .collect();
 
-        // recent activity — time window
-        let recent: Vec<db::Memory> = d.list_since(since_ms, 50).unwrap_or_default()
+        // all recent memories in one query, then split by source
+        let all_recent: Vec<db::Memory> = d.list_since(since_ms, 100).unwrap_or_default()
             .into_iter()
             .filter(|m| ns_ok(m))
+            .collect();
+
+        // recent activity (exclude session notes; they're shown separately)
+        let recent: Vec<db::Memory> = all_recent.iter()
+            .filter(|m| m.source != "session")
             .take(20)
+            .cloned()
             .collect();
 
         // session memories — what happened in recent sessions
-        let all_session: Vec<db::Memory> = d
-            .list_since(since_ms, 100)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|m| m.source == "session" && ns_ok(m))
-            .collect();
-
         let mut next_actions = Vec::new();
         let mut sessions = Vec::new();
-        for m in all_session {
+        for m in all_recent.into_iter().filter(|m| m.source == "session") {
             if m.tags.iter().any(|t| t == "next-action") {
                 next_actions.push(m);
             } else {
