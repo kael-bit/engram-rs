@@ -199,19 +199,17 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
         return;
     }
 
-    // Truncate to only the tail of the exchange — the interesting part is at the end.
-    // System prompts, compaction summaries, and prior context are at the start and
-    // just produce garbage extractions (repeated stale info).
+    // Try to extract only the last user/assistant exchange from the request.
+    // System prompts and compaction summaries produce garbage extractions.
+    let req_tail = extract_last_exchange(&req_text);
     let max_chars = 4000;
-    let req_tail: String = {
-        let chars: Vec<char> = req_text.chars().collect();
-        if chars.len() > max_chars {
-            chars[chars.len() - max_chars..].iter().collect()
-        } else {
-            req_text.to_string()
-        }
-    };
     let res_preview: String = res_text.chars().take(max_chars).collect();
+
+    // Skip if the actual conversation content is too thin
+    if req_tail.len() + res_preview.len() < 200 {
+        debug!("proxy: skipping extraction, exchange too thin after filtering");
+        return;
+    }
 
     let system = "You extract long-term memories from LLM conversations. Be EXTREMELY selective.\n\
         Most conversations have NOTHING worth extracting. Return [] by default.\n\n\
@@ -310,4 +308,29 @@ struct ExtractionEntry {
     content: String,
     #[serde(default)]
     tags: Vec<String>,
+}
+
+/// Pull the last user message from a raw LLM API request body.
+/// Strips system prompts and context summaries that produce stale extractions.
+fn extract_last_exchange(raw: &str) -> String {
+    // Try to parse as JSON and grab the last user message
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+        if let Some(msgs) = v.get("messages").and_then(|m| m.as_array()) {
+            let user_msgs: Vec<&str> = msgs.iter()
+                .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                .filter_map(|m| m.get("content").and_then(|c| c.as_str()))
+                .collect();
+            if let Some(last) = user_msgs.last() {
+                let truncated: String = last.chars().take(4000).collect();
+                return truncated;
+            }
+        }
+    }
+    // Fallback: last 4000 chars
+    let chars: Vec<char> = raw.chars().collect();
+    if chars.len() > 4000 {
+        chars[chars.len() - 4000..].iter().collect()
+    } else {
+        raw.to_string()
+    }
 }
