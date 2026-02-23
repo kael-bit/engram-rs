@@ -630,8 +630,14 @@ impl MemoryDB {
                     tracing::warn!(error = %e, "batch: skipping invalid input");
                     continue;
                 }
+                let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
                 let now = now_ms();
-                let layer_val = input.layer.unwrap_or(1);
+                let layer_val = match input.layer {
+                    Some(l) => l,
+                    None if importance >= 0.9 => 3,
+                    None if importance >= 0.7 => 2,
+                    None => 1,
+                };
                 let layer: Layer = match layer_val.try_into() {
                     Ok(l) => l,
                     Err(_) => continue,
@@ -2294,5 +2300,22 @@ mod tests {
 
         // No match
         assert!(db.resolve_prefix("zzzzz").is_err());
+    }
+
+    #[test]
+    fn batch_insert_importance_driven_layer() {
+        let db = test_db();
+        let inputs = vec![
+            MemoryInput { importance: Some(0.95), ..MemoryInput::new("explicit remember") },
+            MemoryInput { importance: Some(0.75), ..MemoryInput::new("significant fact") },
+            MemoryInput { importance: Some(0.3), ..MemoryInput::new("transient note") },
+            MemoryInput { layer: Some(2), importance: Some(0.3), ..MemoryInput::new("explicit layer override") },
+        ];
+        let results = db.insert_batch(inputs).unwrap();
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].layer, Layer::Core);      // 0.95 → Core
+        assert_eq!(results[1].layer, Layer::Working);    // 0.75 → Working
+        assert_eq!(results[2].layer, Layer::Buffer);     // 0.3  → Buffer
+        assert_eq!(results[3].layer, Layer::Working);    // explicit layer=2 wins
     }
 }
