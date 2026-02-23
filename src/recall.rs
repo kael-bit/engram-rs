@@ -308,7 +308,7 @@ pub fn recall(
         total_tokens += tokens;
 
         // Only bump access stats for genuinely relevant results
-        if sm.relevance > 0.2 {
+        if sm.relevance > 0.5 {
             let _ = db.touch(&sm.memory.id);
         }
         selected.push(sm);
