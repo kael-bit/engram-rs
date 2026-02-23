@@ -984,44 +984,42 @@ async fn do_consolidate(
     Ok(Json(result))
 }
 
-/// Audit Core memories using LLM gate. Demotes anything that shouldn't be Core.
+/// Generate a memory audit report for agent self-review.
+/// Lists all memories grouped by layer with stats. No automatic changes.
 async fn do_audit(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
-    let ai = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
-
     let db = state.db.clone();
-    let core_memories = blocking(move || {
-        db.list_by_layer_meta(crate::db::Layer::Core, 500, 0)
+    let report = blocking(move || {
+        let core = db.list_by_layer_meta(crate::db::Layer::Core, 500, 0);
+        let working = db.list_by_layer_meta(crate::db::Layer::Working, 500, 0);
+        let buffer = db.list_by_layer_meta(crate::db::Layer::Buffer, 500, 0);
+
+        let format = |memories: &[crate::db::Memory]| -> Vec<serde_json::Value> {
+            memories.iter().map(|m| {
+                serde_json::json!({
+                    "id": m.id,
+                    "content": m.content,
+                    "importance": m.importance,
+                    "access_count": m.access_count,
+                    "repetition_count": m.repetition_count,
+                    "source": m.source,
+                    "tags": m.tags,
+                    "created_at": m.created_at,
+                    "last_accessed": m.last_accessed,
+                })
+            }).collect()
+        };
+
+        serde_json::json!({
+            "core": { "count": core.len(), "memories": format(&core) },
+            "working": { "count": working.len(), "memories": format(&working) },
+            "buffer": { "count": buffer.len(), "memories": format(&buffer) },
+            "total": core.len() + working.len() + buffer.len(),
+        })
     }).await?;
 
-    let total = core_memories.len();
-    let mut demoted = Vec::new();
-    let mut kept = 0usize;
-    let mut errors = 0usize;
-
-    for m in &core_memories {
-        match crate::consolidate::audit_core_memory(ai, &m.content).await {
-            Ok(true) => { kept += 1; }
-            Ok(false) => {
-                let _ = state.db.update_fields(&m.id, None, Some(2), Some(0.5), None);
-                let preview: String = m.content.chars().take(60).collect();
-                demoted.push(serde_json::json!({
-                    "id": m.id,
-                    "content": preview,
-                }));
-            }
-            Err(_) => { errors += 1; }
-        }
-    }
-
-    Ok(Json(serde_json::json!({
-        "total_reviewed": total,
-        "kept": kept,
-        "demoted": demoted.len(),
-        "demoted_memories": demoted,
-        "errors": errors,
-    })))
+    Ok(Json(report))
 }
 
 async fn do_repair(

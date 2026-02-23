@@ -270,12 +270,6 @@ async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<bool, Strin
     Ok(decision.starts_with("APPROVE"))
 }
 
-/// Public wrapper for auditing existing Core memories.
-/// Returns Ok(true) if the memory should stay in Core, Ok(false) to demote.
-pub async fn audit_core_memory(cfg: &AiConfig, content: &str) -> Result<bool, String> {
-    llm_promotion_gate(cfg, content).await
-}
-
 const MERGE_SYSTEM: &str = "Merge these related memory entries into a single concise note. Rules:\n\
     - Preserve ALL specific names, tools, libraries, versions, and technical terms.\n\
     - If one entry updates or supersedes the other, keep the latest state.\n\
