@@ -1,5 +1,8 @@
 //! SQLite-backed memory storage with FTS5 full-text search.
 
+use std::collections::HashMap;
+use std::sync::RwLock;
+
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
@@ -294,6 +297,9 @@ const DROP_TRIGGERS: [&str; 3] = [
 /// SQLite-backed memory store.
 pub struct MemoryDB {
     pool: Pool<SqliteConnectionManager>,
+    /// In-memory vector index for fast semantic search.
+    /// Avoids full table scan + blob deserialization on every recall.
+    vec_index: RwLock<HashMap<String, Vec<f64>>>,
 }
 
 impl MemoryDB {
@@ -340,9 +346,49 @@ impl MemoryDB {
             )?;
         }
         drop(conn);
-        let db = Self { pool };
+        let db = Self { pool, vec_index: RwLock::new(HashMap::new()) };
         db.rebuild_fts()?;
+        db.load_vec_index();
         Ok(db)
+    }
+
+    /// Load all embeddings from DB into the in-memory vector index.
+    fn load_vec_index(&self) {
+        let Ok(conn) = self.conn() else { return };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT id, embedding FROM memories WHERE embedding IS NOT NULL"
+        ) else { return };
+
+        let pairs: Vec<(String, Vec<f64>)> = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((id, crate::ai::bytes_to_embedding(&blob)))
+        })
+        .map(|iter| iter.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default();
+
+        if let Ok(mut idx) = self.vec_index.write() {
+            idx.clear();
+            let count = pairs.len();
+            for (id, emb) in pairs {
+                idx.insert(id, emb);
+            }
+            tracing::debug!(count, "loaded vector index");
+        }
+    }
+
+    /// Add or update an embedding in the vector index.
+    fn vec_index_put(&self, id: &str, emb: Vec<f64>) {
+        if let Ok(mut idx) = self.vec_index.write() {
+            idx.insert(id.to_string(), emb);
+        }
+    }
+
+    /// Remove an embedding from the vector index.
+    fn vec_index_remove(&self, id: &str) {
+        if let Ok(mut idx) = self.vec_index.write() {
+            idx.remove(id);
+        }
     }
 
     /// Insert a row into FTS with CJK bigram preprocessing.
@@ -629,6 +675,7 @@ impl MemoryDB {
         let n = self.conn()?.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
         if n > 0 {
             self.fts_delete(id)?;
+            self.vec_index_remove(id);
         }
         Ok(n > 0)
     }
@@ -636,12 +683,25 @@ impl MemoryDB {
     /// Delete all memories in a namespace. Returns how many were removed.
     pub fn delete_namespace(&self, ns: &str) -> Result<usize, EngramError> {
         let conn = self.conn()?;
+
+        // Collect IDs to remove from vec index
+        let mut stmt = conn.prepare("SELECT id FROM memories WHERE namespace = ?1")?;
+        let ids: Vec<String> = stmt.query_map(params![ns], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
         // batch-delete FTS entries for this namespace
         conn.execute(
             "DELETE FROM memories_fts WHERE id IN (SELECT id FROM memories WHERE namespace = ?1)",
             params![ns],
         )?;
         let n = conn.execute("DELETE FROM memories WHERE namespace = ?1", params![ns])?;
+
+        for id in &ids {
+            self.vec_index_remove(id);
+        }
+
         Ok(n)
     }
 
@@ -1135,6 +1195,7 @@ impl MemoryDB {
             "UPDATE memories SET embedding = ?1 WHERE id = ?2",
             params![bytes, id],
         )?;
+        self.vec_index_put(id, embedding.to_vec());
         Ok(())
     }
 
@@ -1174,6 +1235,33 @@ impl MemoryDB {
     pub fn search_semantic_ns(
         &self, query_emb: &[f64], limit: usize, ns: Option<&str>,
     ) -> Vec<(String, f64)> {
+        // Try in-memory index first (much faster — no SQL + no blob deser)
+        if let Ok(idx) = self.vec_index.read() {
+            if !idx.is_empty() {
+                let mut scored: Vec<(String, f64)> = idx
+                    .iter()
+                    .map(|(id, emb)| {
+                        let sim = crate::ai::cosine_similarity(query_emb, emb);
+                        (id.clone(), sim)
+                    })
+                    .filter(|(_, sim)| *sim > 0.0)
+                    .collect();
+
+                // Namespace filter: need to look up the memory to check namespace.
+                // Only do this if a namespace filter is specified.
+                if let Some(ns) = ns {
+                    scored.retain(|(id, _)| {
+                        self.get(id).ok().flatten().is_some_and(|m| m.namespace == ns)
+                    });
+                }
+
+                scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                scored.truncate(limit);
+                return scored;
+            }
+        }
+
+        // Fallback to DB scan
         let all = self.get_all_with_embeddings();
         let mut scored: Vec<(String, f64)> = all
             .into_iter()
