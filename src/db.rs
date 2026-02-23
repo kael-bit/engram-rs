@@ -76,7 +76,7 @@ pub struct Memory {
     pub decay_rate: f64,
     pub source: String,
     pub tags: Vec<String>,
-    #[serde(skip_serializing_if = "is_default_ns")]
+    #[serde(default = "default_ns", skip_serializing_if = "is_default_ns")]
     pub namespace: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Vec<f64>>,
@@ -84,6 +84,10 @@ pub struct Memory {
 
 fn is_default_ns(ns: &str) -> bool {
     ns == "default"
+}
+
+fn default_ns() -> String {
+    "default".into()
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1010,15 +1014,29 @@ impl MemoryDB {
         conn.execute_batch("BEGIN")?;
         let mut imported = 0;
         for m in memories {
-            // check for existing id using the same connection
+            // If same id exists, skip (idempotent re-import).
+            // Use INSERT OR IGNORE pattern.
             let exists: bool = conn.query_row(
                 "SELECT COUNT(*) FROM memories WHERE id = ?1",
                 params![m.id],
                 |r| r.get::<_, i64>(0),
             ).unwrap_or(0) > 0;
-            if exists {
-                continue;
-            }
+
+            let actual_id = if exists {
+                // When importing into a different namespace and id collides,
+                // mint a fresh id so the memory still gets imported.
+                let same_ns: bool = conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE id = ?1 AND namespace = ?2",
+                    params![m.id, m.namespace],
+                    |r| r.get::<_, i64>(0),
+                ).unwrap_or(0) > 0;
+                if same_ns {
+                    continue; // true duplicate — same id, same namespace
+                }
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                m.id.clone()
+            };
             let tags_json = serde_json::to_string(&m.tags).unwrap_or_else(|_| "[]".into());
             conn.execute(
                 "INSERT INTO memories \
@@ -1026,7 +1044,7 @@ impl MemoryDB {
                   access_count, decay_rate, source, tags, namespace, embedding) \
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
                 params![
-                    m.id,
+                    actual_id,
                     m.content,
                     m.layer as u8,
                     m.importance,
@@ -1043,7 +1061,7 @@ impl MemoryDB {
             let processed = append_cjk_bigrams(&m.content);
             conn.execute(
                 "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
-                params![m.id, processed, tags_json],
+                params![actual_id, processed, tags_json],
             )?;
             imported += 1;
         }

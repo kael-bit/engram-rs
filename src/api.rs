@@ -804,14 +804,22 @@ async fn do_export(
 
 async fn do_import(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
+    let ns_override = get_namespace(&headers);
     let memories_val = body
         .get("memories")
         .ok_or_else(|| EngramError::Validation("missing 'memories' array".into()))?;
 
-    let memories: Vec<db::Memory> = serde_json::from_value(memories_val.clone())
+    let mut memories: Vec<db::Memory> = serde_json::from_value(memories_val.clone())
         .map_err(|e| EngramError::Validation(format!("invalid memories format: {e}")))?;
+
+    if let Some(ns) = ns_override {
+        for m in &mut memories {
+            m.namespace = ns.clone();
+        }
+    }
 
     let db = state.db.clone();
     let imported = tokio::task::spawn_blocking(move || db.import(&memories))
