@@ -189,6 +189,17 @@ async fn main() {
         info!(every_mins = consolidate_mins, auto_merge = auto_merge, "background consolidation enabled");
     }
 
+    // Flush proxy conversation window periodically (every 2 min)
+    if state.proxy.is_some() {
+        let flush_state = state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                proxy::flush_window(&flush_state).await;
+            }
+        });
+    }
+
     info!(
         version = env!("CARGO_PKG_VERSION"),
         port = args.port,

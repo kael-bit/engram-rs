@@ -5,17 +5,68 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::StreamExt;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::{ai, db, AppState};
-
-use std::sync::atomic::{AtomicU64, Ordering};
 
 static PROXY_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static PROXY_EXTRACTED: AtomicU64 = AtomicU64::new(0);
 
 pub fn proxy_stats() -> (u64, u64) {
-    (PROXY_REQUESTS.load(Ordering::Relaxed), PROXY_EXTRACTED.load(Ordering::Relaxed))
+    (
+        PROXY_REQUESTS.load(Ordering::Relaxed),
+        PROXY_EXTRACTED.load(Ordering::Relaxed),
+    )
+}
+
+// Sliding window: buffer recent exchanges, extract when enough context accumulates.
+// This beats per-request extraction because a single "ok do it" means nothing alone,
+// but with context it might be a key decision.
+const WINDOW_MAX_TURNS: usize = 5;
+const WINDOW_MAX_CHARS: usize = 8000;
+
+struct ConversationWindow {
+    turns: Vec<String>, // each entry = "User: ...\nAssistant: ..."
+    total_chars: usize,
+}
+
+impl ConversationWindow {
+    fn new() -> Self {
+        Self { turns: Vec::new(), total_chars: 0 }
+    }
+
+    fn push(&mut self, turn: String) {
+        self.total_chars += turn.len();
+        self.turns.push(turn);
+    }
+
+    fn should_flush(&self) -> bool {
+        self.turns.len() >= WINDOW_MAX_TURNS || self.total_chars >= WINDOW_MAX_CHARS
+    }
+
+    fn drain(&mut self) -> String {
+        let text = self.turns.join("\n---\n");
+        self.turns.clear();
+        self.total_chars = 0;
+        text
+    }
+
+    fn is_empty(&self) -> bool {
+        self.turns.is_empty()
+    }
+}
+
+static WINDOW: Mutex<Option<ConversationWindow>> = Mutex::new(None);
+
+fn with_window<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut ConversationWindow) -> R,
+{
+    let mut guard = WINDOW.lock().unwrap();
+    let w = guard.get_or_insert_with(ConversationWindow::new);
+    f(w)
 }
 
 #[derive(Clone)]
@@ -24,8 +75,6 @@ pub struct ProxyConfig {
     pub default_key: Option<String>,
 }
 
-/// Transparent proxy: forward everything to upstream, capture req/res bodies,
-/// async-extract memories. Works with any LLM provider — we don't parse protocols.
 pub async fn handle(
     State(state): State<AppState>,
     method: Method,
@@ -39,14 +88,13 @@ pub async fn handle(
 
     let path = uri.path().strip_prefix("/proxy").unwrap_or(uri.path());
     PROXY_REQUESTS.fetch_add(1, Ordering::Relaxed);
-    info!(path, "proxy: incoming request");
+
     let upstream_url = if let Some(q) = uri.query() {
         format!("{}{}?{}", proxy.upstream, path, q)
     } else {
         format!("{}{}", proxy.upstream, path)
     };
 
-    // Collect request body so we can both forward and capture it
     let req_bytes = match axum::body::to_bytes(body, 10 * 1024 * 1024).await {
         Ok(b) => b,
         Err(e) => {
@@ -56,7 +104,6 @@ pub async fn handle(
     };
     let req_capture = req_bytes.to_vec();
 
-    // Build upstream request, forward most headers
     let client = reqwest::Client::new();
     let mut upstream_req = client.request(
         reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::POST),
@@ -75,7 +122,6 @@ pub async fn handle(
         }
     }
 
-    // If no auth header and we have a default key, inject it
     if !headers.contains_key("authorization") {
         if let Some(ref key) = proxy.default_key {
             upstream_req = upstream_req.header("authorization", format!("Bearer {key}"));
@@ -95,7 +141,6 @@ pub async fn handle(
     let status = StatusCode::from_u16(upstream_res.status().as_u16())
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
-    // Copy response headers
     let mut res_headers = HeaderMap::new();
     for (name, value) in upstream_res.headers() {
         if let Ok(v) = HeaderValue::from_bytes(value.as_bytes()) {
@@ -134,9 +179,8 @@ async fn buffered_response(
     };
     let res_capture = res_bytes.to_vec();
 
-    // Async extract memories
     if status.is_success() {
-        tokio::spawn(extract_memories(state, req_capture, res_capture));
+        tokio::spawn(buffer_exchange(state, req_capture, res_capture));
     }
 
     let mut response = (status, res_bytes.to_vec()).into_response();
@@ -163,23 +207,20 @@ async fn stream_response(
                 Ok(bytes) => {
                     buf.extend_from_slice(&bytes);
                     if tx.send(Ok(bytes.to_vec())).await.is_err() {
-                        break; // client disconnected
+                        break;
                     }
                 }
                 Err(e) => {
                     warn!("stream chunk error: {e}");
-                    let _ = tx
-                        .send(Err(std::io::Error::other(e.to_string())))
-                        .await;
+                    let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
                     break;
                 }
             }
         }
         drop(tx);
 
-        // Extract from completed stream
         if !buf.is_empty() {
-            extract_memories(state_clone, req_capture, buf).await;
+            buffer_exchange(state_clone, req_capture, buf).await;
         }
     });
 
@@ -194,35 +235,63 @@ async fn stream_response(
     response
 }
 
-async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
+/// Parse a single exchange from raw request/response bytes, add to the sliding window.
+/// When window is full, flush and extract memories from the accumulated context.
+async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
+    let user_msg = extract_last_user_msg(&req_raw);
+    let assistant_msg = extract_assistant_msg(&res_raw);
+
+    // Skip non-chat requests (models list, health checks, etc.)
+    if user_msg.is_empty() && assistant_msg.is_empty() {
+        return;
+    }
+
+    // Skip very short tool-use-only turns
+    if user_msg.len() + assistant_msg.len() < 80 {
+        return;
+    }
+
+    let turn = format!("User: {}\nAssistant: {}", user_msg, assistant_msg);
+
+    let should_flush = with_window(|w| {
+        w.push(turn);
+        w.should_flush()
+    });
+
+    if should_flush {
+        let context = with_window(|w| w.drain());
+        extract_from_context(state, &context).await;
+    }
+}
+
+/// Flush any remaining buffered turns. Called from background consolidation timer.
+pub async fn flush_window(state: &AppState) {
+    let context = with_window(|w| {
+        if w.is_empty() {
+            return String::new();
+        }
+        w.drain()
+    });
+    if !context.is_empty() {
+        extract_from_context(state.clone(), &context).await;
+    }
+}
+
+async fn extract_from_context(state: AppState, context: &str) {
     let Some(ref ai_cfg) = state.ai else {
-        debug!("proxy: no AI config, skipping extraction");
         return;
     };
 
-    let req_text = String::from_utf8_lossy(&req_raw);
-    let res_text = String::from_utf8_lossy(&res_raw);
-
-    // Skip tiny exchanges — nothing worth extracting
-    if req_text.len() + res_text.len() < 200 {
-        debug!("proxy: skipping extraction, exchange too short");
+    if context.len() < 100 {
+        debug!("proxy: context too thin to extract from");
         return;
     }
 
-    // Try to extract only the last user/assistant exchange from the request.
-    // System prompts and compaction summaries produce garbage extractions.
-    let req_tail = extract_last_exchange(&req_text);
-    let max_chars = 4000;
-    let res_preview: String = res_text.chars().take(max_chars).collect();
+    let preview: String = context.chars().take(12000).collect();
 
-    // Skip if the actual conversation content is too thin
-    if req_tail.len() + res_preview.len() < 200 {
-        debug!("proxy: skipping extraction, exchange too thin after filtering");
-        return;
-    }
-
-    let system = "You extract long-term memories from LLM conversations. Be EXTREMELY selective.\n\
+    let system = "You extract long-term memories from a multi-turn LLM conversation. Be EXTREMELY selective.\n\
         Most conversations have NOTHING worth extracting. Return [] by default.\n\n\
+        You're seeing several turns of conversation. Use the full context to understand what's important.\n\n\
         Only extract if you find:\n\
         - A USER's stated preference, rule, or boundary (not the assistant's)\n\
         - A concrete decision that changes how something works going forward\n\
@@ -234,24 +303,25 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
         - Summaries or recaps of what was done\n\
         - The assistant's suggestions or explanations\n\
         - Anything about UI, styling, or frontend requirements\n\
-        - System prompts or context that was injected\n\n\
-        MAX 2 items. Return JSON array of {\"content\": \"...\", \"tags\": [\"...\"]}.\n\
-        Content must be under 150 chars — one sentence, no fluff.";
+        - System prompts or context that was injected\n\
+        - Things the assistant already knows from context\n\n\
+        MAX 3 items per conversation window. Return JSON array of {\"content\": \"...\", \"tags\": [\"...\"]}.\n\
+        Content must be under 150 chars — one sentence, concrete, actionable.";
 
     let user = format!(
-        "Extract 0-2 genuinely important long-term memories. Default to [].\n\n\
-         === REQUEST (tail) ===\n{req_tail}\n\n=== RESPONSE ===\n{res_preview}"
+        "Extract 0-3 genuinely important long-term memories from this conversation. Default to [].\n\n\
+         === CONVERSATION ({} turns) ===\n{preview}",
+        context.matches("User: ").count()
     );
 
     let extraction = match ai::llm_chat_as(ai_cfg, "proxy", system, &user).await {
         Ok(text) => text,
         Err(e) => {
-            warn!("proxy: extraction LLM call failed: {e}");
+            warn!("proxy: extraction failed: {e}");
             return;
         }
     };
 
-    // Parse the extraction result
     let cleaned = extraction
         .trim()
         .trim_start_matches("```json")
@@ -262,30 +332,33 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
     let entries: Vec<ExtractionEntry> = match serde_json::from_str(cleaned) {
         Ok(e) => e,
         Err(e) => {
-            debug!("proxy: couldn't parse extraction result: {e}");
+            debug!("proxy: parse error: {e}");
             return;
         }
     };
 
     if entries.is_empty() {
-        debug!("proxy: nothing worth extracting");
+        debug!("proxy: nothing worth extracting from window");
         return;
     }
 
     let count = entries.len();
-    let mut stored = 0;
+    let mut stored: u64 = 0;
     for entry in entries {
-        if entry.content.is_empty() {
+        if entry.content.is_empty() || entry.content.len() > 300 {
             continue;
         }
 
-        // Dedup: semantic similarity check against existing memories
-        let is_dup = match crate::recall::quick_semantic_dup(ai_cfg, &state.db, &entry.content).await {
-            Ok(dup) => dup,
-            Err(_) => state.db.is_near_duplicate_with(&entry.content, 0.5), // fallback to Jaccard
-        };
+        let is_dup =
+            match crate::recall::quick_semantic_dup(ai_cfg, &state.db, &entry.content).await {
+                Ok(dup) => dup,
+                Err(_) => state.db.is_near_duplicate_with(&entry.content, 0.5),
+            };
         if is_dup {
-            debug!("proxy: skipping duplicate extraction: {}", &entry.content[..entry.content.len().min(60)]);
+            debug!(
+                "proxy: skipping duplicate: {}",
+                &entry.content[..entry.content.len().min(60)]
+            );
             continue;
         }
 
@@ -300,7 +373,7 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
         };
 
         if let Err(e) = state.db.insert(input) {
-            warn!("proxy: failed to store extracted memory: {e}");
+            warn!("proxy: failed to store: {e}");
         } else {
             stored += 1;
         }
@@ -308,10 +381,86 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
 
     if stored > 0 {
         PROXY_EXTRACTED.fetch_add(stored, Ordering::Relaxed);
-        info!(stored, extracted = count, "proxy: stored memories");
+        info!(stored, extracted = count, "proxy: stored memories from window");
     } else if count > 0 {
-        debug!(extracted = count, "proxy: all extractions were duplicates");
+        debug!("proxy: all extractions were duplicates");
     }
+}
+
+/// Grab the last user message from an LLM API request body.
+fn extract_last_user_msg(raw: &[u8]) -> String {
+    let text = String::from_utf8_lossy(raw);
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+        // OpenAI format
+        if let Some(msgs) = v.get("messages").and_then(|m| m.as_array()) {
+            for msg in msgs.iter().rev() {
+                if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
+                    if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+                        return content.chars().take(2000).collect();
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+/// Grab the assistant response text from various API formats.
+fn extract_assistant_msg(raw: &[u8]) -> String {
+    let text = String::from_utf8_lossy(raw);
+
+    // Try SSE stream format first (collect all content deltas)
+    if text.starts_with("data: ") || text.contains("\ndata: ") {
+        let mut assembled = String::new();
+        for line in text.lines() {
+            let data = line.strip_prefix("data: ").unwrap_or("");
+            if data == "[DONE]" || data.is_empty() {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                // OpenAI streaming
+                if let Some(delta) = v
+                    .pointer("/choices/0/delta/content")
+                    .and_then(|c| c.as_str())
+                {
+                    assembled.push_str(delta);
+                }
+                // Anthropic streaming
+                if let Some(delta) = v.pointer("/delta/text").and_then(|c| c.as_str()) {
+                    assembled.push_str(delta);
+                }
+            }
+        }
+        if !assembled.is_empty() {
+            return assembled.chars().take(2000).collect();
+        }
+    }
+
+    // Non-streaming JSON response
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+        // OpenAI format
+        if let Some(content) = v
+            .pointer("/choices/0/message/content")
+            .and_then(|c| c.as_str())
+        {
+            return content.chars().take(2000).collect();
+        }
+        // Anthropic format
+        if let Some(blocks) = v.get("content").and_then(|c| c.as_array()) {
+            let mut out = String::new();
+            for block in blocks {
+                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                        out.push_str(t);
+                    }
+                }
+            }
+            if !out.is_empty() {
+                return out.chars().take(2000).collect();
+            }
+        }
+    }
+    String::new()
 }
 
 #[derive(serde::Deserialize)]
@@ -319,29 +468,4 @@ struct ExtractionEntry {
     content: String,
     #[serde(default)]
     tags: Vec<String>,
-}
-
-/// Pull the last user message from a raw LLM API request body.
-/// Strips system prompts and context summaries that produce stale extractions.
-fn extract_last_exchange(raw: &str) -> String {
-    // Try to parse as JSON and grab the last user message
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
-        if let Some(msgs) = v.get("messages").and_then(|m| m.as_array()) {
-            let user_msgs: Vec<&str> = msgs.iter()
-                .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-                .filter_map(|m| m.get("content").and_then(|c| c.as_str()))
-                .collect();
-            if let Some(last) = user_msgs.last() {
-                let truncated: String = last.chars().take(4000).collect();
-                return truncated;
-            }
-        }
-    }
-    // Fallback: last 4000 chars
-    let chars: Vec<char> = raw.chars().collect();
-    if chars.len() > 4000 {
-        chars[chars.len() - 4000..].iter().collect()
-    } else {
-        raw.to_string()
-    }
 }
