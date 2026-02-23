@@ -99,7 +99,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /memories/:id": "get a memory by id",
             "PATCH /memories/:id": "update a memory",
             "DELETE /memories/:id": "delete a memory",
-            "DELETE /memories": "batch delete (body: {ids: [...]})",
+            "DELETE /memories": "batch delete (body: {ids: [...]} or {namespace: 'x'})",
             "POST /recall": "hybrid search (semantic + keyword)",
             "GET /search?q=term": "quick keyword search",
             "GET /recent?hours=2": "recent memories by time",
