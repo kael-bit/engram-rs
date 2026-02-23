@@ -744,6 +744,67 @@ mod tests {
         // Sessions should have the session memory (not tagged as next-action)
         let sessions = j["sessions"].as_array().unwrap();
         assert!(!sessions.is_empty(), "should have session memories");
+
+        // Session memories must NOT leak into buffer or working sections
+        let buffer = j["buffer"].as_array().unwrap();
+        for b in buffer {
+            let src = b["source"].as_str().unwrap_or("");
+            assert_ne!(src, "session", "session memory leaked into buffer: {}", b["content"]);
+        }
+        let working = j["working"].as_array().unwrap();
+        for w in working {
+            let src = w["source"].as_str().unwrap_or("");
+            assert_ne!(src, "session", "session memory leaked into working: {}", w["content"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_session_notes_in_buffer_go_to_sessions() {
+        let app = router(test_state(None));
+
+        // Session note stored at buffer level (default layer=1) — real-world scenario
+        let body = serde_json::json!({
+            "content": "Session: did auth refactor, tests pass",
+            "source": "session"
+        });
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        // Session note with next-action tag at buffer level
+        let body = serde_json::json!({
+            "content": "Next: write integration tests for new auth flow",
+            "source": "session", "tags": ["next-action"]
+        });
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        // Non-session buffer memory
+        let body = serde_json::json!({"content": "user prefers dark mode"});
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        let resp = app.oneshot(
+            Request::builder().uri("/resume?hours=1").body(Body::empty()).unwrap()
+        ).await.unwrap();
+        let j = body_json(resp).await;
+
+        // Buffer-level session notes should appear in sessions, not buffer
+        let sessions = j["sessions"].as_array().unwrap();
+        assert!(sessions.iter().any(|s|
+            s["content"].as_str().unwrap_or("").contains("auth refactor")),
+            "session note missing from sessions section");
+
+        let next = j["next_actions"].as_array().unwrap();
+        assert!(next.iter().any(|s|
+            s["content"].as_str().unwrap_or("").contains("integration tests")),
+            "next-action note missing from next_actions section");
+
+        let buffer = j["buffer"].as_array().unwrap();
+        for b in buffer {
+            let src = b["source"].as_str().unwrap_or("");
+            assert_ne!(src, "session", "session note leaked into buffer: {}", b["content"]);
+        }
+        // Non-session buffer should still be there
+        assert!(buffer.iter().any(|b|
+            b["content"].as_str().unwrap_or("").contains("dark mode")),
+            "non-session buffer memory missing");
     }
 
     #[tokio::test]
