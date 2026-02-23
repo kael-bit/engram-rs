@@ -127,10 +127,18 @@ pub async fn handle(
         })
         .unwrap_or_else(|| "default".into());
 
+    // X-Engram-Extract header: callers can opt out of memory extraction.
+    // Default is true (extract). Set to "false" to skip (e.g. subagent traffic).
+    let extract = headers
+        .get("x-engram-extract")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v != "false" && v != "0")
+        .unwrap_or(true);
+
     if is_stream {
-        stream_response(state, status, res_headers, upstream_res, req_capture, session_key).await
+        stream_response(state, status, res_headers, upstream_res, req_capture, session_key, extract).await
     } else {
-        buffered_response(state, status, res_headers, upstream_res, req_capture, session_key).await
+        buffered_response(state, status, res_headers, upstream_res, req_capture, session_key, extract).await
     }
 }
 
@@ -141,6 +149,7 @@ async fn buffered_response(
     upstream_res: reqwest::Response,
     req_capture: Vec<u8>,
     session_key: String,
+    extract: bool,
 ) -> Response {
     let res_bytes = match upstream_res.bytes().await {
         Ok(b) => b,
@@ -151,7 +160,7 @@ async fn buffered_response(
     };
     let res_capture = res_bytes.to_vec();
 
-    if status.is_success() {
+    if status.is_success() && extract {
         tokio::spawn(buffer_exchange(state, req_capture, res_capture, session_key));
     }
 
@@ -167,10 +176,11 @@ async fn stream_response(
     upstream_res: reqwest::Response,
     req_capture: Vec<u8>,
     session_key: String,
+    extract: bool,
 ) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(32);
     let state_clone = state.clone();
-    let extract_ok = status.is_success();
+    let extract_ok = status.is_success() && extract;
 
     tokio::spawn(async move {
         let mut buf = Vec::new();
@@ -220,9 +230,11 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, se
         return;
     }
 
-    // Skip subagent traffic — their conversations are operational, not worth extracting
-    if user_msg.contains("[Subagent Context]") || user_msg.contains("[Subagent Task]") {
-        debug!("proxy: skipping subagent turn");
+    // Skip subagent traffic — heuristic fallback for callers that don't set X-Engram-Extract header.
+    // Matches common patterns from OpenClaw, Claude Code, and similar orchestrators.
+    let lower = user_msg.to_lowercase();
+    if lower.contains("[subagent") || lower.contains("you are running as a sub") || lower.contains("sub-agent") {
+        debug!("proxy: skipping subagent turn (content heuristic)");
         return;
     }
 
