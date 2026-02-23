@@ -395,20 +395,22 @@ fn parse_rerank_response(raw: &str, count: usize) -> Vec<usize> {
 
 /// Check if content is semantically duplicate of an existing memory.
 /// Uses embedding cosine similarity (threshold 0.78).
+/// Check if content is semantically similar to an existing memory.
+/// Returns the ID of the duplicate if found, None otherwise.
 pub async fn quick_semantic_dup(
     ai_cfg: &AiConfig,
     db: &MemoryDB,
     content: &str,
-) -> Result<bool, String> {
+) -> Result<Option<String>, String> {
     let embeddings = ai::get_embeddings(ai_cfg, &[content.to_string()]).await?;
     let emb = embeddings.first().ok_or("no embedding returned")?;
     let candidates = db.search_semantic(emb, 3);
-    for (_, score) in &candidates {
+    for (id, score) in &candidates {
         if *score > 0.78 {
-            return Ok(true);
+            return Ok(Some(id.clone()));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 

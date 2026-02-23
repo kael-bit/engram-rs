@@ -486,11 +486,16 @@ impl MemoryDB {
 
         // Near-duplicate detection: if an existing memory has very similar content,
         // update it instead of creating a duplicate. Uses token overlap as a proxy.
+        // Crucially, this counts as a repetition — touch the memory to reinforce it.
+        // Spaced repetition: repeated exposure strengthens memory, not just retrieval.
         let do_dedup = !input.skip_dedup.unwrap_or(false);
         if do_dedup {
         let ns = input.namespace.as_deref().unwrap_or("default");
         if let Some(existing) = self.find_near_duplicate(&input.content, ns) {
-            tracing::debug!(existing_id = %existing.id, "near-duplicate found, updating instead");
+            tracing::debug!(existing_id = %existing.id, "near-duplicate found, reinforcing");
+            // Repetition = reinforcement. This is the core insight:
+            // if someone keeps writing similar content, they clearly care about it.
+            let _ = self.touch(&existing.id);
             let tags = input.tags.unwrap_or_default();
             // Merge tags from both
             let mut merged_tags: Vec<String> = existing.tags.clone();
@@ -499,11 +504,12 @@ impl MemoryDB {
                     merged_tags.push(t.clone());
                 }
             }
-            // Keep the higher importance
+            // touch() already bumped importance by 0.02; use the post-touch value as baseline
+            let touched_imp = (existing.importance + 0.02).min(1.0);
             let imp = input
                 .importance
-                .map(|new_imp| new_imp.max(existing.importance))
-                .unwrap_or(existing.importance);
+                .map(|new_imp| new_imp.max(touched_imp))
+                .unwrap_or(touched_imp);
             // Keep the higher layer
             let layer = input
                 .layer
@@ -2165,5 +2171,30 @@ mod tests {
         // Searching for "trigger:git" must not match "trigger:git-push" or "trigger:git-commit"
         let results = db.list_by_tag("trigger:git", None).unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn dedup_reinforces_existing_memory() {
+        let db = test_db();
+        let original = db.insert(MemoryInput::new(
+            "user prefers dark mode for all user interface applications and code editors"
+        )).unwrap();
+        assert_eq!(original.access_count, 0);
+        let orig_imp = original.importance;
+
+        // Write near-duplicate — should reinforce, not create new
+        let updated = db.insert(MemoryInput::new(
+            "user prefers dark mode for all user interface applications and text editors"
+        )).unwrap();
+        assert_eq!(updated.id, original.id, "should update existing, not create new");
+        assert_eq!(updated.access_count, 1, "dedup should touch = increment access");
+        assert!(updated.importance > orig_imp, "dedup should bump importance via touch");
+
+        // Third repetition — same idea, minor wording change
+        let again = db.insert(MemoryInput::new(
+            "user prefers dark mode for all user interface applications and code editors"
+        )).unwrap();
+        assert_eq!(again.id, original.id, "third repetition should still match");
+        assert_eq!(again.access_count, 2, "third rep should increment access again");
     }
 }

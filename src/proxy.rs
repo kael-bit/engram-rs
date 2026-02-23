@@ -405,14 +405,25 @@ async fn extract_from_context(state: AppState, context: &str) {
             continue;
         }
 
-        let is_dup =
+        let dup_id: Option<String> =
             match crate::recall::quick_semantic_dup(ai_cfg, &state.db, &entry.content).await {
-                Ok(dup) => dup,
-                Err(_) => state.db.is_near_duplicate_with(&entry.content, 0.5),
+                Ok(id) => id,
+                Err(_) => {
+                    // Fallback to Jaccard — can't get ID from this path
+                    if state.db.is_near_duplicate_with(&entry.content, 0.5) {
+                        Some(String::new()) // signal "is dup" without ID
+                    } else {
+                        None
+                    }
+                }
             };
-        if is_dup {
+        if let Some(ref existing_id) = dup_id {
+            // Repetition = reinforcement, even from proxy extraction
+            if !existing_id.is_empty() {
+                let _ = state.db.touch(existing_id);
+            }
             debug!(
-                "proxy: skipping duplicate: {}",
+                "proxy: skipping duplicate (reinforced): {}",
                 &entry.content[..entry.content.len().min(60)]
             );
             continue;
