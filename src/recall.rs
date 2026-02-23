@@ -35,6 +35,8 @@ pub struct RecallRequest {
     pub tags: Option<Vec<String>>,
     /// Filter by namespace.
     pub namespace: Option<String>,
+    /// Expand query with LLM-generated synonyms for better coverage.
+    pub expand: Option<bool>,
 }
 
 /// Recall response with scored memories and metadata.
@@ -100,6 +102,7 @@ pub fn recall(
     db: &MemoryDB,
     req: &RecallRequest,
     query_emb: Option<&[f64]>,
+    extra_queries: Option<&[String]>,
 ) -> RecallResponse {
     let budget = req.budget_tokens.unwrap_or(2000);
     let limit = req.limit.unwrap_or(20).min(100);
@@ -197,6 +200,28 @@ pub fn recall(
             let relevance = bm25 / max_bm25;
             seen.insert(id.clone());
             scored.push(score_memory(&mem, relevance));
+        }
+    }
+
+    // Expanded FTS queries (from LLM query expansion)
+    if let Some(queries) = extra_queries {
+        for eq in queries {
+            let extra_fts = db.search_fts(eq, limit);
+            let emax = extra_fts.iter().map(|r| r.1).fold(0.001_f64, f64::max);
+            for (id, bm25) in &extra_fts {
+                if seen.contains(id) {
+                    continue;
+                }
+                if let Ok(Some(mem)) = db.get(id) {
+                    if !passes_filters(&mem) {
+                        continue;
+                    }
+                    // slight penalty so direct matches rank higher
+                    let relevance = (bm25 / emax) * 0.85;
+                    seen.insert(id.clone());
+                    scored.push(score_memory(&mem, relevance));
+                }
+            }
         }
     }
 
@@ -435,8 +460,9 @@ mod tests {
             sort_by: None,
             rerank: None, source: None, tags: None,
             namespace: None,
+            expand: None,
         };
-        let result = recall(&db, &req, None);
+        let result = recall(&db, &req, None, None);
         assert!(result.memories.len() >= 2);
         // "very important fact" should score higher than "medium importance"
         let first = &result.memories[0];
@@ -458,8 +484,9 @@ mod tests {
             sort_by: None,
             rerank: None, source: None, tags: None,
             namespace: None,
+            expand: None,
         };
-        let result = recall(&db, &req, None);
+        let result = recall(&db, &req, None, None);
         assert!(result.memories.len() <= 2, "budget should limit results");
         assert!(result.total_tokens <= 10, "shouldn't overshoot budget by much");
     }
@@ -478,8 +505,9 @@ mod tests {
             sort_by: None,
             rerank: None, source: None, tags: None,
             namespace: None,
+            expand: None,
         };
-        let result = recall(&db, &req, None);
+        let result = recall(&db, &req, None, None);
         assert!(result.memories.is_empty());
     }
 
@@ -530,8 +558,9 @@ mod tests {
             sort_by: None,
             rerank: None, source: None, tags: None,
             namespace: None,
+            expand: None,
         };
-        let result = recall(&db, &req, None);
+        let result = recall(&db, &req, None, None);
         assert_eq!(result.memories.len(), 1);
         assert_eq!(result.memories[0].memory.id, "new-one");
     }
@@ -563,8 +592,9 @@ mod tests {
             since: None, until: None, sort_by: None, rerank: None,
             source: Some("session".into()), tags: None,
             namespace: None,
+            expand: None,
         };
-        let result = recall(&db, &req, None);
+        let result = recall(&db, &req, None, None);
         assert_eq!(result.memories.len(), 1);
         assert!(result.memories[0].memory.content.contains("session"));
     }
@@ -596,8 +626,9 @@ mod tests {
             since: None, until: None, sort_by: None, rerank: None,
             source: None, tags: Some(vec!["rust".into()]),
             namespace: None,
+            expand: None,
         };
-        let result = recall(&db, &req, None);
+        let result = recall(&db, &req, None, None);
         assert_eq!(result.memories.len(), 1);
         assert!(result.memories[0].memory.content.contains("rust"));
     }

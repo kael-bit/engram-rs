@@ -581,9 +581,22 @@ async fn do_recall(
         None
     };
 
+    let do_expand =
+        req.expand.unwrap_or(false) && state.ai.as_ref().is_some_and(|c| c.has_llm());
+    let expanded = if do_expand {
+        if let Some(ref cfg) = state.ai {
+            ai::expand_query(cfg, &query_text).await
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
+
     let db = state.db.clone();
     let mut result = tokio::task::spawn_blocking(move || {
-        recall::recall(&db, &req, query_emb.as_deref())
+        let eq = if expanded.is_empty() { None } else { Some(expanded.as_slice()) };
+        recall::recall(&db, &req, query_emb.as_deref(), eq)
     })
     .await
     .map_err(|e| EngramError::Internal(e.to_string()))?;

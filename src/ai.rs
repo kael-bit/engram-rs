@@ -118,6 +118,24 @@ pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String
         .unwrap_or_default())
 }
 
+const EXPAND_PROMPT: &str = "Given a search query, generate 2-3 alternative phrasings \
+    that capture the same intent using different words. Include synonyms, related terms, \
+    and more/less specific versions. Output one query per line, no numbering or bullets. \
+    Match the language of the input query.";
+
+/// Generate alternative query phrasings for better recall coverage.
+pub async fn expand_query(cfg: &AiConfig, query: &str) -> Vec<String> {
+    match llm_chat(cfg, EXPAND_PROMPT, query).await {
+        Ok(text) => text
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty() && l.len() > 2)
+            .take(3)
+            .collect(),
+        Err(_) => vec![],
+    }
+}
+
 
 const EXTRACT_SYSTEM_PROMPT: &str = r#"You are a memory extraction engine. Given a conversation or text, extract important facts, decisions, preferences, and events as discrete memory entries.
 
