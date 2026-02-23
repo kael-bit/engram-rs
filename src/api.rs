@@ -81,7 +81,8 @@ pub fn router(state: AppState) -> Router {
     let public = Router::new()
         .route("/", get(health))
         .route("/health", get(health))
-        .route("/stats", get(stats));
+        .route("/stats", get(stats))
+        .route("/ui", get(serve_ui));
 
     let protected = Router::new()
         .route("/memories", post(create_memory).get(list_memories).delete(batch_delete))
@@ -114,6 +115,10 @@ pub fn router(state: AppState) -> Router {
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .merge(import_route)
         .with_state(state)
+}
+
+async fn serve_ui() -> impl axum::response::IntoResponse {
+    axum::response::Html(include_str!("../web/index.html"))
 }
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {

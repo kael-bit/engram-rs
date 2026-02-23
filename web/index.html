@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engram</title>
+<style>
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d;
+  --text: #c9d1d9; --text-dim: #8b949e; --accent: #58a6ff;
+  --green: #3fb950; --yellow: #d29922; --red: #f85149;
+  --purple: #bc8cff;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, 'Segoe UI', sans-serif; }
+
+.app { display: flex; height: 100vh; }
+.sidebar { width: 240px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+.sidebar h1 { padding: 16px; font-size: 18px; border-bottom: 1px solid var(--border); }
+.sidebar h1 span { color: var(--text-dim); font-weight: normal; font-size: 12px; }
+.nav { list-style: none; padding: 8px; }
+.nav li { padding: 8px 12px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.nav li:hover { background: var(--border); }
+.nav li.active { background: var(--accent); color: #fff; }
+.nav .count { margin-left: auto; font-size: 12px; color: var(--text-dim); }
+.nav li.active .count { color: rgba(255,255,255,0.7); }
+
+.main { flex: 1; overflow-y: auto; padding: 24px; }
+
+/* Stats bar */
+.stats-bar { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+.stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; min-width: 100px; }
+.stat-card .value { font-size: 24px; font-weight: 700; }
+.stat-card .label { font-size: 12px; color: var(--text-dim); }
+
+/* Search/Recall */
+.search-box { display: flex; gap: 8px; margin-bottom: 16px; }
+.search-box input { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; color: var(--text); font-size: 14px; outline: none; }
+.search-box input:focus { border-color: var(--accent); }
+.search-box button { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 14px; white-space: nowrap; }
+.search-box button:hover { opacity: 0.9; }
+
+/* Filters */
+.filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+.filters select, .filters input { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; color: var(--text); font-size: 13px; }
+
+/* Memory cards */
+.mem-list { display: flex; flex-direction: column; gap: 8px; }
+.mem-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; cursor: pointer; transition: border-color 0.15s; }
+.mem-card:hover { border-color: var(--accent); }
+.mem-card .content { white-space: pre-wrap; word-break: break-word; }
+.mem-card .meta { display: flex; gap: 12px; margin-top: 8px; font-size: 12px; color: var(--text-dim); flex-wrap: wrap; align-items: center; }
+.mem-card .score { color: var(--green); font-weight: 600; }
+.layer-badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.layer-1 { background: rgba(88,166,255,0.15); color: var(--accent); }
+.layer-2 { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.layer-3 { background: rgba(188,140,255,0.15); color: var(--purple); }
+.tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; background: var(--border); color: var(--text-dim); }
+
+/* Detail panel */
+.detail-overlay { position: fixed; top: 0; right: 0; bottom: 0; width: 480px; background: var(--surface); border-left: 1px solid var(--border); z-index: 10; overflow-y: auto; padding: 24px; transform: translateX(100%); transition: transform 0.2s ease; }
+.detail-overlay.open { transform: translateX(0); }
+.detail-overlay .close { float: right; background: none; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer; }
+.detail-overlay h3 { margin-bottom: 16px; }
+.detail-field { margin-bottom: 12px; }
+.detail-field .label { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+.detail-field .value { font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+.detail-field .bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+.detail-field .bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+
+/* Recall panel */
+.recall-result { margin-top: 12px; }
+.recall-result .timing { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+
+/* Empty state */
+.empty { text-align: center; padding: 60px 20px; color: var(--text-dim); }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sidebar { width: 60px; }
+  .sidebar h1, .nav .label, .nav .count { display: none; }
+  .detail-overlay { width: 100%; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="sidebar">
+    <h1>engram <span id="version"></span></h1>
+    <ul class="nav" id="nav">
+      <li class="active" data-view="all"><span>📋</span><span class="label">All</span><span class="count" id="count-all">0</span></li>
+      <li data-view="buffer"><span>🟦</span><span class="label">Buffer</span><span class="count" id="count-buffer">0</span></li>
+      <li data-view="working"><span>🟨</span><span class="label">Working</span><span class="count" id="count-working">0</span></li>
+      <li data-view="core"><span>🟪</span><span class="label">Core</span><span class="count" id="count-core">0</span></li>
+      <li data-view="recall"><span>🔍</span><span class="label">Recall</span></li>
+    </ul>
+  </div>
+  <div class="main" id="main"></div>
+  <div class="detail-overlay" id="detail"></div>
+</div>
+
+<script>
+const API = location.origin;
+let allMemories = [];
+let currentView = 'all';
+let stats = {};
+
+// API helpers
+async function api(path, opts = {}) {
+  const token = localStorage.getItem('engram_token') || '';
+  const headers = { 'Content-Type': 'application/json', ...opts.headers };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(API + path, { ...opts, headers });
+  if (res.status === 401) {
+    const t = prompt('Enter engram auth token:');
+    if (t) { localStorage.setItem('engram_token', t); return api(path, opts); }
+    throw new Error('Unauthorized');
+  }
+  return res.json();
+}
+
+async function loadStats() {
+  const [s, h] = await Promise.all([api('/stats'), api('/health')]);
+  stats = s;
+  document.getElementById('count-all').textContent = s.total;
+  document.getElementById('count-buffer').textContent = s.buffer;
+  document.getElementById('count-working').textContent = s.working;
+  document.getElementById('count-core').textContent = s.core;
+  document.getElementById('version').textContent = 'v' + (h.version || '?');
+}
+
+async function loadMemories() {
+  const data = await api('/memories?limit=10000');
+  allMemories = Array.isArray(data) ? data : (data.memories || []);
+  allMemories.sort((a, b) => b.created_at - a.created_at);
+}
+
+function layerName(l) { return ['', 'Buffer', 'Working', 'Core'][l] || '?'; }
+function layerNum(name) { return { buffer: 1, working: 2, core: 3 }[name] || 0; }
+function timeAgo(ms) {
+  const s = (Date.now() - ms) / 1000;
+  if (s < 60) return Math.floor(s) + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+
+function renderCard(mem, score) {
+  const tags = (mem.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join(' ');
+  const scoreHtml = score != null ? `<span class="score">${score.toFixed(3)}</span>` : '';
+  return `
+    <div class="mem-card" data-id="${mem.id}">
+      <div class="content">${esc(mem.content.slice(0, 300))}${mem.content.length > 300 ? '…' : ''}</div>
+      <div class="meta">
+        <span class="layer-badge layer-${mem.layer}">${layerName(mem.layer)}</span>
+        ${scoreHtml}
+        <span>imp: ${mem.importance.toFixed(2)}</span>
+        <span>×${mem.access_count}</span>
+        <span>${timeAgo(mem.created_at)}</span>
+        ${tags}
+      </div>
+    </div>`;
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function renderList(memories, scores) {
+  const main = document.getElementById('main');
+  if (!memories.length) {
+    main.innerHTML = '<div class="empty">No memories found</div>';
+    return;
+  }
+  main.innerHTML = `
+    <div class="stats-bar">
+      <div class="stat-card"><div class="value">${stats.total || 0}</div><div class="label">Total</div></div>
+      <div class="stat-card"><div class="value">${stats.buffer || 0}</div><div class="label">Buffer</div></div>
+      <div class="stat-card"><div class="value">${stats.working || 0}</div><div class="label">Working</div></div>
+      <div class="stat-card"><div class="value">${stats.core || 0}</div><div class="label">Core</div></div>
+    </div>
+    <div class="search-box">
+      <input type="text" id="filterInput" placeholder="Filter memories..." oninput="filterList()">
+    </div>
+    <div class="mem-list" id="memList">
+      ${memories.map((m, i) => renderCard(m, scores ? scores[i] : null)).join('')}
+    </div>`;
+
+  main.querySelectorAll('.mem-card').forEach(card => {
+    card.onclick = () => showDetail(card.dataset.id);
+  });
+}
+
+function filterList() {
+  const q = document.getElementById('filterInput').value.toLowerCase();
+  let mems = getViewMemories();
+  if (q) {
+    mems = mems.filter(m =>
+      m.content.toLowerCase().includes(q) ||
+      (m.tags || []).some(t => t.toLowerCase().includes(q)) ||
+      m.id.startsWith(q)
+    );
+  }
+  const list = document.getElementById('memList');
+  list.innerHTML = mems.map(m => renderCard(m)).join('');
+  list.querySelectorAll('.mem-card').forEach(card => {
+    card.onclick = () => showDetail(card.dataset.id);
+  });
+}
+
+function getViewMemories() {
+  if (currentView === 'all') return allMemories;
+  const layer = layerNum(currentView);
+  return allMemories.filter(m => m.layer === layer);
+}
+
+function renderRecallView() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <h2 style="margin-bottom: 16px">🔍 Recall Test</h2>
+    <div class="search-box">
+      <input type="text" id="recallInput" placeholder="Enter query..." onkeydown="if(event.key==='Enter')doRecall()">
+      <button onclick="doRecall()">Recall</button>
+    </div>
+    <div class="filters">
+      <label><input type="checkbox" id="recallExpand" checked> expand</label>
+      <label>limit: <input type="number" id="recallLimit" value="10" min="1" max="50" style="width:60px"></label>
+      <label>min_score: <input type="number" id="recallMinScore" value="0.3" min="0" max="1" step="0.05" style="width:70px"></label>
+    </div>
+    <div id="recallResults"></div>`;
+}
+
+async function doRecall() {
+  const q = document.getElementById('recallInput').value.trim();
+  if (!q) return;
+  const expand = document.getElementById('recallExpand').checked;
+  const limit = parseInt(document.getElementById('recallLimit').value) || 10;
+  const minScore = parseFloat(document.getElementById('recallMinScore').value) || 0;
+
+  const container = document.getElementById('recallResults');
+  container.innerHTML = '<div class="empty">Searching...</div>';
+
+  const t0 = performance.now();
+  const data = await api('/recall', {
+    method: 'POST',
+    body: JSON.stringify({ query: q, limit, expand, min_score: minScore })
+  });
+  const elapsed = (performance.now() - t0).toFixed(0);
+  const results = data.memories || [];
+
+  container.innerHTML = `
+    <div class="recall-result">
+      <div class="timing">${results.length} results in ${elapsed}ms</div>
+      <div class="mem-list">
+        ${results.map(m => renderCard(m, m.relevance)).join('')}
+      </div>
+    </div>`;
+
+  container.querySelectorAll('.mem-card').forEach(card => {
+    card.onclick = () => showDetail(card.dataset.id);
+  });
+}
+
+function showDetail(id) {
+  const mem = allMemories.find(m => m.id === id);
+  if (!mem) return;
+  const panel = document.getElementById('detail');
+  const impPct = (mem.importance * 100).toFixed(0);
+  panel.innerHTML = `
+    <button class="close" onclick="closeDetail()">✕</button>
+    <h3>${layerName(mem.layer)} Memory</h3>
+    <div class="detail-field">
+      <div class="label">ID</div>
+      <div class="value" style="font-family:monospace;font-size:12px">${mem.id}</div>
+    </div>
+    <div class="detail-field">
+      <div class="label">Content</div>
+      <div class="value">${esc(mem.content)}</div>
+    </div>
+    <div class="detail-field">
+      <div class="label">Importance (${impPct}%)</div>
+      <div class="bar"><div class="bar-fill" style="width:${impPct}%;background:${mem.importance > 0.7 ? 'var(--green)' : mem.importance > 0.4 ? 'var(--yellow)' : 'var(--text-dim)'}"></div></div>
+    </div>
+    <div class="detail-field">
+      <div class="label">Access Count</div>
+      <div class="value">${mem.access_count}</div>
+    </div>
+    <div class="detail-field">
+      <div class="label">Layer</div>
+      <div class="value"><span class="layer-badge layer-${mem.layer}">${layerName(mem.layer)}</span></div>
+    </div>
+    <div class="detail-field">
+      <div class="label">Tags</div>
+      <div class="value">${(mem.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join(' ') || '—'}</div>
+    </div>
+    <div class="detail-field">
+      <div class="label">Source</div>
+      <div class="value">${esc(mem.source || '—')}</div>
+    </div>
+    <div class="detail-field">
+      <div class="label">Namespace</div>
+      <div class="value">${esc(mem.namespace || 'default')}</div>
+    </div>
+    <div class="detail-field">
+      <div class="label">Created</div>
+      <div class="value">${new Date(mem.created_at).toLocaleString()}</div>
+    </div>
+    <div class="detail-field">
+      <div class="label">Last Accessed</div>
+      <div class="value">${new Date(mem.last_accessed).toLocaleString()}</div>
+    </div>
+    <div class="detail-field">
+      <div class="label">Decay Rate</div>
+      <div class="value">${mem.decay_rate}</div>
+    </div>
+    <div style="margin-top:20px">
+      <button onclick="deleteMem('${mem.id}')" style="background:var(--red);color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer">Delete</button>
+    </div>`;
+  panel.classList.add('open');
+}
+
+function closeDetail() {
+  document.getElementById('detail').classList.remove('open');
+}
+
+async function deleteMem(id) {
+  if (!confirm('Delete this memory?')) return;
+  await fetch(API + '/memories/' + id, { method: 'DELETE' });
+  closeDetail();
+  await refresh();
+}
+
+async function refresh() {
+  await Promise.all([loadStats(), loadMemories()]);
+  switchView(currentView);
+}
+
+function switchView(view) {
+  currentView = view;
+  document.querySelectorAll('.nav li').forEach(li => {
+    li.classList.toggle('active', li.dataset.view === view);
+  });
+  if (view === 'recall') {
+    renderRecallView();
+  } else {
+    renderList(getViewMemories());
+  }
+}
+
+// Nav clicks
+document.getElementById('nav').onclick = e => {
+  const li = e.target.closest('li');
+  if (li) switchView(li.dataset.view);
+};
+
+// ESC to close detail
+document.onkeydown = e => { if (e.key === 'Escape') closeDetail(); };
+
+// Init
+refresh();
+</script>
+</body>
+</html>
