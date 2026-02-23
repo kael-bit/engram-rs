@@ -132,6 +132,7 @@ pub fn router(state: AppState) -> Router {
     let proxy_route = Router::new()
         .route("/proxy/{*path}", axum::routing::any(crate::proxy::handle))
         .route("/proxy/flush", axum::routing::post(proxy_flush))
+        .route("/proxy/window", axum::routing::get(proxy_window))
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024));
 
     // 64KB for normal operations, 32MB for import, 10MB for proxy

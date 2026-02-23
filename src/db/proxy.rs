@@ -86,4 +86,22 @@ impl MemoryDB {
         count as usize >= max_turns || chars as usize >= max_chars
     }
 
+    /// Read-only peek at buffered turns without draining.
+    pub fn peek_proxy_turns(&self) -> Result<Vec<(String, Vec<(String, i64)>)>, EngramError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT session_key, content, created_at FROM proxy_turns ORDER BY id ASC"
+        )?;
+        let rows: Vec<(String, String, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut map: std::collections::BTreeMap<String, Vec<(String, i64)>> = std::collections::BTreeMap::new();
+        for (key, content, ts) in rows {
+            map.entry(key).or_default().push((content, ts));
+        }
+        Ok(map.into_iter().collect())
+    }
+
 }

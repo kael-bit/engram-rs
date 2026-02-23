@@ -11,8 +11,8 @@ use tracing::{debug, error, info, warn};
 use crate::{ai, db, AppState};
 
 // Sliding window thresholds: flush when enough context accumulates.
-const WINDOW_MAX_TURNS: usize = 5;
-const WINDOW_MAX_CHARS: usize = 8000;
+const WINDOW_MAX_TURNS: usize = 8;
+const WINDOW_MAX_CHARS: usize = 16000;
 
 static PROXY_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static PROXY_EXTRACTED: AtomicU64 = AtomicU64::new(0);
@@ -218,6 +218,12 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, se
         return;
     }
 
+    // Skip subagent traffic — their conversations are operational, not worth extracting
+    if user_msg.contains("[Subagent Context]") || user_msg.contains("[Subagent Task]") {
+        debug!("proxy: skipping subagent turn");
+        return;
+    }
+
     // Skip very short tool-use-only turns
     if user_msg.len() + assistant_msg.len() < 80 {
         return;
@@ -261,8 +267,15 @@ async fn extract_from_context(state: AppState, context: &str) {
         return;
     };
 
+    let turn_count = context.matches("User: ").count();
+    info!(
+        turns = turn_count,
+        chars = context.len(),
+        "proxy: extraction window flushed"
+    );
+
     if context.len() < 100 {
-        debug!("proxy: context too thin to extract from");
+        info!("proxy: context too thin to extract from ({} chars)", context.len());
         return;
     }
 
@@ -368,8 +381,16 @@ async fn extract_from_context(state: AppState, context: &str) {
     };
 
     if entries.is_empty() {
-        debug!("proxy: nothing worth extracting from window");
+        info!("proxy: extraction returned 0 items (correct for most windows)");
         return;
+    }
+
+    for entry in &entries {
+        info!(
+            kind = entry.kind.as_deref().unwrap_or("none"),
+            "proxy: extracted → {}",
+            entry.content.chars().take(100).collect::<String>()
+        );
     }
 
     let count = entries.len();
@@ -384,7 +405,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         if batch_contents.iter().any(|prev| {
             state.db.is_near_duplicate_pair(prev, &entry.content, 0.5)
         }) {
-            debug!("proxy: skipping intra-batch duplicate: {}", &entry.content[..entry.content.len().min(60)]);
+            info!("proxy: dedup/intra-batch skip: {}", entry.content.chars().take(60).collect::<String>());
             continue;
         }
 
@@ -405,9 +426,9 @@ async fn extract_from_context(state: AppState, context: &str) {
             if !existing_id.is_empty() {
                 let _ = state.db.reinforce(existing_id);
             }
-            debug!(
-                "proxy: skipping duplicate (reinforced): {}",
-                &entry.content[..entry.content.len().min(60)]
+            info!(
+                "proxy: dedup/semantic skip (reinforced): {}",
+                entry.content.chars().take(60).collect::<String>()
             );
             continue;
         }
@@ -601,7 +622,7 @@ fn extract_assistant_msg(raw: &[u8]) -> String {
             }
         }
         if !assembled.is_empty() {
-            return assembled.chars().take(2000).collect();
+            return assembled.chars().take(6000).collect();
         }
     }
 
@@ -612,7 +633,7 @@ fn extract_assistant_msg(raw: &[u8]) -> String {
             .pointer("/choices/0/message/content")
             .and_then(|c| c.as_str())
         {
-            return content.chars().take(2000).collect();
+            return content.chars().take(6000).collect();
         }
         // Anthropic format
         if let Some(blocks) = v.get("content").and_then(|c| c.as_array()) {
@@ -625,7 +646,7 @@ fn extract_assistant_msg(raw: &[u8]) -> String {
                 }
             }
             if !out.is_empty() {
-                return out.chars().take(2000).collect();
+                return out.chars().take(6000).collect();
             }
         }
     }

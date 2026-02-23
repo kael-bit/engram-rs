@@ -116,6 +116,28 @@ pub(super) async fn proxy_flush(
     Json(serde_json::json!({"status": "ok"}))
 }
 
+pub(super) async fn proxy_window(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    match state.db.peek_proxy_turns() {
+        Ok(sessions) => {
+            let mut result = serde_json::Map::new();
+            for (key, turns) in sessions {
+                let arr: Vec<serde_json::Value> = turns.into_iter().map(|(content, ts)| {
+                    serde_json::json!({
+                        "chars": content.len(),
+                        "preview": content.chars().take(200).collect::<String>(),
+                        "created_at": ts
+                    })
+                }).collect();
+                result.insert(key, serde_json::Value::Array(arr));
+            }
+            Json(serde_json::json!({"sessions": result}))
+        }
+        Err(e) => Json(serde_json::json!({"error": e.to_string()}))
+    }
+}
+
 #[derive(Deserialize)]
 pub(super) struct ExtractRequest {
     text: String,
