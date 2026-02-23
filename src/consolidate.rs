@@ -551,7 +551,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &crate::db::MemoryDB) -> Result<
 
     // ~300 chars per formatted memory entry (200 content + metadata)
     const CHARS_PER_ENTRY: usize = 300;
-    const MAX_PROMPT_CHARS: usize = 100_000;
+    const MAX_PROMPT_CHARS: usize = 64_000;
     let max_per_batch = MAX_PROMPT_CHARS / CHARS_PER_ENTRY; // ~333
 
     let mut combined = AuditResult {
