@@ -633,8 +633,12 @@ impl MemoryDB {
     }
 
     pub fn touch(&self, id: &str) -> Result<(), EngramError> {
+        // Each access bumps importance slightly (capped at 1.0), simulating
+        // spaced-repetition reinforcement — frequently recalled memories
+        // become more important over time, like Ebbinghaus retention.
         self.conn()?.execute(
-            "UPDATE memories SET last_accessed = ?1, access_count = access_count + 1 WHERE id = ?2",
+            "UPDATE memories SET last_accessed = ?1, access_count = access_count + 1, \
+             importance = MIN(1.0, importance + 0.05) WHERE id = ?2",
             params![now_ms(), id],
         )?;
         Ok(())
@@ -1262,7 +1266,7 @@ mod tests {
             .insert(MemoryInput {
                 content: "touchable".into(),
                 layer: None,
-                importance: None,
+                importance: Some(0.3),
                 ..Default::default()
             })
             .unwrap();
@@ -1270,6 +1274,32 @@ mod tests {
         db.touch(&mem.id).unwrap();
         let got = db.get(&mem.id).unwrap().unwrap();
         assert_eq!(got.access_count, 1);
+        // importance bumps by 0.05 per access
+        assert!((got.importance - 0.35).abs() < 0.001, "imp={}", got.importance);
+
+        // multiple touches accumulate
+        db.touch(&mem.id).unwrap();
+        db.touch(&mem.id).unwrap();
+        let got = db.get(&mem.id).unwrap().unwrap();
+        assert_eq!(got.access_count, 3);
+        assert!((got.importance - 0.45).abs() < 0.001, "imp={}", got.importance);
+    }
+
+    #[test]
+    fn touch_importance_caps_at_one() {
+        let db = test_db();
+        let mem = db
+            .insert(MemoryInput {
+                content: "important thing".into(),
+                importance: Some(0.95),
+                ..Default::default()
+            })
+            .unwrap();
+        // Two touches would push past 1.0 without the cap
+        db.touch(&mem.id).unwrap();
+        db.touch(&mem.id).unwrap();
+        let got = db.get(&mem.id).unwrap().unwrap();
+        assert!(got.importance <= 1.0, "imp should cap at 1.0, got {}", got.importance);
     }
 
     #[test]

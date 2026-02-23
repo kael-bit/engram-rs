@@ -88,13 +88,26 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
             }
     }
 
+    // Promote Buffer → Working when accessed enough (reinforcement-based)
+    // Like spaced repetition: if you keep recalling something, it sticks.
+    let buffer_promote_count = promote_threshold.max(2);
+    for mem in db.list_by_layer(Layer::Buffer, 10000, 0) {
+        if mem.access_count >= buffer_promote_count
+            && db.promote(&mem.id, Layer::Working).is_ok() {
+                promoted_ids.push(mem.id.clone());
+                promoted += 1;
+            }
+    }
+
     // Age-based Working → Core promotion
+    // Memories that survive in Working long enough with any access earn Core status,
+    // regardless of initial importance (importance grows via access now)
     for mem in db.list_by_layer(Layer::Working, 10000, 0) {
         if promoted_ids.contains(&mem.id) {
             continue;
         }
         let age = now - mem.created_at;
-        if age > working_age && mem.importance >= 0.5
+        if age > working_age && mem.access_count > 0
             && db.promote(&mem.id, Layer::Core).is_ok() {
                 promoted_ids.push(mem.id.clone());
                 promoted += 1;
@@ -109,11 +122,18 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         }
     }
 
-    // Buffer TTL — old L1 entries promote or drop
+    // Buffer TTL — old L1 entries that weren't accessed enough get dropped.
+    // Accessed ones were already promoted above; stragglers with any access
+    // get one more chance via Working, the rest expire.
     for mem in db.list_by_layer(Layer::Buffer, 10000, 0) {
+        if promoted_ids.contains(&mem.id) {
+            continue;
+        }
         let age = now - mem.created_at;
         if age > buffer_ttl {
-            if mem.importance > 0.3 {
+            if mem.access_count > 0 {
+                // Accessed at least once but not enough to auto-promote;
+                // give it a second life in Working layer
                 if db.promote(&mem.id, Layer::Working).is_ok() {
                     promoted_ids.push(mem.id.clone());
                     promoted += 1;
@@ -520,18 +540,16 @@ mod tests {
         let db = test_db();
         let now = crate::db::now_ms();
         let two_hours_ago = now - 7200_000;
-        // old buffer with low importance → should be dropped by TTL
+        // old buffer, never accessed → should be dropped
         let expendable = mem_with_ts("bye", Layer::Buffer, 0.2, 0, two_hours_ago, two_hours_ago);
-        // old buffer with high importance → should be promoted to working
-        let valuable = mem_with_ts("save-me", Layer::Buffer, 0.5, 0, two_hours_ago, two_hours_ago);
+        // old buffer, accessed once → should be rescued to working
+        let valuable = mem_with_ts("save-me", Layer::Buffer, 0.5, 1, two_hours_ago, two_hours_ago);
         db.import(&[expendable, valuable]).unwrap();
 
         let _result = consolidate_sync(&db, None);
-        // "bye" either gets dropped by decay or by TTL
-        assert!(db.get("bye").unwrap().is_none(), "low importance buffer should be gone");
-        // "save-me" should survive (promoted from buffer to working)
+        assert!(db.get("bye").unwrap().is_none(), "never-accessed buffer should be gone");
         let saved = db.get("save-me").unwrap();
-        assert!(saved.is_some(), "high importance buffer should survive");
+        assert!(saved.is_some(), "accessed buffer should survive");
     }
 
     #[test]
@@ -545,5 +563,47 @@ mod tests {
         let r = consolidate_sync(&db, None);
         assert_eq!(r.promoted, 0);
         assert_eq!(r.decayed, 0);
+    }
+
+    #[test]
+    fn buffer_promoted_by_access() {
+        let db = test_db();
+        let now = crate::db::now_ms();
+        // Buffer memory with enough accesses should promote to Working
+        let accessed = mem_with_ts("recalled", Layer::Buffer, 0.1, 3, now - 1000, now);
+        db.import(&[accessed]).unwrap();
+
+        let r = consolidate_sync(&db, None);
+        assert_eq!(r.promoted, 1);
+        let got = db.get("recalled").unwrap().unwrap();
+        assert_eq!(got.layer, Layer::Working);
+    }
+
+    #[test]
+    fn buffer_ttl_accessed_once_promotes() {
+        let db = test_db();
+        let two_hours_ago = crate::db::now_ms() - 7200 * 1000;
+        // Old buffer with 1 access but not enough for auto-promote;
+        // TTL logic should still rescue it to Working
+        let accessed = mem_with_ts("rescued", Layer::Buffer, 0.1, 1, two_hours_ago, two_hours_ago);
+        db.import(&[accessed]).unwrap();
+
+        let r = consolidate_sync(&db, None);
+        assert!(r.promoted >= 1);
+        let got = db.get("rescued").unwrap().unwrap();
+        assert_eq!(got.layer, Layer::Working);
+    }
+
+    #[test]
+    fn buffer_ttl_never_accessed_drops() {
+        let db = test_db();
+        let two_hours_ago = crate::db::now_ms() - 7200 * 1000;
+        // Old buffer with 0 accesses — should be dropped
+        let unused = mem_with_ts("forgotten", Layer::Buffer, 0.1, 0, two_hours_ago, two_hours_ago);
+        db.import(&[unused]).unwrap();
+
+        let r = consolidate_sync(&db, None);
+        assert!(r.decayed >= 1);
+        assert!(db.get("forgotten").unwrap().is_none());
     }
 }
