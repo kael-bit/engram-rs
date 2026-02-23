@@ -262,8 +262,8 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
             continue;
         }
 
-        // Dedup: skip if we already have something very similar
-        if state.db.is_near_duplicate(&entry.content) {
+        // Dedup: skip if we already have something very similar (lower threshold than insert dedup)
+        if state.db.is_near_duplicate_with(&entry.content, 0.6) {
             debug!("proxy: skipping duplicate extraction");
             continue;
         }

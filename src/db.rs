@@ -1104,7 +1104,16 @@ impl MemoryDB {
         self.find_near_duplicate(content, "").is_some()
     }
 
+    /// Check with a custom Jaccard threshold (default is 0.8).
+    pub fn is_near_duplicate_with(&self, content: &str, threshold: f64) -> bool {
+        self.find_near_duplicate_threshold(content, "", threshold).is_some()
+    }
+
     fn find_near_duplicate(&self, content: &str, ns: &str) -> Option<Memory> {
+        self.find_near_duplicate_threshold(content, ns, 0.8)
+    }
+
+    fn find_near_duplicate_threshold(&self, content: &str, ns: &str, threshold: f64) -> Option<Memory> {
         // Use only the first 200 chars for the FTS query — enough for similarity matching
         let query_text = if content.len() > 200 {
             &content[..content.char_indices().take(200).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(200)]
@@ -1131,7 +1140,7 @@ impl MemoryDB {
                 let union = new_tokens.union(&old_tokens).count();
                 if union > 0 {
                     let jaccard = intersection as f64 / union as f64;
-                    if jaccard > 0.8 {
+                    if jaccard > threshold {
                         return Some(mem);
                     }
                 }
