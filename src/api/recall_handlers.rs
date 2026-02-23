@@ -68,6 +68,7 @@ pub(super) struct RecentQuery {
     /// Filter by source (e.g. "session")
     source: Option<String>,
     /// Filter by namespace
+    #[serde(alias = "namespace")]
     ns: Option<String>,
 }
 
