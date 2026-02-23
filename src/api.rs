@@ -184,7 +184,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /triggers/:action": "pre-action recall (e.g. /triggers/git-push)",
             "POST /consolidate": "run maintenance cycle",
             "POST /audit": "LLM-powered memory reorganization (uses ENGRAM_GATE_MODEL)",
-            "POST /repair": "auto-repair FTS index (remove orphans, rebuild missing)",
+            "POST /repair": "auto-repair FTS index; ?force=true for full rebuild",
             "POST /vacuum": "reclaim disk space (?full=true for full vacuum)",
             "POST /extract": "LLM-extract memories from text",
             "GET /export": "export all memories (?embed=true to include vectors)",
@@ -1033,11 +1033,21 @@ async fn do_audit(
     Ok(Json(serde_json::to_value(result).unwrap_or_default()))
 }
 
+#[derive(Deserialize, Default)]
+struct RepairQuery {
+    #[serde(default)]
+    force: bool,
+}
+
 async fn do_repair(
     State(state): State<AppState>,
+    Query(q): Query<RepairQuery>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
-    let (orphans, rebuilt) = blocking(move || db.repair_fts()).await??;
+    let force = q.force;
+    let (orphans, rebuilt) = blocking(move || {
+        if force { db.force_rebuild_fts() } else { db.repair_fts() }
+    }).await??;
 
     // Backfill missing embeddings
     let mut embed_backfilled = 0;

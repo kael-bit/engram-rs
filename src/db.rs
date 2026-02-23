@@ -1540,12 +1540,10 @@ impl MemoryDB {
     pub fn repair_fts(&self) -> Result<(usize, usize), EngramError> {
         let conn = self.conn()?;
 
-        // Remove orphan FTS entries (no matching memory row)
         let orphans = conn.execute(
             "DELETE FROM memories_fts WHERE id NOT IN (SELECT id FROM memories)", []
         )?;
 
-        // Rebuild missing FTS entries
         let mut stmt = conn.prepare(
             "SELECT id, content, tags FROM memories WHERE id NOT IN (SELECT id FROM memories_fts)"
         )?;
@@ -1563,6 +1561,30 @@ impl MemoryDB {
         }
 
         Ok((orphans, rebuilt))
+    }
+
+    /// Drop and rebuild the entire FTS index. Public API for force repair.
+    pub fn force_rebuild_fts(&self) -> Result<(usize, usize), EngramError> {
+        let conn = self.conn()?;
+
+        let deleted = conn.execute("DELETE FROM memories_fts", [])?;
+
+        let mut stmt = conn.prepare("SELECT id, content, tags FROM memories")?;
+        let rows: Vec<(String, String, String)> = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?.filter_map(|r| r.ok()).collect();
+
+        let rebuilt = rows.len();
+        for (id, content, tags_json) in &rows {
+            let processed = append_segmented(content);
+            conn.execute(
+                "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
+                params![id, processed, tags_json],
+            )?;
+        }
+
+        tracing::info!(deleted, rebuilt, "full FTS rebuild");
+        Ok((0, rebuilt))
     }
 
     /// Run incremental vacuum, returning bytes freed.
