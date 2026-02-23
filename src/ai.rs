@@ -199,10 +199,12 @@ SKIP these (not worth remembering):
 - System prompts, instructions, templates, or configuration that appears in every conversation
 - Heartbeat checks, health status, routine monitoring output
 - Operational details: bug fixes, version bumps, deployment steps, code changes
+- Implementation notes: "update X to do Y", "add Z to W", "fix A in B" — these are code tasks, not memories
 - Transient states: "service is running", "memory at 33%", "tests passing"
 - Debug info, log output, error messages
 - Summaries or recaps of work done (these are session logs, not memories)
 - Anything that looks like it was injected by a framework rather than said by a human
+- Instructions from one agent to another (e.g. "also add to proxy", "fix now — add touch")
 
 Output ONLY the JSON array, no other text. Return [] if nothing is worth extracting."#;
 
