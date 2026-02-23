@@ -55,7 +55,14 @@ impl EmbedCacheInner {
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<&Vec<f64>> {
+    pub fn get(&mut self, key: &str) -> Option<&Vec<f64>> {
+        if self.map.contains_key(key) {
+            // promote to back (most recently used)
+            if let Some(pos) = self.order.iter().position(|k| k == key) {
+                self.order.remove(pos);
+                self.order.push_back(key.to_string());
+            }
+        }
         self.map.get(key)
     }
 
