@@ -188,11 +188,15 @@ async fn main() {
                 let r = consolidate::consolidate(
                     bg_state.db.clone(), req, ai_cfg,
                 ).await;
-                if r.promoted > 0 || r.decayed > 0 || r.merged > 0 {
+                if r.promoted > 0 || r.decayed > 0 || r.merged > 0
+                    || r.gate_rejected > 0 || r.demoted > 0
+                {
                     info!(
                         promoted = r.promoted,
                         decayed = r.decayed,
                         merged = r.merged,
+                        gate_rejected = r.gate_rejected,
+                        demoted = r.demoted,
                         "auto-consolidate"
                     );
                 }
