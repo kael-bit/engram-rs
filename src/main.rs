@@ -70,6 +70,15 @@ impl EmbedCacheInner {
 
     pub fn put(&mut self, key: String, val: Vec<f64>) {
         if self.map.contains_key(&key) {
+            // update value in-place and refresh position in order
+            self.map.insert(key.clone(), val);
+            if let Some(pos) = self.order.iter().position(|k| k == &key) {
+                self.order.remove(pos);
+                self.order.push_back(key);
+            }
+            return;
+        }
+        if self.cap == 0 {
             return;
         }
         if self.order.len() >= self.cap {
