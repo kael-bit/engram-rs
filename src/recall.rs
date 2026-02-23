@@ -49,6 +49,9 @@ pub struct RecallResponse {
     /// Applied time filter, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_filter: Option<TimeFilter>,
+    /// LLM-expanded query variants, if expand was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expanded_queries: Option<Vec<String>>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -298,6 +301,7 @@ pub fn recall(
         layer_breakdown: breakdown,
         search_mode,
         time_filter,
+        expanded_queries: None,
     }
 }
 

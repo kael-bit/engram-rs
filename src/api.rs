@@ -585,13 +585,18 @@ async fn do_recall(
         req.expand.unwrap_or(false) && state.ai.as_ref().is_some_and(|c| c.has_llm());
     let expanded = if do_expand {
         if let Some(ref cfg) = state.ai {
-            ai::expand_query(cfg, &query_text).await
+            let q = ai::expand_query(cfg, &query_text).await;
+            if !q.is_empty() {
+                debug!(expanded = ?q, "query expansion");
+            }
+            q
         } else {
             vec![]
         }
     } else {
         vec![]
     };
+    let expanded_for_response = expanded.clone();
 
     let db = state.db.clone();
     let mut result = tokio::task::spawn_blocking(move || {
@@ -605,6 +610,11 @@ async fn do_recall(
         if let Some(cfg) = state.ai.as_ref() {
             recall::rerank_results(&mut result, &query_text, final_limit, cfg).await;
         }
+    }
+
+    // attach expanded queries to response if any
+    if !expanded_for_response.is_empty() {
+        result.expanded_queries = Some(expanded_for_response);
     }
 
     Ok(Json(result))
