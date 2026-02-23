@@ -613,11 +613,17 @@ async fn list_recent(
 }
 
 /// One-call session recovery: combines recent memories, core identity, and session context.
-/// GET /resume?hours=4
+/// GET /resume?hours=4&workspace=engram,rust&limit=100
 #[derive(Deserialize)]
 struct ResumeQuery {
     hours: Option<f64>,
     ns: Option<String>,
+    /// Comma-separated workspace tags. When set, Core memories are
+    /// filtered to those matching at least one tag. Untagged Core
+    /// memories (identity, universal knowledge) are always included.
+    workspace: Option<String>,
+    /// Max Core memories to return (default 100).
+    limit: Option<usize>,
 }
 
 /// Fetch memories tagged with `trigger:{action}`. Used for pre-action
@@ -666,6 +672,12 @@ async fn do_resume(
     }
     let ns_filter = q.ns;
     let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
+    let core_limit = q.limit.unwrap_or(100);
+
+    // Parse workspace tags
+    let ws_tags: Vec<String> = q.workspace
+        .map(|w| w.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
 
     let db = state.db.clone();
     let sections = blocking(move || {
@@ -674,14 +686,28 @@ async fn do_resume(
             ns_filter.as_ref().is_none_or(|ns| m.namespace == *ns)
         };
 
-        // Core memories — always loaded, unconditionally.
-        // This is the whole point of Core: knowledge important enough
-        // to be present in every session, no query needed.
-        let core: Vec<db::Memory> = d
-            .list_by_layer(db::Layer::Core, 1000, 0)
+        // Core memories — filtered by workspace tags when provided.
+        // Untagged memories (empty tags) always pass — they're universal
+        // knowledge (identity, preferences) that apply everywhere.
+        let all_core: Vec<db::Memory> = d
+            .list_by_layer(db::Layer::Core, 10000, 0)
             .into_iter()
             .filter(|m| ns_ok(m))
             .collect();
+
+        let mut core: Vec<db::Memory> = if ws_tags.is_empty() {
+            all_core
+        } else {
+            all_core.into_iter().filter(|m| {
+                // Always include untagged / universal memories
+                if m.tags.is_empty() { return true; }
+                // Include if any memory tag matches any workspace tag
+                m.tags.iter().any(|t| ws_tags.iter().any(|ws| t.to_lowercase().contains(ws.as_str())))
+            }).collect()
+        };
+        // Sort by importance desc, cap output
+        core.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
+        core.truncate(core_limit);
 
         // all recent memories in one query, then split by source
         let all_recent: Vec<db::Memory> = d.list_since(since_ms, 100).unwrap_or_default()
