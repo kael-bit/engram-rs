@@ -624,6 +624,13 @@ struct ResumeQuery {
     workspace: Option<String>,
     /// Max Core memories to return (default 100).
     limit: Option<usize>,
+    /// When true, return compact format (content + tags only) to
+    /// minimize token usage. Default false (full memory objects).
+    compact: Option<bool>,
+    /// Max total characters across all sections. Sections are filled
+    /// in priority order: core → working → buffer → recent → sessions.
+    /// Omitted = no budget.
+    budget: Option<usize>,
 }
 
 /// Fetch memories tagged with `trigger:{action}`. Used for pre-action
@@ -773,20 +780,63 @@ async fn do_resume(
     .await?;
 
     let (core, working, buffer, recent, sessions, next_actions) = sections;
+    let compact = q.compact.unwrap_or(false);
+
+    // Helper: convert memories to compact or full format
+    let to_json = |mems: &[db::Memory]| -> Vec<serde_json::Value> {
+        if compact {
+            mems.iter().map(|m| {
+                let mut obj = serde_json::json!({"content": m.content});
+                if !m.tags.is_empty() {
+                    obj["tags"] = serde_json::json!(m.tags);
+                }
+                obj
+            }).collect()
+        } else {
+            mems.iter().map(|m| serde_json::to_value(m).unwrap_or_default()).collect()
+        }
+    };
+
+    // Apply budget: fill sections in priority order, stop when budget exhausted
+    let mut budget_left = q.budget.unwrap_or(usize::MAX);
+    let mut take_within_budget = |mems: &[db::Memory]| -> Vec<db::Memory> {
+        if budget_left == 0 { return vec![]; }
+        let mut taken = Vec::new();
+        for m in mems {
+            let cost = if compact {
+                m.content.len() + m.tags.iter().map(|t| t.len() + 3).sum::<usize>() + 20
+            } else {
+                m.content.len() + 250 // ~250 chars metadata overhead per memory
+            };
+            if cost > budget_left && !taken.is_empty() { break; }
+            budget_left = budget_left.saturating_sub(cost);
+            taken.push(m.clone());
+        }
+        taken
+    };
+
+    // Priority order: core → working → next_actions → sessions → recent → buffer
+    let core_out = take_within_budget(&core);
+    let working_out = take_within_budget(&working);
+    let next_out = take_within_budget(&next_actions);
+    let sessions_out = take_within_budget(&sessions);
+    let recent_out = take_within_budget(&recent);
+    let buffer_out = take_within_budget(&buffer);
+
     Ok(Json(serde_json::json!({
-        "core": core,
-        "working": working,
-        "buffer": buffer,
-        "recent": recent,
-        "sessions": sessions,
-        "next_actions": next_actions,
+        "core": to_json(&core_out),
+        "working": to_json(&working_out),
+        "buffer": to_json(&buffer_out),
+        "recent": to_json(&recent_out),
+        "sessions": to_json(&sessions_out),
+        "next_actions": to_json(&next_out),
         "hours": hours,
-        "core_count": core.len(),
-        "working_count": working.len(),
-        "buffer_count": buffer.len(),
-        "recent_count": recent.len(),
-        "session_count": sessions.len(),
-        "next_action_count": next_actions.len(),
+        "core_count": core_out.len(),
+        "working_count": working_out.len(),
+        "buffer_count": buffer_out.len(),
+        "recent_count": recent_out.len(),
+        "session_count": sessions_out.len(),
+        "next_action_count": next_out.len(),
     })))
 }
 
