@@ -157,7 +157,6 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "requests": proxy_reqs,
             "extracted": proxy_extracted,
             "buffered_turns": proxy_buffered,
-            "buffered_turns": proxy_buffered,
         },
         "integrity": integrity,
         "stats": s,
@@ -575,7 +574,7 @@ async fn list_recent(
     if q.ns.is_none() {
         q.ns = get_namespace(&headers);
     }
-    let hours = q.hours.unwrap_or(2.0);
+    let hours = q.hours.unwrap_or(2.0).clamp(0.0, 87_600.0); // cap at 10 years
     let limit = q.limit.unwrap_or(20).min(100);
     let layer_filter = q.layer;
     let min_imp = q.min_importance.unwrap_or(0.0);
@@ -642,8 +641,14 @@ async fn get_triggers(
     }).await?;
 
     // touch each trigger memory so it reinforces over time
-    for m in &memories {
-        let _ = db2.touch(&m.id);
+    if !memories.is_empty() {
+        let ids: Vec<String> = memories.iter().map(|m| m.id.clone()).collect();
+        let _ = blocking(move || {
+            for id in &ids {
+                let _ = db2.touch(id);
+            }
+        })
+        .await;
     }
 
     Ok(Json(serde_json::json!({
@@ -658,7 +663,7 @@ async fn do_resume(
     headers: axum::http::HeaderMap,
     Query(mut q): Query<ResumeQuery>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
-    let hours = q.hours.unwrap_or(4.0);
+    let hours = q.hours.unwrap_or(4.0).clamp(0.0, 87_600.0); // cap at 10 years
     if q.ns.is_none() {
         q.ns = get_namespace(&headers);
     }
