@@ -1023,8 +1023,8 @@ impl MemoryDB {
             conn.execute(
                 "INSERT INTO memories \
                  (id, content, layer, importance, created_at, last_accessed, \
-                  access_count, decay_rate, source, tags) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                  access_count, decay_rate, source, tags, namespace, embedding) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
                 params![
                     m.id,
                     m.content,
@@ -1036,6 +1036,8 @@ impl MemoryDB {
                     m.decay_rate,
                     m.source,
                     tags_json,
+                    m.namespace,
+                    m.embedding.as_ref().map(|e| crate::ai::embedding_to_bytes(e)),
                 ],
             )?;
             let processed = append_cjk_bigrams(&m.content);
