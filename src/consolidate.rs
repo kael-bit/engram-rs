@@ -157,8 +157,13 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         }
     }
 
-    if promoted > 0 || decayed > 0 || demoted > 0 {
-        info!(promoted, decayed, demoted, "consolidation complete");
+    // Importance decay — memories not accessed in 24h lose a bit of importance.
+    // Prevents everything from converging to 1.0 over time.
+    // Floor of 0.3 ensures nothing becomes invisible.
+    let importance_decayed = db.decay_importance(24.0, 0.05, 0.3).unwrap_or(0);
+
+    if promoted > 0 || decayed > 0 || demoted > 0 || importance_decayed > 0 {
+        info!(promoted, decayed, demoted, importance_decayed, "consolidation complete");
     } else {
         debug!("consolidation: nothing to do");
     }

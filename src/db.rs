@@ -656,6 +656,18 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Decay importance for memories not accessed recently.
+    /// Returns the number of memories affected.
+    pub fn decay_importance(&self, idle_hours: f64, decay_amount: f64, floor: f64) -> Result<usize, EngramError> {
+        let cutoff = now_ms() - (idle_hours * 3_600_000.0) as i64;
+        let n = self.conn()?.execute(
+            "UPDATE memories SET importance = MAX(?1, importance - ?2) \
+             WHERE last_accessed < ?3 AND importance > ?1",
+            params![floor, decay_amount, cutoff],
+        )?;
+        Ok(n)
+    }
+
     /// Set access_count directly (used when merging memories to preserve history).
     pub fn set_access_count(&self, id: &str, count: i64) -> Result<(), EngramError> {
         self.conn()?.execute(
