@@ -431,8 +431,7 @@ async function doRepair() {
 // Proxy view
 async function checkProxyStatus() {
   try {
-    const res = await fetch(API + '/health', { headers: authHeader() });
-    const data = await res.json();
+    const data = await api('/health');
     return data.proxy || { enabled: false, requests: 0, extracted: 0 };
   } catch {
     return { enabled: false, requests: 0, extracted: 0 };
