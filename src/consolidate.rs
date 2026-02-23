@@ -41,6 +41,9 @@ pub struct ConsolidateResponse {
     /// IDs of memories that were superseded (deleted) during reconciliation.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub reconciled_ids: Vec<String>,
+    /// Number of duplicate buffer memories removed.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub buffer_deduped: usize,
     /// Number of facts extracted from existing memories.
     #[serde(skip_serializing_if = "is_zero")]
     pub facts_extracted: usize,
@@ -114,6 +117,16 @@ pub async fn consolidate(
         let (count, ids) = reconcile_updates(&db, cfg).await;
         result.reconciled = count;
         result.reconciled_ids = ids;
+    }
+
+    // Buffer dedup: remove near-duplicate entries within the buffer layer.
+    // No LLM needed — purely cosine-based. Keeps the newest, accumulates access counts.
+    {
+        let db2 = db.clone();
+        let deduped = tokio::task::spawn_blocking(move || dedup_buffer(&db2))
+            .await
+            .unwrap_or(0);
+        result.buffer_deduped = deduped;
     }
 
     // Extract fact triples from Working/Core memories that don't have any yet.
@@ -259,6 +272,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         merged_ids: vec![],
         reconciled: 0,
         reconciled_ids: vec![],
+        buffer_deduped: 0,
         facts_extracted: 0,
         promotion_candidates,
     }
@@ -311,6 +325,65 @@ const RECONCILE_PROMPT: &str = "You are comparing two memory entries about poten
     - KEEP_BOTH: They cover genuinely different aspects or the older one has \
     unique details not in the newer one.\n\n\
     Reply with ONLY one word: UPDATE, ABSORB, or KEEP_BOTH";
+
+/// Merge near-duplicate buffer memories based on cosine similarity.
+/// No LLM calls — keeps the newest entry, sums access counts, merges tags.
+fn dedup_buffer(db: &MemoryDB) -> usize {
+    let all = db.get_all_with_embeddings();
+    let buffers: Vec<_> = all.iter()
+        .filter(|(m, e)| !e.is_empty() && m.layer == Layer::Buffer)
+        .collect();
+
+    if buffers.len() < 2 {
+        return 0;
+    }
+
+    let mut removed: Vec<String> = Vec::new();
+    let threshold = 0.75;
+
+    for i in 0..buffers.len() {
+        if removed.contains(&buffers[i].0.id) { continue; }
+        for j in (i + 1)..buffers.len() {
+            if removed.contains(&buffers[j].0.id) { continue; }
+
+            let sim = cosine_similarity(&buffers[i].1, &buffers[j].1);
+            if sim < threshold { continue; }
+
+            // Keep the newer one
+            let (discard, keep) = if buffers[i].0.created_at >= buffers[j].0.created_at {
+                (&buffers[j].0, &buffers[i].0)
+            } else {
+                (&buffers[i].0, &buffers[j].0)
+            };
+
+            // Transfer access count and unique tags
+            let total_access = keep.access_count + discard.access_count;
+            let mut tags = keep.tags.clone();
+            for t in &discard.tags {
+                if !tags.contains(t) { tags.push(t.clone()); }
+            }
+            tags.truncate(20);
+
+            let imp = keep.importance.max(discard.importance);
+            let _ = db.update_fields(&keep.id, None, None, Some(imp), Some(&tags));
+            let _ = db.set_access_count(&keep.id, total_access);
+
+            if db.delete(&discard.id).unwrap_or(false) {
+                debug!(
+                    keep = %keep.id, discard = %discard.id,
+                    sim = format!("{:.3}", sim),
+                    "buffer dedup: removed duplicate"
+                );
+                removed.push(discard.id.clone());
+            }
+        }
+    }
+
+    if !removed.is_empty() {
+        info!(count = removed.len(), "buffer dedup complete");
+    }
+    removed.len()
+}
 
 /// Detect same-topic memories where a newer one supersedes an older one.
 /// Runs every consolidation cycle. Uses a moderate similarity threshold
