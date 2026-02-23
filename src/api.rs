@@ -636,7 +636,7 @@ async fn do_recall(
         if cfg.has_embed() {
             // check cache first
             let cached = {
-                let cache = state.embed_cache.lock().unwrap();
+                let cache = state.embed_cache.lock().unwrap_or_else(|e| e.into_inner());
                 cache.get(&query_text).cloned()
             };
             if let Some(emb) = cached {
@@ -647,7 +647,7 @@ async fn do_recall(
                     Ok(mut v) => {
                         let emb = v.pop();
                         if let Some(ref e) = emb {
-                            let mut cache = state.embed_cache.lock().unwrap();
+                            let mut cache = state.embed_cache.lock().unwrap_or_else(|e| e.into_inner());
                             cache.put(query_text.clone(), e.clone());
                         }
                         emb

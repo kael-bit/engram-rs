@@ -837,4 +837,45 @@ mod tests {
         assert_eq!(result.memories.len(), 1);
         assert!(result.memories[0].memory.content.contains("core"));
     }
+
+    #[test]
+    fn dual_hit_boost_increases_score() {
+        // When a memory is found by both semantic and FTS, its score should
+        // be higher than FTS-only. We can't test semantic without embeddings,
+        // but we can verify score_combined produces consistent values and
+        // that the boost math works.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+
+        let base_score = score_combined(0.8, 0.7, now_ms);
+        let boosted_score = score_combined(0.8, (0.7 + 0.3 * 0.3_f64).min(1.0), now_ms);
+        assert!(boosted_score > base_score, "boosted relevance should yield higher score");
+    }
+
+    #[test]
+    fn min_importance_filter() {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        db.insert(MemoryInput {
+            content: "low importance noise".into(),
+            importance: Some(0.1),
+            ..Default::default()
+        }).unwrap();
+        db.insert(MemoryInput {
+            content: "high importance signal".into(),
+            importance: Some(0.9),
+            ..Default::default()
+        }).unwrap();
+
+        let req = RecallRequest {
+            query: "importance".into(),
+            min_importance: Some(0.5),
+            limit: Some(10),
+            ..Default::default()
+        };
+        let result = recall(&db, &req, None, None);
+        assert_eq!(result.memories.len(), 1);
+        assert!(result.memories[0].memory.content.contains("high"));
+    }
 }
