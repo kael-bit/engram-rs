@@ -180,20 +180,31 @@ const EXTRACT_SYSTEM_PROMPT: &str = r#"You are a memory extraction engine. Given
 
 For each memory, output a JSON array of objects with these fields:
 - "content": the memory text (concise, self-contained, one fact per entry)
-- "importance": 0.0-1.0 (1.0 = critical identity/principle, 0.5 = normal fact, 0.1 = trivial)
 - "tags": relevant keyword tags (array of strings)
-- "layer": suggested layer (1=buffer/temporary, 2=working/recent, 3=core/permanent)
 
 Rules:
-- Extract 1-10 entries per input
+- Extract 0-3 entries per input. Zero is fine if nothing is worth remembering.
 - Each entry must be self-contained (understandable without context)
-- Prefer concise entries over verbose ones
-- Merge redundant information
+- Prefer concise entries (under 200 chars) over verbose ones
 - Write content in the same language as the input
-- Skip trivial metadata (counts, sizes, timestamps) unless they carry meaningful context
-- Assign higher importance to: identity, preferences, decisions, relationships, lessons learned
-- Assign lower importance to: debug info, transient states, routine actions, version snapshots
-- Output ONLY the JSON array, no other text"#;
+
+EXTRACT these (worth remembering):
+- Identity: who someone is, their preferences, principles, personality
+- Decisions: choices made and why, trade-offs considered
+- Lessons: mistakes, insights, things that worked or didn't
+- Relationships: facts about people, how they relate to each other
+- Strategic: goals, plans, architectural choices
+
+SKIP these (not worth remembering):
+- System prompts, instructions, templates, or configuration that appears in every conversation
+- Heartbeat checks, health status, routine monitoring output
+- Operational details: bug fixes, version bumps, deployment steps, code changes
+- Transient states: "service is running", "memory at 33%", "tests passing"
+- Debug info, log output, error messages
+- Summaries or recaps of work done (these are session logs, not memories)
+- Anything that looks like it was injected by a framework rather than said by a human
+
+Output ONLY the JSON array, no other text. Return [] if nothing is worth extracting."#;
 
 /// Extract structured memories from raw text using an LLM.
 pub async fn extract_memories(
