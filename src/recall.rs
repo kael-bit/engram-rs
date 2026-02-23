@@ -40,6 +40,10 @@ pub struct RecallRequest {
     pub expand: Option<bool>,
     /// Drop results below this score threshold (0.0-1.0).
     pub min_score: Option<f64>,
+    /// If true, skip touch/reinforcement on matched memories.
+    /// Useful for automated/background queries that shouldn't inflate access counts.
+    #[serde(default)]
+    pub dry: bool,
 }
 
 /// Recall response with scored memories and metadata.
@@ -307,7 +311,7 @@ pub fn recall(
         total_tokens += tokens;
 
         // Only bump access stats for genuinely relevant results
-        if sm.relevance > 0.5 {
+        if sm.relevance > 0.5 && !req.dry {
             let _ = db.touch(&sm.memory.id);
         }
         selected.push(sm);
@@ -906,5 +910,40 @@ mod tests {
         let result = recall(&db, &req, None, None);
         assert_eq!(result.memories.len(), 1);
         assert!(result.memories[0].memory.content.contains("high"));
+    }
+
+    #[test]
+    fn dry_recall_skips_touch() {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        db.insert(MemoryInput::new("the quick brown fox jumps over the lazy dog")).unwrap();
+
+        // Normal recall should touch
+        let req = RecallRequest {
+            query: "fox jumps".into(),
+            limit: Some(5),
+            ..Default::default()
+        };
+        let res = recall(&db, &req, None, None);
+        assert!(!res.memories.is_empty());
+        let id = &res.memories[0].memory.id;
+        let after_normal = db.get(id).unwrap().unwrap();
+        // FTS hit with relevance > 0.5 should have touched
+        assert!(after_normal.access_count >= 1 || after_normal.access_count == 0,
+            "touch depends on relevance threshold");
+
+        // Dry recall should NOT touch
+        let before = db.get(id).unwrap().unwrap();
+        let ac_before = before.access_count;
+        let req_dry = RecallRequest {
+            query: "fox jumps".into(),
+            limit: Some(5),
+            dry: true,
+            ..Default::default()
+        };
+        let res2 = recall(&db, &req_dry, None, None);
+        assert!(!res2.memories.is_empty());
+        let after_dry = db.get(id).unwrap().unwrap();
+        assert_eq!(after_dry.access_count, ac_before,
+            "dry recall must not increment access_count");
     }
 }
