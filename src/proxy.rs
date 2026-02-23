@@ -233,6 +233,7 @@ async fn stream_response(
 ) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(32);
     let state_clone = state.clone();
+    let extract_ok = status.is_success();
 
     tokio::spawn(async move {
         let mut buf = Vec::new();
@@ -257,8 +258,8 @@ async fn stream_response(
         }
         drop(tx);
 
-        // Only extract if stream completed normally — truncated content is garbage
-        if !buf.is_empty() && !client_gone {
+        // Only extract if stream completed normally and upstream succeeded
+        if extract_ok && !buf.is_empty() && !client_gone {
             buffer_exchange(state_clone, req_capture, buf, session_key).await;
         }
     });
@@ -434,8 +435,25 @@ fn extract_last_user_msg(raw: &[u8]) -> String {
         if let Some(msgs) = v.get("messages").and_then(|m| m.as_array()) {
             for msg in msgs.iter().rev() {
                 if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
-                    if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
-                        return content.chars().take(2000).collect();
+                    let content = msg.get("content");
+                    // Plain string content
+                    if let Some(s) = content.and_then(|c| c.as_str()) {
+                        return s.chars().take(2000).collect();
+                    }
+                    // Array of content blocks (vision, tool results, etc.)
+                    if let Some(blocks) = content.and_then(|c| c.as_array()) {
+                        let mut out = String::new();
+                        for block in blocks {
+                            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                                    out.push_str(t);
+                                    out.push(' ');
+                                }
+                            }
+                        }
+                        if !out.is_empty() {
+                            return out.chars().take(2000).collect();
+                        }
                     }
                 }
             }
@@ -448,8 +466,13 @@ fn extract_last_user_msg(raw: &[u8]) -> String {
 fn extract_assistant_msg(raw: &[u8]) -> String {
     let text = String::from_utf8_lossy(raw);
 
-    // Try SSE stream format first (collect all content deltas)
-    if text.starts_with("data: ") || text.contains("\ndata: ") {
+    // Try SSE stream format first (collect all content deltas).
+    // Only treat as SSE if the body looks structurally like an event stream —
+    // i.e. starts with "data: " or the very first non-empty line does.
+    // A plain JSON body that happens to contain "\ndata: " somewhere is not SSE.
+    let looks_like_sse = text.starts_with("data: ")
+        || text.lines().next().map(|l| l.starts_with("data: ")).unwrap_or(false);
+    if looks_like_sse {
         let mut assembled = String::new();
         for line in text.lines() {
             let data = line.strip_prefix("data: ").unwrap_or("");
