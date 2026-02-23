@@ -486,8 +486,9 @@ curl http://localhost:3917/triggers/git-push
 
 engram runs autonomously — no cron or external scheduler needed:
 
-- **Auto-consolidation** every 30 minutes: promotes active memories, decays neglected ones
-- **Proxy flush** every 2 minutes: extracts memories from buffered conversations
+- **Auto-consolidation** every 30 minutes: promotes active memories, decays neglected ones, reconciles buffer updates against Working/Core
+- **Proxy debounce flush**: extracts memories from buffered conversations after 30 seconds of silence (not a fixed timer — waits for natural conversation pauses)
+- **Auto-audit** every 24 hours: LLM reviews all Working/Core memories for quality, merges duplicates, demotes stale entries
 - **Graceful shutdown**: flushes all pending proxy windows before exit
 
 ## API Reference
