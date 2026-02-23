@@ -112,11 +112,21 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
-async fn stats(State(state): State<AppState>) -> Json<db::Stats> {
+async fn stats(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Json<db::Stats> {
+    let ns = q.get("ns").cloned().or_else(|| get_namespace(&headers));
     let db = state.db.clone();
-    let s = tokio::task::spawn_blocking(move || db.stats())
-        .await
-        .unwrap_or(db::Stats { total: 0, buffer: 0, working: 0, core: 0 });
+    let s = tokio::task::spawn_blocking(move || {
+        match ns {
+            Some(n) => db.stats_ns(&n),
+            None => db.stats(),
+        }
+    })
+    .await
+    .unwrap_or(db::Stats { total: 0, buffer: 0, working: 0, core: 0 });
     Json(s)
 }
 
