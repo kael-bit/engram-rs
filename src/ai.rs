@@ -118,9 +118,11 @@ pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String
         .unwrap_or_default())
 }
 
-const EXPAND_PROMPT: &str = "Given a search query, generate 2-3 alternative phrasings \
-    that capture the same intent using different words. Include synonyms, related terms, \
-    and more/less specific versions. Output one query per line, no numbering or bullets. \
+const EXPAND_PROMPT: &str = "Given a search query, generate 3-4 alternative phrasings \
+    that would match relevant stored memories. Include: synonyms, related concrete terms, \
+    more specific implementations, and broader categories. \
+    Think about what someone might have actually written when storing this knowledge. \
+    Output one query per line, no numbering or bullets. \
     Match the language of the input query.";
 
 /// Generate alternative query phrasings for better recall coverage.
