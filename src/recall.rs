@@ -209,9 +209,11 @@ pub fn recall(
     for (id, bm25) in &fts {
         let fts_rel = bm25 / max_bm25;
         if seen.contains(id) {
-            // Boost: found by both semantic AND keyword — very likely relevant.
+            // Boost: found by both semantic AND keyword — strong relevance signal.
+            // Use multiplicative boost so it still helps even when relevance is already high.
             if let Some(sm) = scored.iter_mut().find(|s| s.memory.id == *id) {
-                sm.relevance = (sm.relevance + fts_rel * 0.3).min(1.0);
+                let boost = 1.0 + fts_rel * 0.3;  // 1.0 to 1.3x multiplier
+                sm.relevance = (sm.relevance * boost).min(1.5);
                 sm.score = score_combined(sm.memory.importance, sm.relevance, sm.memory.created_at);
             }
             continue;
@@ -850,7 +852,9 @@ mod tests {
             .as_millis() as i64;
 
         let base_score = score_combined(0.8, 0.7, now_ms);
-        let boosted_score = score_combined(0.8, (0.7 + 0.3 * 0.3_f64).min(1.0), now_ms);
+        // fts_rel=0.3 → boost = 1 + 0.3*0.3 = 1.09 → relevance = 0.7 * 1.09 = 0.763
+        let boosted_rel: f64 = (0.7 * (1.0 + 0.3 * 0.3_f64)).min(1.5);
+        let boosted_score = score_combined(0.8, boosted_rel, now_ms);
         assert!(boosted_score > base_score, "boosted relevance should yield higher score");
     }
 
