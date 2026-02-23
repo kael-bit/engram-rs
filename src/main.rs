@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! engram — three-layer memory engine for AI agents.
 //! buffer → working → core, with decay + promotion.
 

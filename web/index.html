@@ -126,6 +126,7 @@ label { font-size:11px; color:#888; }
       <li data-v="facts"><span class="nl">Facts</span></li>
       <li data-v="proxy"><span class="nl">Proxy</span><span class="ct" id="c-prx">0</span></li>
       <li data-v="health"><span class="nl">Health</span></li>
+      <li data-v="trash"><span class="nl">Trash</span><span class="ct" id="c-trash">0</span></li>
       <li data-v="tools"><span class="nl">Tools</span></li>
       <li data-v="tests"><span class="nl">Tests</span></li>
     </ul>
@@ -637,6 +638,73 @@ function renderHealth(){
     </div>`:''}`;
 }
 
+async function loadTrashCount(){
+  try{
+    const d=await api('/trash?limit=1');
+    const el=document.getElementById('c-trash');
+    if(el) el.textContent=d.count||0;
+  }catch(_){}
+}
+
+function renderTrash(){
+  document.getElementById('main').innerHTML=`
+    <h2>Trash</h2>
+    <div class="row" style="margin-bottom:12px;gap:8px">
+      <button class="btn" onclick="loadTrash()">Refresh</button>
+      <button class="btn" style="background:#7f1d1d" onclick="purgeTrash()">Purge All</button>
+    </div>
+    <div id="trashList"><div class="empty">Loading...</div></div>`;
+  loadTrash();
+}
+
+async function loadTrash(){
+  const el=document.getElementById('trashList');
+  try{
+    const d=await api('/trash?limit=200');
+    const items=d.items||[];
+    if(!items.length){el.innerHTML='<div class="empty">Trash is empty</div>';return;}
+    el.innerHTML=items.map(t=>{
+      const layer={1:'Buffer',2:'Working',3:'Core'}[t.layer]||'?';
+      const tags=(t.tags||[]).map(tg=>'<span class="tag">'+esc(tg)+'</span>').join(' ');
+      const created=new Date(t.created_at).toLocaleString();
+      const deleted=new Date(t.deleted_at).toLocaleString();
+      return `<div class="card" style="padding:10px 14px;opacity:0.8">
+        <div class="ct">${esc(t.content)}</div>
+        <div class="meta" style="margin-top:6px">
+          <span class="lb l${t.layer}">${layer}</span>
+          <span>imp: ${t.importance.toFixed(2)}</span>
+          <span>created: ${created}</span>
+          <span>deleted: ${deleted}</span>
+          ${tags}
+        </div>
+        <div style="margin-top:6px">
+          <button class="btn btn-ghost" style="font-size:11px" onclick="restoreTrash('${t.id}')">Restore</button>
+        </div>
+      </div>`;
+    }).join('');
+  }catch(e){el.innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
+}
+
+async function restoreTrash(id){
+  try{
+    await api('/trash/'+id+'/restore',{method:'POST'});
+    toast('Restored');
+    await refresh();
+    loadTrash();
+    loadTrashCount();
+  }catch(e){toast(e.message,false);}
+}
+
+async function purgeTrash(){
+  if(!confirm('Permanently delete all trash? This cannot be undone.'))return;
+  try{
+    const d=await api('/trash',{method:'DELETE'});
+    toast('Purged '+(d.purged||0)+' items');
+    loadTrash();
+    loadTrashCount();
+  }catch(e){toast(e.message,false);}
+}
+
 function renderTools(){
   document.getElementById('main').innerHTML=`
     <h2>Tools</h2>
@@ -691,7 +759,7 @@ async function doAction(path,method,body){
   }catch(e){toast(e.message,false);}
 }
 
-async function refresh(){await Promise.all([loadStats(),loadMem()]);switchView(curView);}
+async function refresh(){await Promise.all([loadStats(),loadMem(),loadTrashCount()]);switchView(curView);}
 function renderTests(){
   document.getElementById('main').innerHTML=`
     <h2>Tests</h2>
@@ -862,7 +930,7 @@ function switchView(v){
   document.querySelectorAll('.nav li').forEach(li=>li.classList.toggle('active',li.dataset.v===v));
   if(v==='recall')renderRecall();else if(v==='search')renderSearch();else if(v==='resume')renderResume();else if(v==='create')renderCreate();
   else if(v==='facts')renderFacts();else if(v==='proxy')renderProxy();else if(v==='health')renderHealth();
-  else if(v==='tools')renderTools();else if(v==='tests')renderTests();else renderList(getMem());
+  else if(v==='trash')renderTrash();else if(v==='tools')renderTools();else if(v==='tests')renderTests();else renderList(getMem());
 }
 
 document.querySelectorAll('.nav').forEach(n=>{n.onclick=e=>{const li=e.target.closest('li');if(li)switchView(li.dataset.v);};});

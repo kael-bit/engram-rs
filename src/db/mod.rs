@@ -99,6 +99,22 @@ pub struct Memory {
     pub kind: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrashEntry {
+    pub id: String,
+    pub content: String,
+    pub layer: i64,
+    pub importance: f64,
+    pub created_at: i64,
+    pub deleted_at: i64,
+    pub tags: Vec<String>,
+    #[serde(default = "default_ns", skip_serializing_if = "is_default_ns")]
+    pub namespace: String,
+    pub source: String,
+    #[serde(default = "default_kind", skip_serializing_if = "is_default_kind")]
+    pub kind: String,
+}
+
 fn is_default_kind(k: &str) -> bool {
     k == "semantic"
 }
@@ -417,6 +433,20 @@ CREATE TABLE IF NOT EXISTS proxy_turns (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_proxy_turns_session ON proxy_turns(session_key);
+
+CREATE TABLE IF NOT EXISTS trash (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    layer INTEGER NOT NULL,
+    importance REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    deleted_at INTEGER NOT NULL,
+    tags TEXT NOT NULL DEFAULT '[]',
+    namespace TEXT NOT NULL DEFAULT 'default',
+    source TEXT NOT NULL DEFAULT 'api',
+    kind TEXT NOT NULL DEFAULT 'semantic'
+);
+CREATE INDEX IF NOT EXISTS idx_trash_deleted ON trash(deleted_at);
 "#;
 
 // Use content= external content FTS — we manage inserts/deletes ourselves

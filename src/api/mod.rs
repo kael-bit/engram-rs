@@ -117,6 +117,8 @@ pub fn router(state: AppState) -> Router {
         .route("/facts/conflicts", get(get_fact_conflicts))
         .route("/facts/history", get(get_fact_history))
         .route("/facts/{id}", delete(delete_fact))
+        .route("/trash", get(trash_list).delete(trash_purge))
+        .route("/trash/{id}/restore", post(trash_restore))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Import needs a bigger body limit for exports with embeddings
@@ -213,6 +215,9 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /facts/all": "list all facts",
             "GET /facts/history?subject=X&predicate=Y": "fact history with superseded entries",
             "DELETE /facts/:id": "delete a fact",
+            "GET /trash": "list soft-deleted memories (?limit=100)",
+            "POST /trash/:id/restore": "restore a memory from trash",
+            "DELETE /trash": "permanently purge all trash",
             "GET /health": "detailed health (uptime, rss, cache, integrity)",
             "ANY /proxy/*": "transparent LLM proxy (requires ENGRAM_PROXY_UPSTREAM)",
             "GET /ui": "web dashboard",

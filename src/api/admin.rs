@@ -240,3 +240,38 @@ pub(super) async fn do_import(
         "skipped": memories_val.as_array().map(|a| a.len()).unwrap_or(0).saturating_sub(imported),
     })))
 }
+
+// -- Trash (soft-delete recovery) --
+
+#[derive(Deserialize, Default)]
+pub(super) struct TrashQuery {
+    limit: Option<usize>,
+}
+
+pub(super) async fn trash_list(
+    State(state): State<AppState>,
+    Query(q): Query<TrashQuery>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let limit = q.limit.unwrap_or(100);
+    let db = state.db.clone();
+    let entries = blocking(move || db.trash_list(limit)).await??;
+    let count = entries.len();
+    Ok(Json(serde_json::json!({ "count": count, "items": entries })))
+}
+
+pub(super) async fn trash_restore(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let db = state.db.clone();
+    let restored = blocking(move || db.trash_restore(&id)).await??;
+    Ok(Json(serde_json::json!({ "restored": restored })))
+}
+
+pub(super) async fn trash_purge(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let db = state.db.clone();
+    let purged = blocking(move || db.trash_purge()).await??;
+    Ok(Json(serde_json::json!({ "purged": purged })))
+}

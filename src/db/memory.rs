@@ -253,13 +253,21 @@ impl MemoryDB {
     }
 
     pub fn delete(&self, id: &str) -> Result<bool, EngramError> {
+        let conn = self.conn()?;
+        // Copy to trash before deleting
+        let moved = conn.execute(
+            "INSERT OR REPLACE INTO trash (id, content, layer, importance, created_at, deleted_at, tags, namespace, source, kind)
+             SELECT id, content, layer, importance, created_at, ?2, tags, namespace, source, kind
+             FROM memories WHERE id = ?1",
+            params![id, now_ms()],
+        )?;
         self.delete_facts_by_memory(id)?;
-        let n = self.conn()?.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
+        let n = conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
         if n > 0 {
             self.fts_delete(id)?;
             self.vec_index_remove(id);
         }
-        Ok(n > 0)
+        Ok(n > 0 || moved > 0)
     }
 
     /// Delete all memories in a namespace. Returns how many were removed.
@@ -291,6 +299,74 @@ impl MemoryDB {
         }
 
         Ok(n)
+    }
+
+    // -- Trash (soft-delete recovery) --
+
+    pub fn trash_list(&self, limit: usize) -> Result<Vec<TrashEntry>, EngramError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, content, layer, importance, created_at, deleted_at, tags, namespace, source, kind \
+             FROM trash ORDER BY deleted_at DESC LIMIT ?1"
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            let tags_json: String = row.get(6)?;
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            Ok(TrashEntry {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                layer: row.get(2)?,
+                importance: row.get(3)?,
+                created_at: row.get(4)?,
+                deleted_at: row.get(5)?,
+                tags,
+                namespace: row.get(7)?,
+                source: row.get(8)?,
+                kind: row.get(9)?,
+            })
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    pub fn trash_restore(&self, id: &str) -> Result<bool, EngramError> {
+        let conn = self.conn()?;
+        // Read from trash
+        let mut stmt = conn.prepare(
+            "SELECT id, content, layer, importance, created_at, tags, namespace, source, kind FROM trash WHERE id = ?1"
+        )?;
+        let entry: Option<(String, String, i64, f64, i64, String, String, String, String)> =
+            stmt.query_row(params![id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
+                    row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?))
+            }).ok();
+        drop(stmt);
+
+        if let Some((rid, content, layer, importance, created_at, tags_json, ns, source, kind)) = entry {
+            let now = now_ms();
+            conn.execute(
+                "INSERT OR REPLACE INTO memories (id, content, layer, importance, created_at, last_accessed, \
+                 access_count, repetition_count, decay_rate, source, tags, namespace, kind) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 0, 1.0, ?7, ?8, ?9, ?10)",
+                params![rid, content, layer, importance, created_at, now, source, tags_json, ns, kind],
+            )?;
+            // Re-index FTS
+            self.fts_insert(&rid, &content, &tags_json)?;
+            // Remove from trash
+            conn.execute("DELETE FROM trash WHERE id = ?1", params![id])?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub fn trash_purge(&self) -> Result<usize, EngramError> {
+        let n = self.conn()?.execute("DELETE FROM trash", [])?;
+        Ok(n)
+    }
+
+    pub fn trash_count(&self) -> Result<usize, EngramError> {
+        let n: i64 = self.conn()?.query_row("SELECT COUNT(*) FROM trash", [], |r| r.get(0))?;
+        Ok(n as usize)
     }
 
     pub fn touch(&self, id: &str) -> Result<(), EngramError> {
