@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.0
+
+### Highlights
+
+- **Zero-downtime deploys via systemd socket activation**: Socket held by systemd, service restarts queue connections in kernel. Uses `listenfd` crate.
+- **Proxy debounce flush**: Replaced fixed 120s extraction timer with 30s silence-based debounce. Flushes after conversation pauses, not on a clock.
+- **Buffer→Working/Core reconciliation**: Buffer memories that update existing higher-layer memories are detected (cosine 0.55-0.78, >1h gap), judged by LLM, and promoted to replace the old version. Fixes the "no iterative updates" gap.
+- **Audit restart storm fix**: `engram_meta` KV table persists `last_audit_ms` across restarts. Previously, 20 restarts = 20 audit runs.
+- **Score cap at 1.0**: Dual-hit FTS boost × layer bonus could push scores to ~1.3; now capped.
+
+### Changes
+
+- **Lesson/procedural auto-promote**: Memories tagged `lesson` or kind `procedural` auto-promote to Working after 2h in Buffer, bypassing normal `promote_threshold`.
+- **Resume touches Core/Working**: `/resume` increments `access_count` and bumps importance +0.02 for Core/Working memories, preventing Working decay.
+- **X-Engram-Extract header**: `X-Engram-Extract: false` disables proxy memory extraction per-request. Content heuristic fallback for sub-agent detection.
+- **Audit prompt softened**: No longer "aggressive about merges"; protects memories updated within 24h.
+- **User message truncation**: Increased from 2000→6000 chars for proxy extraction context.
+- **Kind alignment**: `kind` field consistent across all surfaces (prompt, schema, README, AGENTS.md, MCP).
+- **Function calling for extraction**: Proxy extraction uses structured function calling instead of raw JSON output.
+- **Proxy CJK panic fix**: `&m.content[..120]` byte slice on CJK → `chars().take(120)`.
+
+### Tests
+
+- 145 tests (unit + integration), clippy clean, 0 warnings.
+- `engram_meta` persistence test added.
+
 ## 0.6.0
 
 ### Post-release fixes
