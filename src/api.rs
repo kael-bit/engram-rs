@@ -625,11 +625,11 @@ struct ResumeQuery {
     /// Max Core memories to return (default 100).
     limit: Option<usize>,
     /// When true, return compact format (content + tags only) to
-    /// minimize token usage. Default false (full memory objects).
+    /// minimize token usage. Default true.
     compact: Option<bool>,
     /// Max total characters across all sections. Sections are filled
     /// in priority order: core → working → buffer → recent → sessions.
-    /// Omitted = no budget.
+    /// Default 8000 (~2K tokens). Set 0 for unlimited.
     budget: Option<usize>,
 }
 
@@ -780,7 +780,7 @@ async fn do_resume(
     .await?;
 
     let (core, working, buffer, recent, sessions, next_actions) = sections;
-    let compact = q.compact.unwrap_or(false);
+    let compact = q.compact.unwrap_or(true);
 
     // Helper: convert memories to compact or full format
     let to_json = |mems: &[db::Memory]| -> Vec<serde_json::Value> {
@@ -798,7 +798,9 @@ async fn do_resume(
     };
 
     // Apply budget: fill sections in priority order, stop when budget exhausted
-    let mut budget_left = q.budget.unwrap_or(usize::MAX);
+    // Default 8000 chars (~2K tokens). 0 = unlimited.
+    let budget_val = q.budget.unwrap_or(8000);
+    let mut budget_left = if budget_val == 0 { usize::MAX } else { budget_val };
     let mut take_within_budget = |mems: &[db::Memory]| -> Vec<db::Memory> {
         if budget_left == 0 { return vec![]; }
         let mut taken = Vec::new();

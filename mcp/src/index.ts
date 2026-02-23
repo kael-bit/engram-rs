@@ -170,17 +170,26 @@ server.tool(
 
 server.tool(
   "engram_resume",
-  "One-call session recovery. Returns identity (core memories), " +
-    "recent activity, and session-tagged memories in a single response. " +
-    "Use this when waking up to restore context fast.",
+  "Full memory bootstrap for session recovery. Returns core (permanent knowledge), " +
+    "working (ongoing context/decisions), buffer (transient), recent activity, and " +
+    "session notes. Use workspace tags to filter by current work context. " +
+    "Compact mode (default) minimizes token usage.",
   {
-    hours: z.number().positive().optional().describe("Look back N hours (default 4)"),
+    hours: z.number().positive().optional().describe("Look back N hours for recent/sessions (default 4)"),
     namespace: z.string().optional().describe("Filter by namespace"),
+    workspace: z.string().optional().describe("Comma-separated workspace tags to filter core/working memories (e.g. 'engram,rust')"),
+    compact: z.boolean().optional().describe("Compact output: content+tags only (default true)"),
+    budget: z.number().optional().describe("Max chars across all sections (default 8000, 0=unlimited)"),
+    limit: z.number().optional().describe("Max memories per layer (default 100)"),
   },
-  async ({ hours, namespace }) => {
+  async ({ hours, namespace, workspace, compact, budget, limit }) => {
     const params = new URLSearchParams();
     if (hours !== undefined) params.set("hours", String(hours));
     if (namespace !== undefined) params.set("ns", namespace);
+    if (workspace !== undefined) params.set("workspace", workspace);
+    if (compact !== undefined) params.set("compact", String(compact));
+    if (budget !== undefined) params.set("budget", String(budget));
+    if (limit !== undefined) params.set("limit", String(limit));
     const qs = params.toString();
     const result = await engramFetch(`/resume${qs ? "?" + qs : ""}`);
     return {
