@@ -35,6 +35,7 @@ Retrieval is budget-aware: you specify a token limit and get the optimal selecti
 - Near-duplicate detection on insert
 - Supersede: replace outdated memories by id
 - Sync embedding: `sync_embed: true` blocks until embedding is ready (no async race window)
+- Transparent LLM proxy: auto-extract memories from any LLM conversation, protocol-agnostic
 - Trigger memories: tag with `trigger:action-name`, fetch via `GET /triggers/:action` before risky operations
 - Multi-agent namespace isolation
 - Query expansion: LLM bridges abstract queries to concrete terms
@@ -184,6 +185,37 @@ Promotes frequently-accessed important memories upward, drops decayed entries. W
 | `POST` | `/import` | Import memories (skips existing ids) |
 | `POST` | `/memories/batch` | Batch create |
 | `DELETE` | `/memories/batch` | Batch delete (`{"ids": [...]}`) |
+| `ANY` | `/proxy/*` | Transparent LLM proxy (requires `ENGRAM_PROXY_UPSTREAM`) |
+| `GET` | `/ui` | Web dashboard |
+
+## LLM Proxy
+
+engram can sit between your tools and any LLM API, automatically extracting memories from conversations. Protocol-agnostic — works with OpenAI, Anthropic, Gemini, Ollama, or any provider.
+
+```bash
+# Enable by setting the upstream URL
+export ENGRAM_PROXY_UPSTREAM=https://api.openai.com
+
+# Now point your tools at engram instead of the provider:
+# Before: https://api.openai.com/v1/chat/completions
+# After:  http://localhost:3917/proxy/v1/chat/completions
+
+curl http://localhost:3917/proxy/v1/chat/completions \
+  -H "Authorization: Bearer sk-your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}'
+```
+
+How it works:
+1. Forwards request and headers to upstream verbatim (zero parsing)
+2. Streams the response back with no added latency
+3. After the exchange completes, asynchronously extracts key facts/decisions/preferences via LLM
+4. Stores extracted memories in the buffer layer (source: `proxy`, tagged `auto-extract`)
+
+Three ways to build memory — use any combination:
+- **Proxy**: automatic, no agent changes needed
+- **API**: `POST /memories` for explicit storage
+- **MCP**: `engram_store` tool for Claude Desktop, Cursor, etc.
 
 ## MCP
 
@@ -222,6 +254,8 @@ Tools: `engram_store`, `engram_recall`, `engram_recent`, `engram_resume`, `engra
 | `ENGRAM_EMBED_MODEL` | `text-embedding-3-small` | Embedding model |
 | `ENGRAM_CONSOLIDATE_MINS` | `30` | Auto-consolidation interval (0 to disable) |
 | `ENGRAM_AUTO_MERGE` | `false` | Enable LLM merge in auto-consolidation |
+| `ENGRAM_PROXY_UPSTREAM` | — | LLM proxy upstream URL (enables `/proxy/*`) |
+| `ENGRAM_PROXY_KEY` | — | Fallback API key for proxy (if client doesn't send auth) |
 | `RUST_LOG` | `info` | Log level |
 
 ## License
