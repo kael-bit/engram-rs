@@ -6,132 +6,206 @@
 <title>engram</title>
 <style>
 :root {
-  --bg: #0d1117; --surface: #161b22; --border: #30363d;
-  --text: #c9d1d9; --text-dim: #8b949e; --accent: #58a6ff;
-  --green: #3fb950; --yellow: #d29922; --red: #f85149;
-  --purple: #bc8cff;
+  --bg: #09090b; --bg-subtle: #0f0f13; --surface: #131318; --surface-hover: #1a1a22;
+  --border: rgba(255,255,255,.06); --border-hover: rgba(255,255,255,.12);
+  --text: #e4e4e7; --text-secondary: #a1a1aa; --text-muted: #63637a;
+  --accent: #6366f1; --accent-hover: #818cf8; --accent-glow: rgba(99,102,241,.15);
+  --blue: #3b82f6; --amber: #f59e0b; --purple: #a855f7;
+  --green: #22c55e; --red: #ef4444;
+  --blue-dim: rgba(59,130,246,.12); --amber-dim: rgba(245,158,11,.12);
+  --purple-dim: rgba(168,85,247,.12); --green-dim: rgba(34,197,94,.1);
+  --radius: 10px; --radius-sm: 6px; --radius-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.3), 0 1px 3px rgba(0,0,0,.15);
+  --shadow-md: 0 4px 12px rgba(0,0,0,.4), 0 1px 4px rgba(0,0,0,.2);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.3);
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  --transition: .2s cubic-bezier(.4,0,.2,1);
 }
-* { margin:0; padding:0; box-sizing:border-box; }
-body { background:var(--bg); color:var(--text); font:14px/1.6 -apple-system,'Segoe UI',sans-serif; }
-.app { display:flex; height:100vh; }
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font:13px/1.6 var(--font);-webkit-font-smoothing:antialiased;}
+::selection{background:var(--accent);color:#fff;}
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:3px;}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.14);}
+.app{display:flex;height:100vh;overflow:hidden;}
 
-/* Sidebar */
-.sidebar { width:220px; background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; }
-.sidebar h1 { padding:14px 16px; font-size:16px; border-bottom:1px solid var(--border); }
-.sidebar h1 span { color:var(--text-dim); font-weight:normal; font-size:11px; }
-.nav { list-style:none; padding:6px 8px; }
-.nav li { padding:7px 10px; border-radius:6px; cursor:pointer; display:flex; align-items:center; gap:7px; font-size:13px; }
-.nav li:hover { background:var(--border); }
-.nav li.active { background:var(--accent); color:#fff; }
-.nav .ct { margin-left:auto; font-size:11px; color:var(--text-dim); }
-.nav li.active .ct { color:rgba(255,255,255,.7); }
-.sidebar-bottom { padding:8px; margin-top:auto; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:4px; }
-.sidebar-bottom button { width:100%; background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:5px; color:var(--text); cursor:pointer; font-size:12px; }
-.sidebar-bottom button:hover { border-color:var(--accent); }
+/* ─── Sidebar ─── */
+.sidebar{width:224px;background:var(--bg-subtle);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;}
+.sidebar-brand{padding:18px 18px 14px;display:flex;align-items:baseline;gap:8px;}
+.sidebar-brand h1{font-size:17px;font-weight:700;letter-spacing:-.02em;background:linear-gradient(135deg,var(--accent),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.sidebar-brand span{font-size:10px;color:var(--text-muted);font-weight:500;letter-spacing:.02em;}
+.nav-section{padding:0 10px;margin-top:6px;}
+.nav-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);padding:10px 8px 4px;}
+.nav{list-style:none;}
+.nav li{padding:7px 10px;border-radius:var(--radius-sm);cursor:pointer;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);transition:all var(--transition);position:relative;margin:1px 0;}
+.nav li .icon{width:18px;text-align:center;font-size:13px;flex-shrink:0;}
+.nav li:hover{background:rgba(255,255,255,.04);color:var(--text);}
+.nav li.active{background:var(--accent-glow);color:var(--text);}
+.nav li.active::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:16px;background:var(--accent);border-radius:0 2px 2px 0;}
+.nav .ct{margin-left:auto;font-size:10px;font-weight:600;color:var(--text-muted);font-family:var(--mono);min-width:18px;text-align:right;}
+.nav li.active .ct{color:var(--accent-hover);}
+.sidebar-actions{padding:10px;margin-top:auto;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:4px;}
+.sidebar-actions button{width:100%;background:transparent;border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px;color:var(--text-secondary);cursor:pointer;font-size:11px;font-weight:500;transition:all var(--transition);display:flex;align-items:center;justify-content:center;gap:5px;}
+.sidebar-actions button:hover{border-color:var(--border-hover);background:rgba(255,255,255,.03);color:var(--text);}
 
-/* Main */
-.main { flex:1; overflow-y:auto; padding:20px 24px; }
+/* ─── Main ─── */
+.main{flex:1;overflow-y:auto;padding:24px 28px;background:var(--bg);}
+.main h2{font-size:18px;font-weight:600;letter-spacing:-.02em;margin-bottom:18px;color:var(--text);}
+.main h3{font-size:14px;font-weight:600;letter-spacing:-.01em;color:var(--text-secondary);}
 
-/* Stat cards */
-.stats { display:flex; gap:10px; margin-bottom:18px; flex-wrap:wrap; }
-.sc { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; min-width:90px; }
-.sc .v { font-size:22px; font-weight:700; }
-.sc .l { font-size:11px; color:var(--text-dim); }
+/* ─── Stat Cards ─── */
+.stats{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;}
+.sc{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;min-width:100px;transition:all var(--transition);position:relative;overflow:hidden;}
+.sc:hover{border-color:var(--border-hover);transform:translateY(-1px);box-shadow:var(--shadow-sm);}
+.sc .v{font-size:26px;font-weight:700;letter-spacing:-.03em;font-family:var(--mono);line-height:1.1;}
+.sc .l{font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin-top:4px;}
+.sc.buf .v{color:var(--blue);}
+.sc.wrk .v{color:var(--amber);}
+.sc.cor .v{color:var(--purple);}
+.sc.tot .v{color:var(--text);}
+.sc.grn .v{color:var(--green);}
 
-/* Inputs */
-.row { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center; }
-input[type=text], input[type=number], select, textarea {
-  background:var(--surface); border:1px solid var(--border); border-radius:6px;
-  padding:7px 10px; color:var(--text); font-size:13px; outline:none;
-}
-input:focus, textarea:focus, select:focus { border-color:var(--accent); }
-textarea { resize:vertical; font-family:inherit; }
-.btn { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:7px 14px; cursor:pointer; font-size:13px; white-space:nowrap; }
-.btn:hover { opacity:.9; }
-.btn-danger { background:var(--red); }
-.btn-muted { background:var(--surface); border:1px solid var(--border); color:var(--text); }
-.btn-muted:hover { border-color:var(--accent); }
+/* ─── Inputs ─── */
+.row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;}
+input[type=text],input[type=number],select,textarea{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:8px 12px;color:var(--text);font-size:13px;outline:none;font-family:var(--font);
+  transition:all var(--transition);}
+input[type=text]:focus,input[type=number]:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow);}
+input::placeholder,textarea::placeholder{color:var(--text-muted);}
+textarea{resize:vertical;}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);padding:8px 16px;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;transition:all var(--transition);font-family:var(--font);}
+.btn:hover{background:var(--accent-hover);box-shadow:0 0 16px var(--accent-glow);}
+.btn:active{transform:scale(.98);}
+.btn-danger{background:var(--red);}
+.btn-danger:hover{background:#dc2626;box-shadow:0 0 16px rgba(239,68,68,.2);}
+.btn-muted{background:transparent;border:1px solid var(--border);color:var(--text-secondary);}
+.btn-muted:hover{border-color:var(--border-hover);background:rgba(255,255,255,.03);color:var(--text);}
+label{font-size:12px;color:var(--text-secondary);}
 
-/* Memory cards */
-.ml { display:flex; flex-direction:column; gap:6px; }
-.mc { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; cursor:pointer; transition:border-color .15s; }
-.mc:hover { border-color:var(--accent); }
-.mc .ct { white-space:pre-wrap; word-break:break-word; font-size:13px; }
-.mc .meta { display:flex; gap:10px; margin-top:6px; font-size:11px; color:var(--text-dim); flex-wrap:wrap; align-items:center; }
-.mc .score { color:var(--green); font-weight:600; }
-.lb { display:inline-block; padding:1px 6px; border-radius:4px; font-size:10px; font-weight:600; }
-.l1 { background:rgba(88,166,255,.15); color:var(--accent); }
-.l2 { background:rgba(210,153,34,.15); color:var(--yellow); }
-.l3 { background:rgba(188,140,255,.15); color:var(--purple); }
-.tag { display:inline-block; padding:1px 5px; border-radius:3px; font-size:10px; background:var(--border); color:var(--text-dim); }
-.kind-badge { display:inline-block; padding:1px 5px; border-radius:3px; font-size:10px; background:rgba(63,185,80,.15); color:var(--green); }
+/* ─── Memory Cards ─── */
+.ml{display:flex;flex-direction:column;gap:6px;}
+.mc{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;cursor:pointer;transition:all var(--transition);}
+.mc:hover{border-color:var(--border-hover);background:var(--surface-hover);transform:translateY(-1px);box-shadow:var(--shadow-sm);}
+.mc .ct{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.55;color:var(--text);}
+.mc .meta{display:flex;gap:8px;margin-top:8px;font-size:11px;color:var(--text-muted);flex-wrap:wrap;align-items:center;}
+.mc .score{color:var(--green);font-weight:600;font-family:var(--mono);}
+.lb{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:.02em;}
+.l1{background:var(--blue-dim);color:var(--blue);}
+.l2{background:var(--amber-dim);color:var(--amber);}
+.l3{background:var(--purple-dim);color:var(--purple);}
+.tag{display:inline-block;padding:2px 6px;border-radius:4px;font-size:10px;background:rgba(255,255,255,.05);color:var(--text-muted);font-weight:500;}
+.kind-badge{display:inline-block;padding:2px 6px;border-radius:4px;font-size:10px;background:var(--green-dim);color:var(--green);font-weight:500;}
 
-/* Detail overlay */
-.detail { position:fixed; top:0; right:0; bottom:0; width:460px; background:var(--surface); border-left:1px solid var(--border); z-index:20; overflow-y:auto; padding:20px; transform:translateX(100%); transition:transform .2s ease; }
-.detail.open { transform:translateX(0); }
-.detail .close { float:right; background:none; border:none; color:var(--text-dim); font-size:18px; cursor:pointer; }
-.df { margin-bottom:10px; }
-.df .dl { font-size:11px; color:var(--text-dim); margin-bottom:3px; }
-.df .dv { font-size:13px; white-space:pre-wrap; word-break:break-word; }
-.bar { height:5px; background:var(--border); border-radius:3px; overflow:hidden; margin-top:3px; }
-.bar-fill { height:100%; border-radius:3px; }
+/* ─── Detail Overlay ─── */
+.detail-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:19;opacity:0;pointer-events:none;transition:opacity .25s ease;}
+.detail-backdrop.open{opacity:1;pointer-events:auto;}
+.detail{position:fixed;top:0;right:0;bottom:0;width:480px;background:var(--bg-subtle);border-left:1px solid var(--border);z-index:20;overflow-y:auto;padding:24px;transform:translateX(100%);transition:transform .3s cubic-bezier(.4,0,.2,1);box-shadow:-8px 0 30px rgba(0,0,0,.4);}
+.detail.open{transform:translateX(0);}
+.detail-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border);}
+.detail-header h3{font-size:15px;font-weight:600;}
+.close{background:rgba(255,255,255,.05);border:none;color:var(--text-muted);font-size:14px;cursor:pointer;width:28px;height:28px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;transition:all var(--transition);}
+.close:hover{background:rgba(255,255,255,.1);color:var(--text);}
+.df{margin-bottom:14px;}
+.df .dl{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:5px;}
+.df .dv{font-size:13px;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary);}
+.bar{height:4px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;margin-top:6px;}
+.bar-fill{height:100%;border-radius:2px;transition:width .3s ease;}
+.detail-actions{display:flex;gap:8px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border);}
 
-/* Toast */
-.toast-container { position:fixed; top:16px; right:16px; z-index:100; display:flex; flex-direction:column; gap:8px; }
-.toast { padding:10px 16px; border-radius:8px; font-size:13px; color:#fff; animation:fadeIn .2s; max-width:360px; }
-.toast.ok { background:#238636; }
-.toast.err { background:var(--red); }
-@keyframes fadeIn { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:none} }
+/* ─── Toast ─── */
+.toast-container{position:fixed;top:16px;right:16px;z-index:100;display:flex;flex-direction:column;gap:6px;pointer-events:none;}
+.toast{padding:10px 16px;border-radius:var(--radius);font-size:13px;color:#fff;animation:toastIn .3s cubic-bezier(.4,0,.2,1);max-width:380px;pointer-events:auto;box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:8px;backdrop-filter:blur(12px);}
+.toast.ok{background:rgba(34,197,94,.9);}
+.toast.err{background:rgba(239,68,68,.9);}
+.toast .toast-icon{font-size:14px;flex-shrink:0;}
+@keyframes toastIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
+@keyframes toastOut{from{opacity:1;transform:none}to{opacity:0;transform:translateX(20px)}}
+.toast.out{animation:toastOut .2s ease forwards;}
 
-/* Empty */
-.empty { text-align:center; padding:50px 20px; color:var(--text-dim); }
+/* ─── Empty State ─── */
+.empty{text-align:center;padding:60px 20px;color:var(--text-muted);}
+.empty-icon{font-size:36px;margin-bottom:10px;opacity:.5;}
+.empty-text{font-size:13px;}
 
-/* Table */
-.ftable { width:100%; border-collapse:collapse; font-size:13px; }
-.ftable th, .ftable td { padding:6px 10px; border-bottom:1px solid var(--border); text-align:left; }
-.ftable th { color:var(--text-dim); font-size:11px; font-weight:600; text-transform:uppercase; }
-.ftable tr:hover { background:rgba(88,166,255,.05); }
+/* ─── Table ─── */
+.ftable{width:100%;border-collapse:collapse;font-size:13px;}
+.ftable th,.ftable td{padding:8px 12px;text-align:left;}
+.ftable th{color:var(--text-muted);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--border);}
+.ftable td{border-bottom:1px solid var(--border);}
+.ftable tbody tr{transition:background var(--transition);}
+.ftable tbody tr:hover{background:rgba(255,255,255,.02);}
+.ftable tbody tr:last-child td{border-bottom:none;}
 
-/* Dot */
-.dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
-.dot.on { background:var(--green); box-shadow:0 0 5px var(--green); }
-.dot.off { background:var(--red); }
+/* ─── Status Dot ─── */
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+.dot.on{background:var(--green);box-shadow:0 0 8px rgba(34,197,94,.5);}
+.dot.off{background:var(--red);box-shadow:0 0 8px rgba(239,68,68,.3);}
 
-/* Pagination */
-.pager { display:flex; gap:8px; margin-top:12px; align-items:center; justify-content:center; font-size:12px; color:var(--text-dim); }
-.pager button { background:var(--surface); border:1px solid var(--border); color:var(--text); border-radius:4px; padding:4px 10px; cursor:pointer; font-size:12px; }
-.pager button:disabled { opacity:.4; cursor:default; }
+/* ─── Pagination ─── */
+.pager{display:flex;gap:8px;margin-top:14px;align-items:center;justify-content:center;font-size:12px;color:var(--text-muted);}
+.pager button{background:var(--surface);border:1px solid var(--border);color:var(--text-secondary);border-radius:var(--radius-sm);padding:5px 12px;cursor:pointer;font-size:12px;transition:all var(--transition);}
+.pager button:hover:not(:disabled){border-color:var(--border-hover);background:var(--surface-hover);}
+.pager button:disabled{opacity:.3;cursor:default;}
+.pager span{font-family:var(--mono);font-size:11px;}
 
-@media(max-width:768px) {
-  .sidebar { width:54px; }
-  .sidebar h1, .nav .nl, .nav .ct, .sidebar-bottom { display:none; }
-  .detail { width:100%; }
+/* ─── Conflict Card ─── */
+.conflict-card{margin-bottom:12px;padding:14px;background:var(--surface);border:1px solid rgba(239,68,68,.2);border-radius:var(--radius);transition:all var(--transition);}
+.conflict-card:hover{border-color:rgba(239,68,68,.35);}
+.conflict-header{font-weight:600;margin-bottom:8px;font-size:13px;}
+.conflict-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;}
+
+/* ─── Section Cards ─── */
+.section-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:14px;}
+.section-card h3{margin-bottom:12px;}
+
+/* ─── Responsive ─── */
+@media(max-width:768px){
+  .sidebar{width:54px;}
+  .sidebar-brand h1,.nav .nl,.nav .ct,.sidebar-actions,.nav-label{display:none;}
+  .sidebar-brand{padding:14px;justify-content:center;}
+  .sidebar-brand span{display:none;}
+  .nav li{justify-content:center;padding:8px;}
+  .detail{width:100%;}
+  .main{padding:16px;}
 }
 </style>
 </head>
 <body>
 <div class="app">
 <div class="sidebar">
-  <h1>engram <span id="ver"></span></h1>
-  <ul class="nav" id="nav">
-    <li class="active" data-v="all"><span>📋</span><span class="nl">All</span><span class="ct" id="c-all">0</span></li>
-    <li data-v="buffer"><span>🟦</span><span class="nl">Buffer</span><span class="ct" id="c-buf">0</span></li>
-    <li data-v="working"><span>🟨</span><span class="nl">Working</span><span class="ct" id="c-wrk">0</span></li>
-    <li data-v="core"><span>🟪</span><span class="nl">Core</span><span class="ct" id="c-cor">0</span></li>
-    <li data-v="recall"><span>🔍</span><span class="nl">Recall</span></li>
-    <li data-v="search"><span>🔎</span><span class="nl">Search</span></li>
-    <li data-v="create"><span>✏️</span><span class="nl">Create</span></li>
-    <li data-v="facts"><span>🔗</span><span class="nl">Facts</span></li>
-    <li data-v="proxy"><span>🔀</span><span class="nl">Proxy</span><span class="ct" id="c-prx">0</span></li>
-    <li data-v="health"><span>📊</span><span class="nl">Health</span></li>
-    <li data-v="tools"><span>🛠️</span><span class="nl">Tools</span></li>
-  </ul>
-  <div class="sidebar-bottom">
-    <button onclick="doAction('/consolidate','POST','{}')">🔄 Consolidate</button>
-    <button onclick="doAction('/repair','POST')">🔧 Repair</button>
+  <div class="sidebar-brand"><h1>engram</h1><span id="ver"></span></div>
+  <div class="nav-section">
+    <div class="nav-label">Memory</div>
+    <ul class="nav" id="nav">
+      <li class="active" data-v="all"><span class="icon">◉</span><span class="nl">All Memories</span><span class="ct" id="c-all">0</span></li>
+      <li data-v="buffer"><span class="icon">◆</span><span class="nl">Buffer</span><span class="ct" id="c-buf">0</span></li>
+      <li data-v="working"><span class="icon">◆</span><span class="nl">Working</span><span class="ct" id="c-wrk">0</span></li>
+      <li data-v="core"><span class="icon">◆</span><span class="nl">Core</span><span class="ct" id="c-cor">0</span></li>
+    </ul>
+    <div class="nav-label">Search</div>
+    <ul class="nav" id="nav2">
+      <li data-v="recall"><span class="icon">⊙</span><span class="nl">Recall</span></li>
+      <li data-v="search"><span class="icon">⌕</span><span class="nl">Search</span></li>
+    </ul>
+    <div class="nav-label">Manage</div>
+    <ul class="nav" id="nav3">
+      <li data-v="create"><span class="icon">＋</span><span class="nl">Create</span></li>
+      <li data-v="facts"><span class="icon">◈</span><span class="nl">Facts</span></li>
+      <li data-v="proxy"><span class="icon">⇌</span><span class="nl">Proxy</span><span class="ct" id="c-prx">0</span></li>
+      <li data-v="health"><span class="icon">♥</span><span class="nl">Health</span></li>
+      <li data-v="tools"><span class="icon">⚙</span><span class="nl">Tools</span></li>
+    </ul>
+  </div>
+  <div class="sidebar-actions">
+    <button onclick="doAction('/consolidate','POST','{}')">⟳ Consolidate</button>
+    <button onclick="doAction('/repair','POST')">⚡ Repair FTS</button>
   </div>
 </div>
 <div class="main" id="main"></div>
+<div class="detail-backdrop" id="backdrop" onclick="closeDetail()"></div>
 <div class="detail" id="detail"></div>
 </div>
 <div class="toast-container" id="toasts"></div>
@@ -147,17 +221,17 @@ function ln(l) { return ['','Buffer','Working','Core'][l]||'?'; }
 function lc(n) { return {buffer:1,working:2,core:3}[n]||0; }
 function ago(ms) {
   const s=(Date.now()-ms)/1e3;
-  if(s<60) return Math.floor(s)+'s';
-  if(s<3600) return Math.floor(s/60)+'m';
-  if(s<86400) return Math.floor(s/3600)+'h';
-  return Math.floor(s/86400)+'d';
+  if(s<60) return Math.floor(s)+'s ago';
+  if(s<3600) return Math.floor(s/60)+'m ago';
+  if(s<86400) return Math.floor(s/3600)+'h ago';
+  return Math.floor(s/86400)+'d ago';
 }
 function toast(msg,ok=true) {
   const el=document.createElement('div');
   el.className='toast '+(ok?'ok':'err');
-  el.textContent=msg;
+  el.innerHTML=`<span class="toast-icon">${ok?'✓':'✕'}</span><span>${esc(msg)}</span>`;
   document.getElementById('toasts').appendChild(el);
-  setTimeout(()=>el.remove(),3000);
+  setTimeout(()=>{el.classList.add('out');setTimeout(()=>el.remove(),200);},3000);
 }
 
 async function api(path, opts={}) {
@@ -200,7 +274,7 @@ function card(m, score) {
     <div class="ct">${esc((m.content||'').slice(0,280))}${m.content&&m.content.length>280?'…':''}</div>
     <div class="meta">
       <span class="lb l${m.layer}">${ln(m.layer)}</span>${sc}${kind}
-      <span>imp:${(m.importance||0).toFixed(2)}</span>
+      <span>imp ${(m.importance||0).toFixed(2)}</span>
       <span>×${m.access_count||0}</span>
       <span>${ago(m.created_at)}</span>${tags}
     </div></div>`;
@@ -222,27 +296,29 @@ function renderList(mems, scores) {
   const total=sorted.length;
   const paged=sorted.slice(page*PER_PAGE,(page+1)*PER_PAGE);
   const pages=Math.ceil(total/PER_PAGE);
+  const viewTitle={all:'All Memories',buffer:'Buffer',working:'Working Memory',core:'Core Memory',proxy:'Proxy'}[curView]||'Memories';
 
   M.innerHTML=`
+    <h2>${viewTitle}</h2>
     <div class="stats">
-      <div class="sc"><div class="v">${stats.total||0}</div><div class="l">Total</div></div>
-      <div class="sc"><div class="v">${stats.buffer||0}</div><div class="l">Buffer</div></div>
-      <div class="sc"><div class="v">${stats.working||0}</div><div class="l">Working</div></div>
-      <div class="sc"><div class="v">${stats.core||0}</div><div class="l">Core</div></div>
+      <div class="sc tot"><div class="v">${stats.total||0}</div><div class="l">Total</div></div>
+      <div class="sc buf"><div class="v">${stats.buffer||0}</div><div class="l">Buffer</div></div>
+      <div class="sc wrk"><div class="v">${stats.working||0}</div><div class="l">Working</div></div>
+      <div class="sc cor"><div class="v">${stats.core||0}</div><div class="l">Core</div></div>
     </div>
     <div class="row">
-      <input type="text" id="flt" placeholder="Filter..." style="flex:1" oninput="applyFilter()">
-      <select id="sortSel" onchange="changeSort(this.value)" style="width:140px">
-        <option value="created_at">Newest</option>
-        <option value="importance">Importance</option>
-        <option value="access_count">Access Count</option>
-        <option value="last_accessed">Last Accessed</option>
+      <input type="text" id="flt" placeholder="Filter memories..." style="flex:1" oninput="applyFilter()">
+      <select id="sortSel" onchange="changeSort(this.value)" style="width:150px">
+        <option value="created_at">Newest first</option>
+        <option value="importance">By importance</option>
+        <option value="access_count">By access count</option>
+        <option value="last_accessed">Last accessed</option>
       </select>
     </div>
-    <div class="ml" id="memList">${paged.map((m,i)=>card(m,scores?scores[page*PER_PAGE+i]:null)).join('')}</div>
+    <div class="ml" id="memList">${paged.length?paged.map((m,i)=>card(m,scores?scores[page*PER_PAGE+i]:null)).join(''):'<div class="empty"><div class="empty-icon">◇</div><div class="empty-text">No memories found</div></div>'}</div>
     ${pages>1?`<div class="pager">
       <button onclick="goPage(${page-1})" ${page===0?'disabled':''}>← Prev</button>
-      <span>${page+1} / ${pages} (${total})</span>
+      <span>${page+1} / ${pages} · ${total} total</span>
       <button onclick="goPage(${page+1})" ${page>=pages-1?'disabled':''}>Next →</button>
     </div>`:''}`;
   bindCards();
@@ -260,7 +336,7 @@ function applyFilter() {
   }
   const sorted=sortMem(mems);
   const el=document.getElementById('memList');
-  if(el) { el.innerHTML=sorted.slice(0,PER_PAGE).map(m=>card(m)).join(''); bindCards(); }
+  if(el) { el.innerHTML=sorted.slice(0,PER_PAGE).map(m=>card(m)).join('')||'<div class="empty"><div class="empty-icon">◇</div><div class="empty-text">No matches</div></div>'; bindCards(); }
 }
 
 function bindCards() {
@@ -272,16 +348,19 @@ function showDetail(id) {
   if(!m) return;
   const p=document.getElementById('detail');
   const imp=(m.importance*100).toFixed(0);
+  const barColor=m.importance>.7?'var(--green)':m.importance>.4?'var(--amber)':'var(--text-muted)';
   p.innerHTML=`
-    <button class="close" onclick="closeDetail()">✕</button>
-    <h3 style="margin-bottom:14px">${ln(m.layer)} Memory</h3>
-    <div class="df"><div class="dl">ID</div><div class="dv" style="font-family:monospace;font-size:11px">${m.id}</div></div>
-    <div class="df"><div class="dl">Content</div>
-      <textarea id="editContent" rows="6" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:13px">${esc(m.content)}</textarea>
+    <div class="detail-header">
+      <h3><span class="lb l${m.layer}" style="margin-right:8px">${ln(m.layer)}</span>Memory</h3>
+      <button class="close" onclick="closeDetail()">✕</button>
     </div>
-    <div class="df"><div class="dl">Importance (${imp}%)</div>
-      <input type="range" id="editImp" min="0" max="1" step="0.05" value="${m.importance}" style="width:100%">
-      <div class="bar"><div class="bar-fill" style="width:${imp}%;background:${m.importance>.7?'var(--green)':m.importance>.4?'var(--yellow)':'var(--text-dim)'}"></div></div>
+    <div class="df"><div class="dl">ID</div><div class="dv" style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">${m.id}</div></div>
+    <div class="df"><div class="dl">Content</div>
+      <textarea id="editContent" rows="6" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;transition:border-color var(--transition)" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">${esc(m.content)}</textarea>
+    </div>
+    <div class="df"><div class="dl">Importance · ${imp}%</div>
+      <input type="range" id="editImp" min="0" max="1" step="0.05" value="${m.importance}" style="width:100%;accent-color:var(--accent)">
+      <div class="bar"><div class="bar-fill" style="width:${imp}%;background:${barColor}"></div></div>
     </div>
     <div class="df"><div class="dl">Layer</div>
       <select id="editLayer" style="width:100%">
@@ -293,21 +372,27 @@ function showDetail(id) {
     <div class="df"><div class="dl">Tags</div>
       <input type="text" id="editTags" value="${(m.tags||[]).join(', ')}" style="width:100%">
     </div>
-    <div class="df"><div class="dl">Kind</div><div class="dv">${m.kind||'semantic'}</div></div>
-    <div class="df"><div class="dl">Source</div><div class="dv">${esc(m.source||'—')}</div></div>
-    <div class="df"><div class="dl">Access / Repetition</div><div class="dv">${m.access_count||0} / ${m.repetition_count||0}</div></div>
-    <div class="df"><div class="dl">Namespace</div><div class="dv">${esc(m.namespace||'default')}</div></div>
-    <div class="df"><div class="dl">Created</div><div class="dv">${new Date(m.created_at).toLocaleString()}</div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="df"><div class="dl">Kind</div><div class="dv">${m.kind||'semantic'}</div></div>
+      <div class="df"><div class="dl">Source</div><div class="dv">${esc(m.source||'—')}</div></div>
+      <div class="df"><div class="dl">Access / Repetition</div><div class="dv">${m.access_count||0} / ${m.repetition_count||0}</div></div>
+      <div class="df"><div class="dl">Decay Rate</div><div class="dv">${m.decay_rate}</div></div>
+      <div class="df"><div class="dl">Namespace</div><div class="dv">${esc(m.namespace||'default')}</div></div>
+      <div class="df"><div class="dl">Created</div><div class="dv">${new Date(m.created_at).toLocaleString()}</div></div>
+    </div>
     <div class="df"><div class="dl">Last Accessed</div><div class="dv">${new Date(m.last_accessed).toLocaleString()}</div></div>
-    <div class="df"><div class="dl">Decay Rate</div><div class="dv">${m.decay_rate}</div></div>
-    <div style="display:flex;gap:8px;margin-top:16px">
-      <button class="btn" onclick="saveMem('${m.id}')">Save</button>
+    <div class="detail-actions">
+      <button class="btn" onclick="saveMem('${m.id}')">Save Changes</button>
       <button class="btn btn-danger" onclick="deleteMem('${m.id}')">Delete</button>
     </div>`;
   p.classList.add('open');
+  document.getElementById('backdrop').classList.add('open');
 }
 
-function closeDetail() { document.getElementById('detail').classList.remove('open'); }
+function closeDetail() {
+  document.getElementById('detail').classList.remove('open');
+  document.getElementById('backdrop').classList.remove('open');
+}
 
 async function saveMem(id) {
   const body = {};
@@ -318,32 +403,34 @@ async function saveMem(id) {
   body.content=ct; body.importance=imp; body.layer=layer; body.tags=tags;
   try {
     await api('/memories/'+id,{method:'PATCH',body:JSON.stringify(body)});
-    toast('Saved'); closeDetail(); await refresh();
+    toast('Memory saved'); closeDetail(); await refresh();
   } catch(e) { toast('Error: '+e.message,false); }
 }
 
 async function deleteMem(id) {
   if(!confirm('Delete this memory?')) return;
   await api('/memories/'+id,{method:'DELETE'});
-  toast('Deleted'); closeDetail(); await refresh();
+  toast('Memory deleted'); closeDetail(); await refresh();
 }
 
 // --- Views ---
 function renderRecall() {
   document.getElementById('main').innerHTML=`
-    <h2 style="margin-bottom:14px">🔍 Recall</h2>
-    <div class="row">
-      <input type="text" id="rQ" placeholder="Query..." style="flex:1" onkeydown="if(event.key==='Enter')doRecall()">
-      <button class="btn" onclick="doRecall()">Recall</button>
+    <h2>Semantic Recall</h2>
+    <div class="section-card">
+      <div class="row">
+        <input type="text" id="rQ" placeholder="What are you looking for?" style="flex:1" onkeydown="if(event.key==='Enter')doRecall()">
+        <button class="btn" onclick="doRecall()">Recall</button>
+      </div>
+      <div class="row" style="margin-bottom:0">
+        <label><input type="checkbox" id="rExp" style="accent-color:var(--accent)"> expand</label>
+        <label>limit <input type="number" id="rLim" value="10" min="1" max="50" style="width:55px"></label>
+        <label>min score <input type="number" id="rMin" value="0.3" min="0" max="1" step=".05" style="width:60px"></label>
+        <input type="text" id="rTags" placeholder="tags filter" style="width:120px">
+        <select id="rKind" style="width:100px"><option value="">any kind</option><option>semantic</option><option>episodic</option><option>procedural</option></select>
+      </div>
     </div>
-    <div class="row">
-      <label style="font-size:12px"><input type="checkbox" id="rExp"> expand</label>
-      <label style="font-size:12px">limit: <input type="number" id="rLim" value="10" min="1" max="50" style="width:55px"></label>
-      <label style="font-size:12px">min_score: <input type="number" id="rMin" value="0.3" min="0" max="1" step=".05" style="width:60px"></label>
-      <input type="text" id="rTags" placeholder="tags filter" style="width:120px">
-      <select id="rKind" style="width:100px"><option value="">any kind</option><option>semantic</option><option>episodic</option><option>procedural</option></select>
-    </div>
-    <div id="rRes"></div>`;
+    <div id="rRes"><div class="empty"><div class="empty-icon">⊙</div><div class="empty-text">Enter a query to recall relevant memories</div></div></div>`;
 }
 
 async function doRecall() {
@@ -355,59 +442,63 @@ async function doRecall() {
   const kind=document.getElementById('rKind').value;
   if(tags) body.tags=tags.split(',').map(t=>t.trim());
   if(kind) body.kind=kind;
-  document.getElementById('rRes').innerHTML='<div class="empty">Searching...</div>';
+  document.getElementById('rRes').innerHTML='<div class="empty"><div class="empty-text">Searching...</div></div>';
   const t0=performance.now();
   const d=await api('/recall',{method:'POST',body:JSON.stringify(body)});
   const ms=(performance.now()-t0).toFixed(0);
   const r=d.memories||[];
   document.getElementById('rRes').innerHTML=`
-    <div style="font-size:12px;color:var(--text-dim);margin:8px 0">${r.length} results in ${ms}ms</div>
-    <div class="ml">${r.map(m=>card(m,m.relevance)).join('')}</div>`;
+    <div style="font-size:12px;color:var(--text-muted);margin:12px 0 8px;font-family:var(--mono)">${r.length} results · ${ms}ms</div>
+    <div class="ml">${r.length?r.map(m=>card(m,m.relevance)).join(''):'<div class="empty"><div class="empty-icon">◇</div><div class="empty-text">No relevant memories found</div></div>'}</div>`;
   bindCards();
 }
 
 function renderSearch() {
   document.getElementById('main').innerHTML=`
-    <h2 style="margin-bottom:14px">🔎 Text Search</h2>
-    <div class="row">
-      <input type="text" id="sQ" placeholder="Search text..." style="flex:1" onkeydown="if(event.key==='Enter')doSearch()">
-      <button class="btn" onclick="doSearch()">Search</button>
+    <h2>Full-Text Search</h2>
+    <div class="section-card">
+      <div class="row" style="margin-bottom:0">
+        <input type="text" id="sQ" placeholder="Search memories..." style="flex:1" onkeydown="if(event.key==='Enter')doSearch()">
+        <button class="btn" onclick="doSearch()">Search</button>
+      </div>
     </div>
-    <div id="sRes"></div>`;
+    <div id="sRes"><div class="empty"><div class="empty-icon">⌕</div><div class="empty-text">Enter a query to search memories</div></div></div>`;
 }
 
 async function doSearch() {
   const q=document.getElementById('sQ').value.trim(); if(!q) return;
-  document.getElementById('sRes').innerHTML='<div class="empty">Searching...</div>';
+  document.getElementById('sRes').innerHTML='<div class="empty"><div class="empty-text">Searching...</div></div>';
   const t0=performance.now();
   const d=await api('/search?q='+encodeURIComponent(q));
   const ms=(performance.now()-t0).toFixed(0);
   const r=d.memories||d||[];
   const mems=Array.isArray(r)?r:[];
   document.getElementById('sRes').innerHTML=`
-    <div style="font-size:12px;color:var(--text-dim);margin:8px 0">${mems.length} results in ${ms}ms (FTS)</div>
-    <div class="ml">${mems.map(m=>card(m,m.relevance)).join('')}</div>`;
+    <div style="font-size:12px;color:var(--text-muted);margin:12px 0 8px;font-family:var(--mono)">${mems.length} results · ${ms}ms · FTS</div>
+    <div class="ml">${mems.length?mems.map(m=>card(m,m.relevance)).join(''):'<div class="empty"><div class="empty-icon">◇</div><div class="empty-text">No results</div></div>'}</div>`;
   bindCards();
 }
 
 function renderCreate() {
   document.getElementById('main').innerHTML=`
-    <h2 style="margin-bottom:14px">✏️ Create Memory</h2>
-    <div style="display:flex;flex-direction:column;gap:10px;max-width:560px">
-      <textarea id="ccontent" rows="5" placeholder="Memory content..." style="width:100%"></textarea>
-      <input type="text" id="ctags" placeholder="Tags (comma-separated)" style="width:100%">
-      <input type="text" id="csource" placeholder="Source (optional)" style="width:100%">
-      <div class="row">
-        <label style="font-size:12px">Kind:
-          <select id="ckind"><option value="semantic">semantic</option><option value="episodic">episodic</option><option value="procedural">procedural</option></select>
-        </label>
-        <label style="font-size:12px">Importance:
-          <input type="range" id="cimp" min="0" max="1" step=".05" value="0.5" oninput="document.getElementById('cimpv').textContent=this.value">
-          <span id="cimpv">0.5</span>
-        </label>
-        <label style="font-size:12px"><input type="checkbox" id="csync"> sync_embed</label>
+    <h2>Create Memory</h2>
+    <div class="section-card" style="max-width:580px">
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <textarea id="ccontent" rows="5" placeholder="Memory content..." style="width:100%"></textarea>
+        <input type="text" id="ctags" placeholder="Tags (comma-separated)" style="width:100%">
+        <input type="text" id="csource" placeholder="Source (optional)" style="width:100%">
+        <div class="row" style="margin-bottom:0">
+          <label>Kind
+            <select id="ckind"><option value="semantic">semantic</option><option value="episodic">episodic</option><option value="procedural">procedural</option></select>
+          </label>
+          <label>Importance
+            <input type="range" id="cimp" min="0" max="1" step=".05" value="0.5" style="accent-color:var(--accent)" oninput="document.getElementById('cimpv').textContent=this.value">
+            <span id="cimpv" style="font-family:var(--mono);font-size:12px">0.5</span>
+          </label>
+          <label><input type="checkbox" id="csync" style="accent-color:var(--accent)"> sync embed</label>
+        </div>
+        <button class="btn" onclick="doCreate()" style="width:fit-content">Create Memory</button>
       </div>
-      <button class="btn" onclick="doCreate()" style="width:fit-content">Create</button>
       <div id="cResult"></div>
     </div>`;
 }
@@ -425,21 +516,23 @@ async function doCreate() {
   if(sync_embed) body.sync_embed=true;
   try {
     const m=await api('/memories',{method:'POST',body:JSON.stringify(body)});
-    toast('Created: '+m.id.slice(0,8)); document.getElementById('ccontent').value='';
+    toast('Created '+m.id.slice(0,8)); document.getElementById('ccontent').value='';
     loadMem(); loadStats();
   } catch(e) { toast('Error: '+e.message,false); }
 }
 
 function renderFacts() {
   document.getElementById('main').innerHTML=`
-    <h2 style="margin-bottom:14px">🔗 Facts</h2>
-    <div class="row">
-      <input type="text" id="fSubj" placeholder="Subject" style="width:140px">
-      <input type="text" id="fPred" placeholder="Predicate" style="width:140px">
-      <input type="text" id="fObj" placeholder="Object" style="width:140px">
-      <button class="btn" onclick="queryFacts()">Query</button>
-      <button class="btn btn-muted" onclick="loadAllFacts()">All</button>
-      <button class="btn btn-muted" onclick="loadConflicts()">Conflicts</button>
+    <h2>Knowledge Graph</h2>
+    <div class="section-card">
+      <div class="row" style="margin-bottom:0">
+        <input type="text" id="fSubj" placeholder="Subject" style="width:140px">
+        <input type="text" id="fPred" placeholder="Predicate" style="width:140px">
+        <input type="text" id="fObj" placeholder="Object" style="width:140px">
+        <button class="btn" onclick="queryFacts()">Query</button>
+        <button class="btn btn-muted" onclick="loadAllFacts()">All</button>
+        <button class="btn btn-muted" onclick="loadConflicts()">Conflicts</button>
+      </div>
     </div>
     <div id="fRes"></div>`;
   loadAllFacts();
@@ -466,15 +559,15 @@ async function queryFacts() {
 async function loadConflicts() {
   const d=await api('/facts/conflicts');
   const c=d.conflicts||d||[];
-  if(!c.length) { document.getElementById('fRes').innerHTML='<div class="empty">No conflicts found</div>'; return; }
-  let html='<h3 style="margin:12px 0 8px;font-size:14px">⚠️ Conflicts</h3>';
+  if(!c.length) { document.getElementById('fRes').innerHTML='<div class="empty"><div class="empty-icon">✓</div><div class="empty-text">No conflicts found</div></div>'; return; }
+  let html='<h3 style="margin:16px 0 10px">Conflicts</h3>';
   for(const group of c) {
-    html+=`<div style="margin-bottom:12px;padding:10px;background:var(--surface);border:1px solid var(--red);border-radius:8px">
-      <div style="font-weight:600;margin-bottom:6px">${esc(group.subject)} → ${esc(group.predicate)}</div>`;
+    html+=`<div class="conflict-card">
+      <div class="conflict-header">${esc(group.subject)} → ${esc(group.predicate)}</div>`;
     for(const f of (group.facts||[])) {
-      html+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0">
-        <span>${esc(f.object)} <span style="color:var(--text-dim);font-size:11px">${new Date(f.created_at).toLocaleDateString()}</span></span>
-        <button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="delFact('${f.id}')">×</button>
+      html+=`<div class="conflict-row">
+        <span>${esc(f.object)} <span style="color:var(--text-muted);font-size:11px">${new Date(f.created_at).toLocaleDateString()}</span></span>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px" onclick="delFact('${f.id}')">✕</button>
       </div>`;
     }
     html+='</div>';
@@ -483,15 +576,16 @@ async function loadConflicts() {
 }
 
 function renderFactTable(facts, title) {
-  if(!facts.length) { document.getElementById('fRes').innerHTML='<div class="empty">No facts</div>'; return; }
+  if(!facts.length) { document.getElementById('fRes').innerHTML='<div class="empty"><div class="empty-icon">◈</div><div class="empty-text">No facts</div></div>'; return; }
   document.getElementById('fRes').innerHTML=`
-    <div style="font-size:12px;color:var(--text-dim);margin:8px 0">${title}: ${facts.length}</div>
+    <div style="font-size:12px;color:var(--text-muted);margin:14px 0 8px;font-family:var(--mono)">${title} · ${facts.length}</div>
+    <div class="section-card" style="padding:0;overflow:hidden">
     <table class="ftable"><thead><tr><th>Subject</th><th>Predicate</th><th>Object</th><th>Created</th><th></th></tr></thead>
     <tbody>${facts.map(f=>`<tr>
-      <td>${esc(f.subject)}</td><td>${esc(f.predicate)}</td><td>${esc(f.object)}</td>
-      <td style="font-size:11px;color:var(--text-dim)">${new Date(f.created_at).toLocaleDateString()}</td>
-      <td><button class="btn btn-danger" style="padding:1px 6px;font-size:10px" onclick="delFact('${f.id}')">×</button></td>
-    </tr>`).join('')}</tbody></table>`;
+      <td style="font-weight:500">${esc(f.subject)}</td><td style="color:var(--text-secondary)">${esc(f.predicate)}</td><td>${esc(f.object)}</td>
+      <td style="font-size:11px;color:var(--text-muted);font-family:var(--mono)">${new Date(f.created_at).toLocaleDateString()}</td>
+      <td><button class="btn btn-danger" style="padding:2px 8px;font-size:10px" onclick="delFact('${f.id}')">✕</button></td>
+    </tr>`).join('')}</tbody></table></div>`;
 }
 
 async function delFact(id) {
@@ -505,19 +599,19 @@ async function renderProxy() {
   const p=health.proxy||{};
   const mems=allMem.filter(m=>m.source==='proxy');
   M.innerHTML=`
-    <h2 style="margin-bottom:14px">🔀 Proxy</h2>
-    <div class="row" style="gap:12px">
+    <h2>Proxy</h2>
+    <div class="row" style="gap:10px;align-items:center;margin-bottom:16px">
       <span class="dot ${p.enabled?'on':'off'}"></span>
-      <span>${p.enabled?'<b style="color:var(--green)">Enabled</b>':'<b style="color:var(--red)">Disabled</b>'}</span>
+      <span style="font-weight:500;color:${p.enabled?'var(--green)':'var(--red)'}">${p.enabled?'Active':'Inactive'}</span>
     </div>
     <div class="stats">
-      <div class="sc"><div class="v">${p.requests||0}</div><div class="l">Requests</div></div>
-      <div class="sc"><div class="v">${p.buffered_turns||0}</div><div class="l">Buffered</div></div>
-      <div class="sc"><div class="v">${p.extracted||0}</div><div class="l">Extracted</div></div>
-      <div class="sc"><div class="v">${mems.length}</div><div class="l">Memories</div></div>
+      <div class="sc grn"><div class="v">${p.requests||0}</div><div class="l">Requests</div></div>
+      <div class="sc buf"><div class="v">${p.buffered_turns||0}</div><div class="l">Buffered</div></div>
+      <div class="sc cor"><div class="v">${p.extracted||0}</div><div class="l">Extracted</div></div>
+      <div class="sc tot"><div class="v">${mems.length}</div><div class="l">Memories</div></div>
     </div>
     <div class="row"><button class="btn btn-muted" onclick="doAction('/proxy/flush','POST')">Flush Window</button></div>
-    <div class="ml">${mems.length?mems.map(m=>card(m)).join(''):'<div class="empty">No proxy memories yet</div>'}</div>`;
+    <div class="ml">${mems.length?mems.map(m=>card(m)).join(''):'<div class="empty"><div class="empty-icon">⇌</div><div class="empty-text">No proxy memories yet</div></div>'}</div>`;
   bindCards();
 }
 
@@ -528,52 +622,67 @@ function renderHealth() {
   const upM=Math.floor(((h.uptime_secs||0)%3600)/60);
   const cache=h.embed_cache||{};
   const p=h.proxy||{};
+  const hitRate=cache.hits+cache.misses>0?((cache.hits/(cache.hits+cache.misses))*100).toFixed(1):'—';
   M.innerHTML=`
-    <h2 style="margin-bottom:14px">📊 Health</h2>
+    <h2>System Health</h2>
     <div class="stats">
-      <div class="sc"><div class="v">${h.version||'?'}</div><div class="l">Version</div></div>
-      <div class="sc"><div class="v">${upH}h${upM}m</div><div class="l">Uptime</div></div>
-      <div class="sc"><div class="v">${h.rss_mb||'?'} MB</div><div class="l">RSS</div></div>
-      <div class="sc"><div class="v">${h.db_size_mb||'?'} MB</div><div class="l">DB Size</div></div>
+      <div class="sc cor"><div class="v">${h.version||'?'}</div><div class="l">Version</div></div>
+      <div class="sc buf"><div class="v">${upH}h${upM}m</div><div class="l">Uptime</div></div>
+      <div class="sc wrk"><div class="v">${h.rss_mb||'?'}</div><div class="l">RSS (MB)</div></div>
+      <div class="sc tot"><div class="v">${h.db_size_mb||'?'}</div><div class="l">DB (MB)</div></div>
     </div>
-    <h3 style="margin:16px 0 8px;font-size:14px">Embed Cache</h3>
-    <div class="stats">
-      <div class="sc"><div class="v">${cache.hits||0}</div><div class="l">Hits</div></div>
-      <div class="sc"><div class="v">${cache.misses||0}</div><div class="l">Misses</div></div>
-      <div class="sc"><div class="v">${cache.size||0}/${cache.capacity||0}</div><div class="l">Size</div></div>
+    <div class="section-card">
+      <h3 style="margin-bottom:12px">Embedding Cache</h3>
+      <div class="stats" style="margin-bottom:0">
+        <div class="sc grn"><div class="v">${cache.hits||0}</div><div class="l">Hits</div></div>
+        <div class="sc"><div class="v">${cache.misses||0}</div><div class="l">Misses</div></div>
+        <div class="sc buf"><div class="v">${hitRate}%</div><div class="l">Hit Rate</div></div>
+        <div class="sc"><div class="v">${cache.size||0}<span style="font-size:14px;color:var(--text-muted)">/${cache.capacity||0}</span></div><div class="l">Size</div></div>
+      </div>
     </div>
-    <h3 style="margin:16px 0 8px;font-size:14px">Proxy</h3>
-    <div class="stats">
-      <div class="sc"><div class="v"><span class="dot ${p.enabled?'on':'off'}"></span></div><div class="l">Status</div></div>
-      <div class="sc"><div class="v">${p.requests||0}</div><div class="l">Requests</div></div>
-      <div class="sc"><div class="v">${p.extracted||0}</div><div class="l">Extracted</div></div>
-      <div class="sc"><div class="v">${p.buffered_turns||0}</div><div class="l">Buffered</div></div>
+    <div class="section-card">
+      <h3 style="margin-bottom:12px">Proxy</h3>
+      <div class="stats" style="margin-bottom:0">
+        <div class="sc"><div class="v"><span class="dot ${p.enabled?'on':'off'}"></span></div><div class="l">Status</div></div>
+        <div class="sc"><div class="v">${p.requests||0}</div><div class="l">Requests</div></div>
+        <div class="sc"><div class="v">${p.extracted||0}</div><div class="l">Extracted</div></div>
+        <div class="sc"><div class="v">${p.buffered_turns||0}</div><div class="l">Buffered</div></div>
+      </div>
     </div>
-    <h3 style="margin:16px 0 8px;font-size:14px">Memory by Kind</h3>
-    <div class="stats">
-      ${Object.entries(stats.by_kind||{}).map(([k,v])=>`<div class="sc"><div class="v">${v}</div><div class="l">${k}</div></div>`).join('')}
-    </div>`;
+    ${stats.by_kind?`<div class="section-card">
+      <h3 style="margin-bottom:12px">By Kind</h3>
+      <div class="stats" style="margin-bottom:0">
+        ${Object.entries(stats.by_kind).map(([k,v])=>`<div class="sc"><div class="v">${v}</div><div class="l">${k}</div></div>`).join('')}
+      </div>
+    </div>`:''}`;
 }
 
 function renderTools() {
   document.getElementById('main').innerHTML=`
-    <h2 style="margin-bottom:14px">🛠️ Tools</h2>
-    <div style="display:flex;flex-direction:column;gap:12px;max-width:560px">
-      <div class="row">
-        <button class="btn btn-muted" onclick="doAction('/sanitize','POST')">🛡️ Sanitize</button>
-        <button class="btn btn-muted" onclick="doAction('/vacuum','POST')">🗜️ Vacuum</button>
-        <button class="btn btn-muted" onclick="doAction('/audit','POST','{}')">📋 Audit</button>
-        <button class="btn btn-muted" onclick="doAction('/repair?force=true','POST')">🔧 Full Rebuild</button>
+    <h2>Tools</h2>
+    <div class="section-card" style="max-width:580px">
+      <h3 style="margin-bottom:10px">Maintenance</h3>
+      <div class="row" style="margin-bottom:0">
+        <button class="btn btn-muted" onclick="doAction('/sanitize','POST')">Sanitize</button>
+        <button class="btn btn-muted" onclick="doAction('/vacuum','POST')">Vacuum</button>
+        <button class="btn btn-muted" onclick="doAction('/audit','POST','{}')">Audit</button>
+        <button class="btn btn-muted" onclick="doAction('/repair?force=true','POST')">Full Rebuild</button>
       </div>
-      <h3 style="font-size:14px;margin-top:8px">Extract Memories from Text</h3>
-      <textarea id="extText" rows="6" placeholder="Paste conversation or text to extract memories from..." style="width:100%"></textarea>
-      <button class="btn" onclick="doExtract()" style="width:fit-content">Extract</button>
+    </div>
+    <div class="section-card" style="max-width:580px">
+      <h3 style="margin-bottom:10px">Extract from Text</h3>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <textarea id="extText" rows="5" placeholder="Paste conversation or text to extract memories from..." style="width:100%"></textarea>
+        <button class="btn" onclick="doExtract()" style="width:fit-content">Extract Memories</button>
+      </div>
       <div id="extRes"></div>
-      <h3 style="font-size:14px;margin-top:12px">Import / Export</h3>
-      <div class="row">
-        <button class="btn btn-muted" onclick="doExport(false)">📥 Export JSON</button>
-        <button class="btn btn-muted" onclick="doExport(true)">📥 Export + Embeddings</button>
-        <label class="btn btn-muted" style="cursor:pointer">📤 Import <input type="file" accept=".json" style="display:none" onchange="doImport(this)"></label>
+    </div>
+    <div class="section-card" style="max-width:580px">
+      <h3 style="margin-bottom:10px">Import / Export</h3>
+      <div class="row" style="margin-bottom:0">
+        <button class="btn btn-muted" onclick="doExport(false)">Export JSON</button>
+        <button class="btn btn-muted" onclick="doExport(true)">Export + Embeddings</button>
+        <label class="btn btn-muted" style="cursor:pointer">Import <input type="file" accept=".json" style="display:none" onchange="doImport(this)"></label>
       </div>
       <div id="impRes"></div>
     </div>`;
@@ -581,11 +690,11 @@ function renderTools() {
 
 async function doExtract() {
   const text=document.getElementById('extText').value.trim(); if(!text) return;
-  document.getElementById('extRes').innerHTML='<div class="empty">Extracting...</div>';
+  document.getElementById('extRes').innerHTML='<div class="empty"><div class="empty-text">Extracting...</div></div>';
   try {
     const d=await api('/extract',{method:'POST',body:JSON.stringify({text})});
     const mems=d.memories||d||[];
-    document.getElementById('extRes').innerHTML=`<div style="font-size:12px;color:var(--text-dim);margin:6px 0">Extracted ${mems.length} memories</div>
+    document.getElementById('extRes').innerHTML=`<div style="font-size:12px;color:var(--text-muted);margin:10px 0 6px;font-family:var(--mono)">Extracted ${mems.length} memories</div>
       <div class="ml">${mems.map(m=>card(m)).join('')}</div>`;
     toast('Extracted '+mems.length+' memories');
     await refresh();
@@ -608,8 +717,8 @@ async function doImport(input) {
   const text=await file.text();
   try {
     const d=await api('/import',{method:'POST',body:text});
-    toast('Imported: '+(d.imported||0)+' memories');
-    document.getElementById('impRes').innerHTML=`<div style="color:var(--green);font-size:13px">Imported ${d.imported||0} memories, ${d.skipped||0} skipped</div>`;
+    toast('Imported '+(d.imported||0)+' memories');
+    document.getElementById('impRes').innerHTML=`<div style="color:var(--green);font-size:13px;margin-top:8px">Imported ${d.imported||0} memories, ${d.skipped||0} skipped</div>`;
     await refresh();
   } catch(e) { toast('Import failed: '+e.message,false); }
 }
@@ -620,7 +729,7 @@ async function doAction(path, method, body) {
     if(body) opts.body=typeof body==='string'?body:JSON.stringify(body);
     const d=await api(path,opts);
     const msg=typeof d==='string'?d:JSON.stringify(d);
-    toast(path+': '+msg.slice(0,80));
+    toast(path.slice(1)+': '+msg.slice(0,80));
     await refresh();
   } catch(e) { toast('Error: '+e.message,false); }
 }
@@ -643,15 +752,16 @@ function switchView(v) {
   else renderList(getMem());
 }
 
-document.getElementById('nav').onclick=e=>{const li=e.target.closest('li');if(li)switchView(li.dataset.v);};
+// Bind all nav groups
+document.querySelectorAll('.nav').forEach(nav=>{
+  nav.onclick=e=>{const li=e.target.closest('li');if(li)switchView(li.dataset.v);};
+});
 document.onkeydown=e=>{
   if(e.key==='Escape') closeDetail();
   if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();switchView('search');setTimeout(()=>{const el=document.getElementById('sQ');if(el)el.focus();},50);}
 };
 
-// Auto-refresh every 30s
 setInterval(()=>Promise.all([loadStats(),loadMem()]),30000);
-
 refresh();
 </script>
 </body>
