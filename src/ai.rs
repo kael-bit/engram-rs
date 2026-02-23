@@ -22,6 +22,7 @@ pub struct AiConfig {
     pub rerank_model: Option<String>,
     pub expand_model: Option<String>,
     pub proxy_model: Option<String>,
+    pub gate_model: Option<String>,
 }
 
 impl AiConfig {
@@ -32,6 +33,7 @@ impl AiConfig {
             "rerank" => self.rerank_model.as_deref(),
             "expand" => self.expand_model.as_deref(),
             "proxy" => self.proxy_model.as_deref(),
+            "gate" => self.gate_model.as_deref(),
             _ => None,
         };
         m.unwrap_or(&self.llm_model)
@@ -74,6 +76,7 @@ impl AiConfig {
             rerank_model: std::env::var("ENGRAM_RERANK_MODEL").ok(),
             expand_model: std::env::var("ENGRAM_EXPAND_MODEL").ok(),
             proxy_model: std::env::var("ENGRAM_PROXY_MODEL").ok(),
+            gate_model: std::env::var("ENGRAM_GATE_MODEL").ok(),
         })
     }
 

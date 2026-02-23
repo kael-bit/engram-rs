@@ -517,6 +517,194 @@ fn find_clusters(mems: &[&(Memory, Vec<f64>)], threshold: f64) -> Vec<Vec<usize>
     clusters
 }
 
+// --- Memory Audit ---
+
+const AUDIT_SYSTEM: &str = r#"You are reviewing an AI agent's memory store. You see ALL memories organized by layer.
+Your job: reorganize them. Output a JSON array of operations.
+
+## Layers
+- Core (3): Permanent. Identity, values, key relationships, hard-won lessons, strategic goals.
+- Working (2): Useful but not permanent. Project context, recent learnings, operational knowledge.
+- Buffer (1): Temporary. Will auto-expire. Session logs, transient notes.
+
+## Operations (output as JSON array)
+- {"op":"promote","id":"<8-char-id>","to":3} — move to Core (only for truly permanent knowledge)
+- {"op":"demote","id":"<8-char-id>","to":2} or {"op":"demote","id":"<8-char-id>","to":1}
+- {"op":"merge","ids":["id1","id2"],"content":"merged text","layer":2,"tags":["tag1"]}
+- {"op":"delete","id":"<8-char-id>"} — remove (duplicate, obsolete, or garbage)
+
+## Guidelines
+- Core should be SMALL: identity, values, lessons, key relationships, strategic constraints
+- Technical details, bug fixes, version notes, config values → Working at most
+- Near-duplicate memories → merge into one, keep the best content
+- Session logs older than a few days with no unique insight → delete
+- Be aggressive about merges. If two memories say similar things, merge them.
+- Output ONLY a valid JSON array. Empty array [] if no changes needed."#;
+
+/// Full audit: reviews Core+Working memories using the gate model.
+pub async fn audit_memories(cfg: &AiConfig, db: &crate::db::MemoryDB) -> Result<AuditResult, String> {
+    let core = db.list_by_layer_meta(crate::db::Layer::Core, 200, 0);
+    let working = db.list_by_layer_meta(crate::db::Layer::Working, 200, 0);
+
+    let mut prompt = String::with_capacity(16_000);
+    prompt.push_str("## Core Layer\n");
+    for m in &core {
+        let tags = m.tags.join(",");
+        let preview: String = m.content.chars().take(200).collect();
+        prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
+            &m.id[..8], m.importance, m.access_count, tags, preview));
+    }
+    prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
+    for m in &working {
+        let tags = m.tags.join(",");
+        let preview: String = m.content.chars().take(200).collect();
+        prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
+            &m.id[..8], m.importance, m.access_count, tags, preview));
+    }
+
+    let response = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
+    let ops = parse_audit_ops(&response, &core, &working);
+
+    let mut result = AuditResult {
+        total_reviewed: core.len() + working.len(),
+        ..Default::default()
+    };
+
+    for op in &ops {
+        match op {
+            AuditOp::Promote { id, to } => {
+                if let Ok(Some(_)) = db.update_fields(id, None, Some(*to), None, None) {
+                    result.promoted += 1;
+                }
+            }
+            AuditOp::Demote { id, to } => {
+                if let Ok(Some(_)) = db.update_fields(id, None, Some(*to), Some(0.5), None) {
+                    result.demoted += 1;
+                }
+            }
+            AuditOp::Delete { id } => {
+                if db.delete(id).is_ok() {
+                    result.deleted += 1;
+                }
+            }
+            AuditOp::Merge { ids, content, layer, tags } => {
+                let input = crate::db::MemoryInput {
+                    content: content.clone(),
+                    layer: Some(*layer),
+                    tags: Some(tags.clone()),
+                    supersedes: Some(ids.clone()),
+                    source: Some("audit".into()),
+                    ..Default::default()
+                };
+                if db.insert(input).is_ok() {
+                    result.merged += 1;
+                }
+            }
+        }
+    }
+    result.ops = ops;
+    Ok(result)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "op")]
+pub enum AuditOp {
+    #[serde(rename = "promote")]
+    Promote { id: String, to: u8 },
+    #[serde(rename = "demote")]
+    Demote { id: String, to: u8 },
+    #[serde(rename = "delete")]
+    Delete { id: String },
+    #[serde(rename = "merge")]
+    Merge { ids: Vec<String>, content: String, layer: u8, tags: Vec<String> },
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+pub struct AuditResult {
+    pub total_reviewed: usize,
+    pub promoted: usize,
+    pub demoted: usize,
+    pub deleted: usize,
+    pub merged: usize,
+    pub ops: Vec<AuditOp>,
+}
+
+fn parse_audit_ops(
+    response: &str,
+    core: &[crate::db::Memory],
+    working: &[crate::db::Memory],
+) -> Vec<AuditOp> {
+    let json_str = response
+        .find('[')
+        .and_then(|start| response.rfind(']').map(|end| &response[start..=end]))
+        .unwrap_or("[]");
+
+    let arr: Vec<serde_json::Value> = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+
+    let mut id_map = std::collections::HashMap::new();
+    for m in core.iter().chain(working.iter()) {
+        if m.id.len() >= 8 {
+            id_map.insert(m.id[..8].to_string(), m.id.clone());
+        }
+    }
+
+    let resolve = |short: &str| -> Option<String> {
+        if short.len() >= 32 {
+            Some(short.to_string())
+        } else {
+            id_map.get(short).cloned()
+        }
+    };
+
+    let mut ops = Vec::new();
+    for item in &arr {
+        let op_type = item.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        match op_type {
+            "promote" => {
+                if let (Some(id), Some(to)) = (
+                    item.get("id").and_then(|v| v.as_str()).and_then(&resolve),
+                    item.get("to").and_then(|v| v.as_u64()).map(|n| n as u8),
+                ) {
+                    if (1..=3).contains(&to) { ops.push(AuditOp::Promote { id, to }); }
+                }
+            }
+            "demote" => {
+                if let (Some(id), Some(to)) = (
+                    item.get("id").and_then(|v| v.as_str()).and_then(&resolve),
+                    item.get("to").and_then(|v| v.as_u64()).map(|n| n as u8),
+                ) {
+                    if (1..=3).contains(&to) { ops.push(AuditOp::Demote { id, to }); }
+                }
+            }
+            "delete" => {
+                if let Some(id) = item.get("id").and_then(|v| v.as_str()).and_then(&resolve) {
+                    ops.push(AuditOp::Delete { id });
+                }
+            }
+            "merge" => {
+                let ids: Vec<String> = item.get("ids")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|v| v.as_str().and_then(&resolve)).collect())
+                    .unwrap_or_default();
+                let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let layer = item.get("layer").and_then(|v| v.as_u64()).unwrap_or(2) as u8;
+                let tags: Vec<String> = item.get("tags")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+                if ids.len() >= 2 && !content.is_empty() {
+                    ops.push(AuditOp::Merge { ids, content, layer, tags });
+                }
+            }
+            _ => {}
+        }
+    }
+    ops
+}
+
 
 #[cfg(test)]
 mod tests {

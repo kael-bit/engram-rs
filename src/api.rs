@@ -178,7 +178,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /resume?hours=4&workspace=tags&limit=100": "full memory bootstrap (core + working + buffer + recent + sessions)",
             "GET /triggers/:action": "pre-action recall (e.g. /triggers/git-push)",
             "POST /consolidate": "run maintenance cycle",
-            "POST /audit": "list all memories grouped by layer for review",
+            "POST /audit": "LLM-powered memory reorganization (uses ENGRAM_GATE_MODEL)",
             "POST /repair": "auto-repair FTS index (remove orphans, rebuild missing)",
             "POST /vacuum": "reclaim disk space (?full=true for full vacuum)",
             "POST /extract": "LLM-extract memories from text",
@@ -991,42 +991,15 @@ async fn do_consolidate(
     Ok(Json(result))
 }
 
-/// Generate a memory audit report for agent self-review.
-/// Lists all memories grouped by layer with stats. No automatic changes.
+/// LLM-powered memory audit. Reviews Core+Working, reorganizes via gate model.
+/// Configure a capable model with ENGRAM_GATE_MODEL (e.g. claude-sonnet-4-5-20250514).
 async fn do_audit(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
-    let db = state.db.clone();
-    let report = blocking(move || {
-        let core = db.list_by_layer_meta(crate::db::Layer::Core, 500, 0);
-        let working = db.list_by_layer_meta(crate::db::Layer::Working, 500, 0);
-        let buffer = db.list_by_layer_meta(crate::db::Layer::Buffer, 500, 0);
-
-        let format = |memories: &[crate::db::Memory]| -> Vec<serde_json::Value> {
-            memories.iter().map(|m| {
-                serde_json::json!({
-                    "id": m.id,
-                    "content": m.content,
-                    "importance": m.importance,
-                    "access_count": m.access_count,
-                    "repetition_count": m.repetition_count,
-                    "source": m.source,
-                    "tags": m.tags,
-                    "created_at": m.created_at,
-                    "last_accessed": m.last_accessed,
-                })
-            }).collect()
-        };
-
-        serde_json::json!({
-            "core": { "count": core.len(), "memories": format(&core) },
-            "working": { "count": working.len(), "memories": format(&working) },
-            "buffer": { "count": buffer.len(), "memories": format(&buffer) },
-            "total": core.len() + working.len() + buffer.len(),
-        })
-    }).await?;
-
-    Ok(Json(report))
+    let ai = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
+    let result = consolidate::audit_memories(ai, &state.db).await
+        .map_err(EngramError::AiBackend)?;
+    Ok(Json(serde_json::to_value(result).unwrap_or_default()))
 }
 
 async fn do_repair(
