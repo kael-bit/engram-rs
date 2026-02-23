@@ -387,7 +387,7 @@ Detection covers instruction overrides, role-play injection, model-specific cont
 Recall combines multiple signals:
 
 - **Semantic search**: cosine similarity on embeddings (requires AI)
-- **FTS5 keyword search**: BM25 with CJK bigram tokenization
+- **FTS5 keyword search**: BM25 with jieba segmentation for Chinese and bigram tokenization for Japanese/Korean
 - **Fact lookup**: exact entity matching via the facts table
 - **Composite scoring**: `(0.6 × relevance + 0.2 × importance + 0.2 × recency) × layer_bonus`
 
@@ -468,7 +468,7 @@ engram runs autonomously — no cron or external scheduler needed:
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` | Health + endpoint list |
-| `GET` | `/health` | Detailed health (uptime, RSS, cache stats) |
+| `GET` | `/health` | Detailed health (uptime, RSS, cache stats) — same as `/` |
 | `GET` | `/stats` | Layer counts |
 | `POST` | `/memories` | Create memory |
 | `POST` | `/memories/batch` | Batch create |
@@ -483,6 +483,8 @@ engram runs autonomously — no cron or external scheduler needed:
 | `GET` | `/resume` | Session recovery (`?hours=4&compact=true&budget=8000`) |
 | `GET` | `/triggers/:action` | Pre-action recall |
 | `POST` | `/consolidate` | Maintenance cycle (`{"merge": true}` for LLM merge) |
+| `POST` | `/audit` | LLM-powered memory reorganization (requires AI) |
+| `POST` | `/sanitize` | Check text for injection risk (`{"content": "..."}`) |
 | `POST` | `/extract` | LLM text → structured memories |
 | `POST` | `/repair` | Fix FTS index + backfill embeddings |
 | `POST` | `/vacuum` | Reclaim disk space |
@@ -495,6 +497,7 @@ engram runs autonomously — no cron or external scheduler needed:
 | `GET` | `/facts/history` | Fact history (`?subject=X&predicate=Y`) |
 | `DELETE` | `/facts/:id` | Delete fact |
 | `ANY` | `/proxy/*` | Transparent LLM proxy |
+| `POST` | `/proxy/flush` | Flush buffered proxy conversations for extraction |
 | `GET` | `/ui` | Web dashboard |
 
 ## MCP Tools
