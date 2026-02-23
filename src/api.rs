@@ -68,14 +68,19 @@ pub fn router(state: AppState) -> Router {
         .route("/consolidate", post(do_consolidate))
         .route("/extract", post(do_extract))
         .route("/export", get(do_export))
-        .route("/import", post(do_import))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
-    // 64KB ought to be enough for anybody — content cap is 8K chars (~24KB UTF-8),
-    // extract text can be longer but 64KB is plenty
+    // Import needs a bigger body limit for exports with embeddings
+    let import_route = Router::new()
+        .route("/import", post(do_import))
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth))
+        .layer(RequestBodyLimitLayer::new(32 * 1024 * 1024)); // 32MB
+
+    // 64KB for normal operations, 32MB for import
     public
         .merge(protected)
         .layer(RequestBodyLimitLayer::new(64 * 1024))
+        .merge(import_route)
         .with_state(state)
 }
 
