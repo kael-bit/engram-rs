@@ -7,3 +7,4 @@
 /mcp/node_modules
 /mcp/dist
 .sync_state
+AUDIT.md
