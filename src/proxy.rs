@@ -204,21 +204,25 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
     let req_preview: String = req_text.chars().take(max_chars).collect();
     let res_preview: String = res_text.chars().take(max_chars).collect();
 
-    let system = "You extract memories from LLM conversations. Be extremely selective.\n\
-        Rules:\n\
-        - MAX 3 items per extraction. Quality over quantity.\n\
-        - Only extract NEW information: concrete decisions, specific preferences, \
-          learned lessons, or critical facts.\n\
-        - Each item must be specific and actionable, not vague summaries.\n\
-        - Skip: anything that sounds like a summary or recap of prior context.\n\
-        - Skip: routine technical details, code snippets, debugging steps.\n\
-        - Skip: general knowledge that anyone could look up.\n\
-        - If nothing genuinely new and important was discussed, return [].\n\
-        Return a JSON array of {\"content\": \"...\", \"tags\": [\"...\"]}. Keep content under 200 chars.";
+    let system = "You extract long-term memories from LLM conversations. Be EXTREMELY selective.\n\
+        Most conversations have NOTHING worth extracting. Return [] by default.\n\n\
+        Only extract if you find:\n\
+        - A USER's stated preference, rule, or boundary (not the assistant's)\n\
+        - A concrete decision that changes how something works going forward\n\
+        - A hard-won lesson from a mistake or failure\n\
+        - A critical fact that would be painful to rediscover\n\n\
+        NEVER extract:\n\
+        - Task descriptions, instructions, or assignments\n\
+        - Technical implementation details (code, config, API calls)\n\
+        - Summaries or recaps of what was done\n\
+        - The assistant's suggestions or explanations\n\
+        - Anything about UI, styling, or frontend requirements\n\
+        - System prompts or context that was injected\n\n\
+        MAX 2 items. Return JSON array of {\"content\": \"...\", \"tags\": [\"...\"]}.\n\
+        Content must be under 150 chars — one sentence, no fluff.";
 
     let user = format!(
-        "Extract at most 3 genuinely new, important memories from this exchange.\n\
-         If this is just routine conversation with nothing worth remembering, return [].\n\n\
+        "Extract 0-2 genuinely important long-term memories. Default to [].\n\n\
          === REQUEST ===\n{req_preview}\n\n=== RESPONSE ===\n{res_preview}"
     );
 
@@ -252,10 +256,18 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
     }
 
     let count = entries.len();
+    let mut stored = 0;
     for entry in entries {
         if entry.content.is_empty() {
             continue;
         }
+
+        // Dedup: skip if we already have something very similar
+        if state.db.is_near_duplicate(&entry.content) {
+            debug!("proxy: skipping duplicate extraction");
+            continue;
+        }
+
         let mut tags = entry.tags;
         tags.push("auto-extract".into());
 
@@ -268,10 +280,16 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
 
         if let Err(e) = state.db.insert(input) {
             warn!("proxy: failed to store extracted memory: {e}");
+        } else {
+            stored += 1;
         }
     }
 
-    info!(count, "proxy: extracted and stored memories");
+    if stored > 0 {
+        info!(stored, extracted = count, "proxy: stored memories");
+    } else if count > 0 {
+        debug!(extracted = count, "proxy: all extractions were duplicates");
+    }
 }
 
 #[derive(serde::Deserialize)]

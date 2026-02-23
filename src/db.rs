@@ -1099,6 +1099,11 @@ impl MemoryDB {
 
     /// Check if content is a near-duplicate of an existing memory.
     /// Uses token-level Jaccard similarity (threshold ~0.8).
+    /// Check if content is near-duplicate of an existing memory (default namespace).
+    pub fn is_near_duplicate(&self, content: &str) -> bool {
+        self.find_near_duplicate(content, "").is_some()
+    }
+
     fn find_near_duplicate(&self, content: &str, ns: &str) -> Option<Memory> {
         // Use only the first 200 chars for the FTS query — enough for similarity matching
         let query_text = if content.len() > 200 {
