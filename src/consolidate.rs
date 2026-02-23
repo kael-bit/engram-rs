@@ -542,36 +542,86 @@ Your job: reorganize them. Output a JSON array of operations.
 - Output ONLY a valid JSON array. Empty array [] if no changes needed."#;
 
 /// Full audit: reviews Core+Working memories using the gate model.
+/// Chunks automatically if total prompt would exceed ~100K chars.
 pub async fn audit_memories(cfg: &AiConfig, db: &crate::db::MemoryDB) -> Result<AuditResult, String> {
-    let core = db.list_by_layer_meta(crate::db::Layer::Core, 200, 0);
-    let working = db.list_by_layer_meta(crate::db::Layer::Working, 200, 0);
+    let core = db.list_by_layer_meta(crate::db::Layer::Core, 500, 0);
+    let working = db.list_by_layer_meta(crate::db::Layer::Working, 500, 0);
 
+    let all: Vec<&crate::db::Memory> = core.iter().chain(working.iter()).collect();
+
+    // ~300 chars per formatted memory entry (200 content + metadata)
+    const CHARS_PER_ENTRY: usize = 300;
+    const MAX_PROMPT_CHARS: usize = 100_000;
+    let max_per_batch = MAX_PROMPT_CHARS / CHARS_PER_ENTRY; // ~333
+
+    let mut combined = AuditResult {
+        total_reviewed: all.len(),
+        ..Default::default()
+    };
+
+    // Core always goes in first batch (small, provides context)
+    // Working gets chunked if needed
+    if all.len() <= max_per_batch {
+        // single batch
+        let prompt = format_audit_prompt(&core, &working);
+        let response = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
+        let ops = parse_audit_ops(&response, &core, &working);
+        apply_audit_ops(db, ops, &mut combined);
+    } else {
+        // chunked: Core summary + Working in batches
+        let core_summary = format_layer_summary("Core", &core);
+        for chunk in working.chunks(max_per_batch.saturating_sub(core.len())) {
+            let mut prompt = core_summary.clone();
+            prompt.push_str(&format!("\n## Working Layer (batch of {})\n", chunk.len()));
+            for m in chunk {
+                let tags = m.tags.join(",");
+                let preview: String = m.content.chars().take(200).collect();
+                prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
+                    &m.id[..8], m.importance, m.access_count, tags, preview));
+            }
+
+            let response = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
+            // for chunked mode, resolve against core + this chunk only
+            let chunk_vec: Vec<crate::db::Memory> = chunk.to_vec();
+            let ops = parse_audit_ops(&response, &core, &chunk_vec);
+            apply_audit_ops(db, ops, &mut combined);
+        }
+    }
+
+    Ok(combined)
+}
+
+fn format_audit_prompt(core: &[crate::db::Memory], working: &[crate::db::Memory]) -> String {
     let mut prompt = String::with_capacity(16_000);
     prompt.push_str("## Core Layer\n");
-    for m in &core {
+    for m in core {
         let tags = m.tags.join(",");
         let preview: String = m.content.chars().take(200).collect();
         prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
             &m.id[..8], m.importance, m.access_count, tags, preview));
     }
     prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
-    for m in &working {
+    for m in working {
         let tags = m.tags.join(",");
         let preview: String = m.content.chars().take(200).collect();
         prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
             &m.id[..8], m.importance, m.access_count, tags, preview));
     }
+    prompt
+}
 
-    let response = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
-    let ops = parse_audit_ops(&response, &core, &working);
+fn format_layer_summary(name: &str, memories: &[crate::db::Memory]) -> String {
+    let mut s = format!("## {} Layer ({} memories, shown for context — do NOT reorganize these)\n", name, memories.len());
+    for m in memories {
+        let preview: String = m.content.chars().take(80).collect();
+        s.push_str(&format!("- [{}] {}\n", &m.id[..8], preview));
+    }
+    s
+}
 
-    let mut result = AuditResult {
-        total_reviewed: core.len() + working.len(),
-        ..Default::default()
-    };
-
-    for op in &ops {
-        match op {
+fn apply_audit_ops(db: &crate::db::MemoryDB, ops: Vec<AuditOp>, result: &mut AuditResult) {
+    for op in ops {
+        match &op {
             AuditOp::Promote { id, to } => {
                 if let Ok(Some(_)) = db.update_fields(id, None, Some(*to), None, None) {
                     result.promoted += 1;
@@ -601,9 +651,8 @@ pub async fn audit_memories(cfg: &AiConfig, db: &crate::db::MemoryDB) -> Result<
                 }
             }
         }
+        result.ops.push(op);
     }
-    result.ops = ops;
-    Ok(result)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
