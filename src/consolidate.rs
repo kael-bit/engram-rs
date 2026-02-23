@@ -194,13 +194,25 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                 continue;
             }
 
-            // Hard cap: if the LLM ignored the length instruction, truncate
-            let merged_content = if merged_content.chars().count() > 2000 {
-                warn!("merge output too long ({}), truncating", merged_content.chars().count());
-                merged_content.chars().take(2000).collect::<String>()
+            // Hard cap: if the LLM ignored the length instruction, truncate.
+            // Also warn on outputs > 500 chars.
+            let merged_len = merged_content.chars().count();
+            let merged_content = if merged_len > 800 {
+                warn!("merge output too long ({merged_len}), truncating to 800");
+                merged_content.chars().take(800).collect::<String>()
             } else {
                 merged_content
             };
+
+            // Skip merge if output is longer than longest input — LLM failed to condense
+            let max_input_len = cluster.iter()
+                .map(|&i| ns_mems[i].0.content.chars().count())
+                .max()
+                .unwrap_or(0);
+            if merged_content.chars().count() > max_input_len && max_input_len > 0 {
+                warn!("merge produced longer output than inputs, skipping");
+                continue;
+            }
 
             // keep the most recently created entry as the winner —
             // if two memories conflict, the newer one is more likely correct
