@@ -495,12 +495,44 @@ fn strip_boilerplate(text: &str) -> String {
         "openclaw.inbound_meta.v1",
         "## Model Aliases",
         "## Current Date & Time",
+        "## Project Context",
+        "## OpenClaw CLI Quick Reference",
+        "## Safety",
+        "## Tool Call Style",
+        "## Memory Recall",
+        "## Tooling",
+        "## Skills (mandatory)",
+        "<available_skills>",
+        "## Documentation",
+        "## Workspace",
+        "# SOUL.md",
+        "# USER.md",
+        "# AGENTS.md",
+        "# IDENTITY.md",
+        "# MEMORY.md",
+        "# HEARTBEAT.md",
+        "# TOOLS.md",
+        "# BOOTSTRAP.md",
+        "## Silent Replies",
+        "## Group Chat Context",
+        "SECURITY NOTICE:",
+        "<<<EXTERNAL_UNTRUSTED_CONTENT",
     ];
 
     let mut lines: Vec<&str> = Vec::new();
     let mut skip_block = false;
+    let mut in_code_block = false;
 
     for line in text.lines() {
+        // Track fenced code blocks — skip entire blocks
+        if line.starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
+            continue;
+        }
+
         if markers.iter().any(|m| line.contains(m)) {
             skip_block = true;
             continue;
