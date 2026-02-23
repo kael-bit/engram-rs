@@ -95,12 +95,30 @@ struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     temperature: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ToolDef>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<serde_json::Value>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct ChatMessage {
     role: String,
     content: String,
+}
+
+#[derive(Serialize)]
+struct ToolDef {
+    #[serde(rename = "type")]
+    tool_type: String,
+    function: FunctionDef,
+}
+
+#[derive(Serialize)]
+struct FunctionDef {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -110,7 +128,25 @@ struct ChatResponse {
 
 #[derive(Deserialize)]
 struct ChatChoice {
-    message: ChatMessage,
+    message: ResponseMessage,
+}
+
+#[derive(Deserialize)]
+struct ResponseMessage {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[derive(Deserialize)]
+struct ToolCall {
+    function: ToolCallFunction,
+}
+
+#[derive(Deserialize)]
+struct ToolCallFunction {
+    arguments: String,
 }
 
 /// Send a chat completion request, return the response text.
@@ -129,6 +165,8 @@ pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &s
             ChatMessage { role: "user".into(), content: user.into() },
         ],
         temperature: 0.1,
+        tools: None,
+        tool_choice: None,
     };
 
     let mut builder = cfg.client.post(&cfg.llm_url).json(&req);
@@ -153,8 +191,68 @@ pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &s
     Ok(chat
         .choices
         .first()
-        .map(|c| c.message.content.clone())
+        .and_then(|c| c.message.content.clone())
         .unwrap_or_default())
+}
+
+/// Call LLM with a function/tool definition, get back structured JSON.
+/// Forces the model to call the named function, returns the parsed arguments.
+pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
+    cfg: &AiConfig,
+    component: &str,
+    system: &str,
+    user: &str,
+    fn_name: &str,
+    fn_desc: &str,
+    parameters: serde_json::Value,
+) -> Result<T, String> {
+    let model = cfg.model_for(component).to_string();
+    let req = ChatRequest {
+        model,
+        messages: vec![
+            ChatMessage { role: "system".into(), content: system.into() },
+            ChatMessage { role: "user".into(), content: user.into() },
+        ],
+        temperature: 0.1,
+        tools: Some(vec![ToolDef {
+            tool_type: "function".into(),
+            function: FunctionDef {
+                name: fn_name.into(),
+                description: fn_desc.into(),
+                parameters,
+            },
+        }]),
+        tool_choice: Some(serde_json::json!({"type": "function", "function": {"name": fn_name}})),
+    };
+
+    let mut builder = cfg.client.post(&cfg.llm_url).json(&req);
+    if !cfg.llm_key.is_empty() {
+        builder = builder.header("Authorization", format!("Bearer {}", cfg.llm_key));
+    }
+
+    let resp = builder
+        .send()
+        .await
+        .map_err(|e| format!("LLM tool call failed: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("LLM returned {status}: {body}"));
+    }
+
+    let chat: ChatResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("LLM tool response parse failed: {e}"))?;
+
+    let args = chat.choices.first()
+        .and_then(|c| c.message.tool_calls.as_ref())
+        .and_then(|tc| tc.first())
+        .map(|tc| tc.function.arguments.clone())
+        .ok_or_else(|| "no tool call in response".to_string())?;
+
+    serde_json::from_str(&args)
+        .map_err(|e| format!("tool call arguments parse failed: {e}: {args}"))
 }
 
 const EXPAND_PROMPT: &str = "Given a search query for a PERSONAL knowledge base (notes, decisions, logs), \
@@ -243,13 +341,45 @@ pub async fn extract_memories(
 ) -> Result<Vec<ExtractedMemory>, String> {
     debug!(model = %cfg.model_for("extract"), "extracting memories");
 
-    let raw = llm_chat_as(cfg, "extract", EXTRACT_SYSTEM_PROMPT, text).await?;
-    let json_str = unwrap_json(&raw);
-    let memories: Vec<ExtractedMemory> = serde_json::from_str(&json_str)
-        .map_err(|e| format!("failed to parse extracted memories: {e}\nraw: {raw}"))?;
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "memories": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "description": "Concise memory text, under 200 chars"},
+                        "importance": {"type": "number", "description": "0.0-1.0 importance score"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                        "kind": {
+                            "type": "string",
+                            "enum": ["semantic", "episodic", "procedural"],
+                            "description": "semantic=facts, episodic=events, procedural=how-to (never decay)"
+                        }
+                    },
+                    "required": ["content"]
+                }
+            }
+        },
+        "required": ["memories"]
+    });
 
-    debug!(count = memories.len(), "extracted memories from text");
-    Ok(memories)
+    #[derive(serde::Deserialize)]
+    struct ExtractResult {
+        #[serde(default)]
+        memories: Vec<ExtractedMemory>,
+    }
+
+    let result = llm_tool_call::<ExtractResult>(
+        cfg, "extract", EXTRACT_SYSTEM_PROMPT, text,
+        "store_memories",
+        "Store extracted memories from text",
+        schema,
+    ).await?;
+
+    debug!(count = result.memories.len(), "extracted memories from text");
+    Ok(result.memories)
 }
 
 /// Extract a JSON array from LLM output that may be wrapped in markdown code blocks.

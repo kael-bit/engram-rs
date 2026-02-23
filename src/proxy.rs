@@ -292,7 +292,7 @@ async fn extract_from_context(state: AppState, context: &str) {
     };
 
     let system = "You extract long-term memories from a multi-turn LLM conversation. Be EXTREMELY selective.\n\
-        Most conversations have NOTHING worth extracting. Return [] by default.\n\n\
+        Most conversations have NOTHING worth extracting.\n\n\
         You're seeing several turns of conversation. Use the full context to understand what's important.\n\n\
         Only extract if you find:\n\
         - A USER's stated preference, rule, or boundary (not the assistant's)\n\
@@ -311,36 +311,60 @@ async fn extract_from_context(state: AppState, context: &str) {
         - Facts that are already well-known or obvious from context\n\
         - Descriptions of how a system works (architecture, features, mechanisms)\n\
         - Anything you'd extract identically from the NEXT conversation too (it's template, not content)\n\
-        - Anything that overlaps with the ALREADY IN MEMORY section below\n\n\
-        MAX 3 items per conversation window. Return JSON array of {\"content\": \"...\", \"tags\": [\"...\"], \"kind\": \"...\"}.\n\
-        kind is one of: \"semantic\" (facts, knowledge — default), \"episodic\" (time-bound events), \"procedural\" (how-to, workflows — these never decay).\n\
-        Content must be under 150 chars — one sentence, concrete, actionable.";
+        - Anything that overlaps with the ALREADY IN MEMORY section below";
 
     let user = format!(
-        "Extract 0-3 genuinely important long-term memories from this conversation. Default to [].{existing_knowledge}\n\n\
+        "Extract 0-3 genuinely important long-term memories from this conversation. If nothing is worth remembering, call with an empty items array.{existing_knowledge}\n\n\
          === CONVERSATION ({} turns) ===\n{preview}",
         context.matches("User: ").count()
     );
 
-    let extraction = match ai::llm_chat_as(ai_cfg, "proxy", system, &user).await {
-        Ok(text) => text,
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "One sentence, concrete, under 150 chars"
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "1-4 relevant tags"
+                        },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["semantic", "episodic", "procedural"],
+                            "description": "semantic=facts/knowledge, episodic=time-bound events, procedural=how-to/workflows (never decay)"
+                        }
+                    },
+                    "required": ["content", "tags", "kind"]
+                },
+                "maxItems": 3
+            }
+        },
+        "required": ["items"]
+    });
+
+    #[derive(serde::Deserialize)]
+    struct ExtractResult {
+        #[serde(default)]
+        items: Vec<ExtractionEntry>,
+    }
+
+    let entries: Vec<ExtractionEntry> = match ai::llm_tool_call::<ExtractResult>(
+        ai_cfg, "proxy", system, &user,
+        "store_memories",
+        "Store extracted memories from conversation",
+        schema,
+    ).await {
+        Ok(result) => result.items,
         Err(e) => {
             warn!("proxy: extraction failed: {e}");
-            return;
-        }
-    };
-
-    let cleaned = extraction
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-
-    let entries: Vec<ExtractionEntry> = match serde_json::from_str(cleaned) {
-        Ok(e) => e,
-        Err(e) => {
-            debug!("proxy: parse error: {e}");
             return;
         }
     };
