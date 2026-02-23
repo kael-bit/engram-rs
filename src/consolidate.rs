@@ -1027,6 +1027,7 @@ fn parse_audit_ops(
     ops
 }
 
+#[allow(dead_code)]
 const FACT_EXTRACT_PROMPT: &str = "Extract factual triples from this memory text. \
     A triple is (subject, predicate, object) representing a concrete, stable relationship.\n\
     Examples: (user, prefers, dark mode), (engram, uses, SQLite), (project, language, Rust)\n\n\
@@ -1038,6 +1039,7 @@ const FACT_EXTRACT_PROMPT: &str = "Extract factual triples from this memory text
     Output a JSON array of objects: [{\"subject\": \"...\", \"predicate\": \"...\", \"object\": \"...\"}]\n\
     Return [] if no facts can be extracted. Output ONLY the JSON array.";
 
+#[allow(dead_code)]
 async fn extract_facts_batch(db: &SharedDB, cfg: &AiConfig, limit: usize) -> usize {
     let db2 = db.clone();
     let mems = match tokio::task::spawn_blocking(move || {
