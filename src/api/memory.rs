@@ -235,16 +235,12 @@ pub(super) async fn list_memories(
                 vec![]
             }
         } else {
-            d.list_all(limit, offset)?
+            d.list_all_ns(limit, offset, q.ns.as_deref())?
         };
 
         // filter by tag if specified
         if let Some(ref tag) = q.tag {
             memories.retain(|m| m.tags.iter().any(|t| t == tag));
-        }
-        // filter by namespace
-        if let Some(ref ns) = q.ns {
-            memories.retain(|m| m.namespace == *ns);
         }
 
         let count = memories.len();
