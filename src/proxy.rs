@@ -253,14 +253,17 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
 
     let turn = format!("User: {}\nAssistant: {}", user_msg, assistant_msg);
 
-    let should_flush = with_window(|w| {
+    let context = with_window(|w| {
         w.push(turn);
-        w.should_flush()
+        if w.should_flush() {
+            Some(w.drain())
+        } else {
+            None
+        }
     });
 
-    if should_flush {
-        let context = with_window(|w| w.drain());
-        extract_from_context(state, &context).await;
+    if let Some(ctx) = context {
+        extract_from_context(state, &ctx).await;
     }
 }
 
