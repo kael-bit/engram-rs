@@ -82,7 +82,7 @@ pub fn estimate_tokens(text: &str) -> usize {
 /// Calculate recency score using exponential decay.
 fn recency_score(last_accessed: i64, decay_rate: f64) -> f64 {
     let now = crate::db::now_ms();
-    let hours = (now - last_accessed) as f64 / 3_600_000.0;
+    let hours = ((now - last_accessed) as f64 / 3_600_000.0).max(0.0);
     (-decay_rate * hours / 168.0).exp()
 }
 
@@ -256,7 +256,7 @@ pub fn recall(
     // Pad with unseen core memories when we don't have enough hits.
     // Low relevance=0.1 means they won't outrank real matches.
     if scored.len() < limit {
-        for mem in db.list_by_layer(Layer::Core, 10000, 0) {
+        for mem in db.list_by_layer(Layer::Core, (limit - scored.len()) * 3, 0) {
             if seen.contains(&mem.id) {
                 continue;
             }
