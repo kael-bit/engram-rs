@@ -447,6 +447,11 @@ CREATE TABLE IF NOT EXISTS trash (
     kind TEXT NOT NULL DEFAULT 'semantic'
 );
 CREATE INDEX IF NOT EXISTS idx_trash_deleted ON trash(deleted_at);
+
+CREATE TABLE IF NOT EXISTS engram_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 "#;
 
 // Use content= external content FTS — we manage inserts/deletes ourselves
@@ -485,6 +490,21 @@ impl MemoryDB {
                 [], |r| r.get(0),
             ).map_err(|e| EngramError::Internal(e.to_string())))
             .unwrap_or(0)
+    }
+
+    pub fn get_meta(&self, key: &str) -> Option<String> {
+        self.conn().ok().and_then(|c| {
+            c.query_row("SELECT value FROM engram_meta WHERE key = ?1", [key], |r| r.get(0)).ok()
+        })
+    }
+
+    pub fn set_meta(&self, key: &str, value: &str) {
+        if let Ok(c) = self.conn() {
+            let _ = c.execute(
+                "INSERT OR REPLACE INTO engram_meta (key, value) VALUES (?1, ?2)",
+                rusqlite::params![key, value],
+            );
+        }
     }
 
     /// Open (or create) a database at the given path.

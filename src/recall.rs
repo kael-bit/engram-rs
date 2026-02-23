@@ -110,6 +110,9 @@ fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {
         score *= 1.0 - (mem.risk_score * 0.5);
     }
 
+    // Cap at 1.0 — scores above 1 confuse callers and threshold logic
+    score = score.min(1.0);
+
     ScoredMemory {
         memory: mem.clone(),
         score,

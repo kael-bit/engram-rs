@@ -820,7 +820,8 @@ Your job: reorganize them. Output a JSON array of operations.
 - Technical details, bug fixes, version notes, config values → Working at most
 - Near-duplicate memories → merge into one, keep the best content
 - Session logs older than a few days with no unique insight → delete
-- Be aggressive about merges. If two memories say similar things, merge them.
+- Merge memories that express the SAME fact or lesson redundantly. Don't merge merely related memories.
+- NEVER delete or merge a memory that was updated recently (within 24h) — the user may have just edited it.
 - Output ONLY a valid JSON array. Empty array [] if no changes needed."#;
 
 /// Full audit: reviews Core+Working memories using the gate model.

@@ -227,9 +227,25 @@ async fn main() {
             let audit_db = state.db.clone();
             let audit_ai = ai.clone();
             tokio::spawn(async move {
-                let interval = std::time::Duration::from_secs(audit_hours.saturating_mul(3600));
-                // first run after 5 min (let things settle)
-                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                let interval_secs = audit_hours.saturating_mul(3600);
+                let interval = std::time::Duration::from_secs(interval_secs);
+
+                // Check when audit last ran (survives restarts)
+                let last_run: i64 = audit_db.get_meta("last_audit_ms")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                let now_ms = crate::db::now_ms();
+                let elapsed_ms = now_ms - last_run;
+                let remaining_ms = (interval_secs as i64 * 1000) - elapsed_ms;
+
+                if remaining_ms > 300_000 {
+                    // Haven't reached the interval yet — sleep until it's due
+                    tokio::time::sleep(std::time::Duration::from_millis(remaining_ms as u64)).await;
+                } else {
+                    // Overdue or first run — wait 5 min then go
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                }
+
                 loop {
                     match consolidate::audit_memories(&audit_ai, &audit_db).await {
                         Ok(r) if r.promoted + r.demoted + r.deleted + r.merged > 0 => {
@@ -247,6 +263,7 @@ async fn main() {
                             warn!("auto-audit failed: {e}");
                         }
                     }
+                    audit_db.set_meta("last_audit_ms", &crate::db::now_ms().to_string());
                     tokio::time::sleep(interval).await;
                 }
             });
