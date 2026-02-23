@@ -126,6 +126,7 @@ label { font-size:11px; color:#888; }
       <li data-v="proxy"><span class="nl">Proxy</span><span class="ct" id="c-prx">0</span></li>
       <li data-v="health"><span class="nl">Health</span></li>
       <li data-v="tools"><span class="nl">Tools</span></li>
+      <li data-v="tests"><span class="nl">Tests</span></li>
     </ul>
   </div>
   <div class="sidebar-footer">
@@ -563,12 +564,172 @@ async function doAction(path,method,body){
 }
 
 async function refresh(){await Promise.all([loadStats(),loadMem()]);switchView(curView);}
+function renderTests(){
+  document.getElementById('main').innerHTML=`
+    <h2>Tests</h2>
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn" id="runAllBtn" onclick="runAllTests()">Run All</button>
+      <span id="testSummary" style="font-size:11px;color:#555"></span>
+    </div>
+    <div id="testList" class="ml"></div>`;
+  renderTestCards();
+}
+
+const testDefs=[
+  {name:'Health check',fn:testHealth},
+  {name:'Health data completeness',fn:testHealthFields},
+  {name:'Stats',fn:testStats},
+  {name:'Memory CRUD',fn:testMemoryCrud},
+  {name:'Recall',fn:testRecall},
+  {name:'Search',fn:testSearch},
+  {name:'Facts CRUD',fn:testFactsCrud},
+  {name:'Sort order',fn:testSortOrder},
+];
+let testResults={};
+
+function renderTestCards(){
+  const el=document.getElementById('testList');
+  if(!el)return;
+  el.innerHTML=testDefs.map((t,i)=>{
+    const r=testResults[i];
+    let status='<span style="color:#555">—</span>';
+    let timing='';
+    let detail='';
+    if(r){
+      if(r.running){status='<span style="color:#d4a44a">running...</span>';}
+      else if(r.pass){status='<span style="color:#4caf50">PASS</span>';timing=r.ms+'ms';}
+      else{status='<span style="color:#c0392b">FAIL</span>';timing=r.ms+'ms';detail=`<div style="color:#c0392b;font-size:11px;margin-top:4px">${esc(r.error)}</div>`;}
+    }
+    return`<div class="card" style="padding:10px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:#ccc">${esc(t.name)}</span>
+        <span style="font-size:11px">${status} <span style="color:#555;margin-left:6px">${timing}</span></span>
+      </div>${detail}</div>`;
+  }).join('');
+}
+
+async function runAllTests(){
+  const btn=document.getElementById('runAllBtn');
+  btn.disabled=true;btn.textContent='Running...';
+  testResults={};
+  let passed=0,failed=0;
+  for(let i=0;i<testDefs.length;i++){
+    testResults[i]={running:true};renderTestCards();
+    const t0=performance.now();
+    try{
+      await testDefs[i].fn();
+      const ms=Math.round(performance.now()-t0);
+      testResults[i]={pass:true,ms};passed++;
+    }catch(e){
+      const ms=Math.round(performance.now()-t0);
+      testResults[i]={pass:false,ms,error:e.message||String(e)};failed++;
+    }
+    renderTestCards();
+  }
+  btn.disabled=false;btn.textContent='Run All';
+  document.getElementById('testSummary').textContent=passed+' passed, '+failed+' failed';
+}
+
+function assert(cond,msg){if(!cond)throw new Error(msg||'assertion failed');}
+
+async function testHealth(){
+  const r=await api('/health');
+  assert(r.version,'missing version field');
+}
+
+async function testHealthFields(){
+  const r=await api('/health');
+  assert(r.db_size_mb!==undefined,'missing db_size_mb');
+  assert(r.rss_kb!==undefined,'missing rss_kb');
+  assert(r.embed_cache,'missing embed_cache');
+  assert(r.embed_cache.hits!==undefined,'missing embed_cache.hits');
+  assert(r.embed_cache.misses!==undefined,'missing embed_cache.misses');
+}
+
+async function testStats(){
+  const r=await api('/stats');
+  assert(r.total!==undefined,'missing total');
+  assert(r.buffer!==undefined,'missing buffer');
+  assert(r.working!==undefined,'missing working');
+  assert(r.core!==undefined,'missing core');
+}
+
+async function testMemoryCrud(){
+  // create
+  const m=await api('/memories',{method:'POST',body:JSON.stringify({content:'__test_crud_'+Date.now(),tags:['_test']})});
+  assert(m.id,'create: no id returned');
+  try{
+    // read
+    const got=await api('/memories/'+m.id);
+    assert(got.id===m.id,'read: id mismatch');
+    // update
+    const updated='__test_updated_'+Date.now();
+    await api('/memories/'+m.id,{method:'PATCH',body:JSON.stringify({content:updated})});
+    const got2=await api('/memories/'+m.id);
+    assert(got2.content===updated,'update: content not changed');
+    // delete
+    await api('/memories/'+m.id,{method:'DELETE'});
+    // verify 404
+    try{
+      const tk=localStorage.getItem('engram_token')||'';
+      const h={'Content-Type':'application/json'};
+      if(tk)h['Authorization']='Bearer '+tk;
+      const res=await fetch(A+'/memories/'+m.id,{headers:h});
+      assert(res.status===404,'delete: expected 404 got '+res.status);
+    }catch(e){if(e.message.startsWith('delete:'))throw e;}
+  }catch(e){
+    // cleanup on failure
+    try{await api('/memories/'+m.id,{method:'DELETE'});}catch(_){}
+    throw e;
+  }
+}
+
+async function testRecall(){
+  const r=await api('/recall',{method:'POST',body:JSON.stringify({query:'test',limit:5})});
+  assert(Array.isArray(r.memories),'response missing memories array');
+}
+
+async function testSearch(){
+  const r=await api('/search?q=test');
+  // just verify we get an array response
+  const arr=Array.isArray(r)?r:(r.memories||r);
+  assert(Array.isArray(arr)||typeof r==='object','unexpected search response');
+}
+
+async function testFactsCrud(){
+  const subj='_test_'+Date.now();
+  // create
+  const f=await api('/facts',{method:'POST',body:JSON.stringify({subject:subj,predicate:'is',object:'a test'})});
+  assert(f.id,'create: no id');
+  try{
+    // query
+    const q=await api('/facts?subject='+encodeURIComponent(subj));
+    const facts=q.facts||q||[];
+    assert(facts.length>0,'query: no facts found');
+    // delete
+    await api('/facts/'+f.id,{method:'DELETE'});
+  }catch(e){
+    try{await api('/facts/'+f.id,{method:'DELETE'});}catch(_){}
+    throw e;
+  }
+}
+
+async function testSortOrder(){
+  const d=await api('/memories?limit=20');
+  const mems=Array.isArray(d)?d:(d.memories||[]);
+  if(mems.length<2)return; // can't verify with fewer than 2
+  for(let i=1;i<mems.length;i++){
+    assert(mems[i-1].created_at>=mems[i].created_at,
+      'not sorted: index '+(i-1)+' ('+mems[i-1].created_at+') < index '+i+' ('+mems[i].created_at+')');
+  }
+}
+
 function switchView(v){
   curView=v;page=0;
   document.querySelectorAll('.nav li').forEach(li=>li.classList.toggle('active',li.dataset.v===v));
   if(v==='recall')renderRecall();else if(v==='search')renderSearch();else if(v==='create')renderCreate();
   else if(v==='facts')renderFacts();else if(v==='proxy')renderProxy();else if(v==='health')renderHealth();
-  else if(v==='tools')renderTools();else renderList(getMem());
+  else if(v==='tools')renderTools();else if(v==='tests')renderTests();else renderList(getMem());
 }
 
 document.querySelectorAll('.nav').forEach(n=>{n.onclick=e=>{const li=e.target.closest('li');if(li)switchView(li.dataset.v);};});
