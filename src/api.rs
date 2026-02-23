@@ -105,9 +105,12 @@ pub fn router(state: AppState) -> Router {
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let db = state.db.clone();
-    let s = blocking(move || db.stats())
+    let (s, integrity) = blocking(move || (db.stats(), db.integrity()))
         .await
-        .unwrap_or(db::Stats { total: 0, buffer: 0, working: 0, core: 0 });
+        .unwrap_or((
+            db::Stats { total: 0, buffer: 0, working: 0, core: 0 },
+            db::IntegrityReport::default(),
+        ));
 
     let uptime_secs = state.started_at.elapsed().as_secs();
     let rss_kb = read_rss_kb();
@@ -122,6 +125,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "rss_kb": rss_kb,
         "ai_enabled": state.ai.is_some(),
         "embed_cache": { "size": cache_len, "capacity": cache_cap },
+        "integrity": integrity,
         "stats": s,
         "endpoints": {
             "GET /": "this health check",

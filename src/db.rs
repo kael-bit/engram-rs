@@ -174,6 +174,16 @@ pub struct Stats {
     pub core: usize,
 }
 
+#[derive(Debug, Default, Serialize)]
+pub struct IntegrityReport {
+    pub total: usize,
+    pub fts_indexed: usize,
+    pub orphan_fts: usize,
+    pub missing_fts: usize,
+    pub missing_embedding: usize,
+    pub ok: bool,
+}
+
 
 fn validate_input(input: &MemoryInput) -> Result<(), EngramError> {
     let content = input.content.trim();
@@ -822,7 +832,36 @@ impl MemoryDB {
             }
         }
         s
-    }    pub fn update_fields(
+    }
+
+    /// Check DB integrity: FTS sync, orphans, missing embeddings.
+    pub fn integrity(&self) -> IntegrityReport {
+        let conn = match self.conn() {
+            Ok(c) => c,
+            Err(_) => return IntegrityReport::default(),
+        };
+        let total: i64 = conn.query_row("SELECT count(*) FROM memories", [], |r| r.get(0)).unwrap_or(0);
+        let fts_count: i64 = conn.query_row("SELECT count(DISTINCT id) FROM memories_fts", [], |r| r.get(0)).unwrap_or(0);
+        let orphan_fts: i64 = conn.query_row(
+            "SELECT count(*) FROM memories_fts WHERE id NOT IN (SELECT id FROM memories)", [], |r| r.get(0)
+        ).unwrap_or(0);
+        let missing_fts: i64 = conn.query_row(
+            "SELECT count(*) FROM memories WHERE id NOT IN (SELECT id FROM memories_fts)", [], |r| r.get(0)
+        ).unwrap_or(0);
+        let no_embedding: i64 = conn.query_row(
+            "SELECT count(*) FROM memories WHERE embedding IS NULL", [], |r| r.get(0)
+        ).unwrap_or(0);
+        IntegrityReport {
+            total: total as usize,
+            fts_indexed: fts_count as usize,
+            orphan_fts: orphan_fts as usize,
+            missing_fts: missing_fts as usize,
+            missing_embedding: no_embedding as usize,
+            ok: orphan_fts == 0 && missing_fts == 0,
+        }
+    }
+
+    pub fn update_fields(
         &self,
         id: &str,
         content: Option<&str>,
@@ -1652,5 +1691,17 @@ mod tests {
         assert_eq!(re_exported.len(), 2);
         assert_eq!(re_exported[0].content, "roundtrip A");
         assert_eq!(re_exported[1].content, "roundtrip B");
+    }
+
+    #[test]
+    fn integrity_ok_on_clean_db() {
+        let db = test_db();
+        db.insert(MemoryInput::new("integrity check")).unwrap();
+        let report = db.integrity();
+        assert!(report.ok);
+        assert_eq!(report.total, 1);
+        assert_eq!(report.fts_indexed, 1);
+        assert_eq!(report.orphan_fts, 0);
+        assert_eq!(report.missing_fts, 0);
     }
 }
