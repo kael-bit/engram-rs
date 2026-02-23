@@ -274,6 +274,20 @@ async fn extract_from_context(state: AppState, context: &str) {
     }
     let preview: String = filtered.chars().take(12000).collect();
 
+    // Fetch recent buffer memories so the LLM can skip already-known concepts
+    let recent_mems = state.db.list_since(
+        db::now_ms() - 6 * 3600 * 1000,
+        30,
+    ).unwrap_or_default();
+    let existing_knowledge = if recent_mems.is_empty() {
+        String::new()
+    } else {
+        let lines: Vec<String> = recent_mems.iter()
+            .map(|m| format!("- {}", &m.content[..m.content.len().min(120)]))
+            .collect();
+        format!("\n\n=== ALREADY IN MEMORY (do NOT extract anything that overlaps with these) ===\n{}\n", lines.join("\n"))
+    };
+
     let system = "You extract long-term memories from a multi-turn LLM conversation. Be EXTREMELY selective.\n\
         Most conversations have NOTHING worth extracting. Return [] by default.\n\n\
         You're seeing several turns of conversation. Use the full context to understand what's important.\n\n\
@@ -293,12 +307,13 @@ async fn extract_from_context(state: AppState, context: &str) {
         - Bug reports or code review findings (those belong in issue trackers, not memory)\n\
         - Facts that are already well-known or obvious from context\n\
         - Descriptions of how a system works (architecture, features, mechanisms)\n\
-        - Anything you'd extract identically from the NEXT conversation too (it's template, not content)\n\n\
+        - Anything you'd extract identically from the NEXT conversation too (it's template, not content)\n\
+        - Anything that overlaps with the ALREADY IN MEMORY section below\n\n\
         MAX 3 items per conversation window. Return JSON array of {\"content\": \"...\", \"tags\": [\"...\"]}.\n\
         Content must be under 150 chars — one sentence, concrete, actionable.";
 
     let user = format!(
-        "Extract 0-3 genuinely important long-term memories from this conversation. Default to [].\n\n\
+        "Extract 0-3 genuinely important long-term memories from this conversation. Default to [].{existing_knowledge}\n\n\
          === CONVERSATION ({} turns) ===\n{preview}",
         context.matches("User: ").count()
     );
@@ -348,7 +363,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         }
 
         let dup_id: Option<String> =
-            match crate::recall::quick_semantic_dup_threshold(ai_cfg, &state.db, &entry.content, 0.72).await {
+            match crate::recall::quick_semantic_dup_threshold(ai_cfg, &state.db, &entry.content, 0.60).await {
                 Ok(id) => id,
                 Err(_) => {
                     // Fallback to Jaccard — can't get ID from this path
