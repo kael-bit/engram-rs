@@ -118,14 +118,13 @@ pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String
         .unwrap_or_default())
 }
 
-const EXPAND_PROMPT: &str = "Given a search query for a personal knowledge base, \
-    generate 3-5 alternative search phrases that would find relevant stored notes. \
-    Key strategy: bridge abstract concepts to concrete implementations. \
-    For example: 可观测性 → 日志系统 Loki Grafana ELK 监控告警. \
-    Include: specific tools/technologies, concrete implementations, \
-    synonyms in the same language, and the opposite abstraction level \
-    (abstract→concrete, concrete→abstract). \
-    Output one phrase per line, no numbering. Match the input language.";
+const EXPAND_PROMPT: &str = "Given a search query for a PERSONAL knowledge base (notes, decisions, logs), \
+    generate 3-5 alternative search phrases that would help find relevant stored notes. \
+    Bridge abstraction levels: abstract→concrete, concrete→abstract. \
+    Example: 可观测性 → 日志系统 Loki Grafana 监控告警. \
+    Focus on rephrasing the INTENT, not listing random related technologies. \
+    If the query asks about a tool/library choice, rephrase as: why/decision/migration/选择/替换. \
+    Output one phrase per line, no numbering. Same language as input.";
 
 /// Generate alternative query phrasings for better recall coverage.
 pub async fn expand_query(cfg: &AiConfig, query: &str) -> Vec<String> {
