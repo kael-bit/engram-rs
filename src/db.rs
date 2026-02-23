@@ -1105,11 +1105,12 @@ impl MemoryDB {
     }
 
     pub fn touch(&self, id: &str) -> Result<(), EngramError> {
-        // Recall-based reinforcement — mild bump. Getting found in search
-        // is a weaker signal than being explicitly restated.
+        // Recall-based reinforcement. Only bump importance for
+        // Buffer/Working — Core memories are already at their ceiling.
         self.conn()?.execute(
             "UPDATE memories SET last_accessed = ?1, access_count = access_count + 1, \
-             importance = MIN(1.0, importance + 0.02) WHERE id = ?2",
+             importance = CASE WHEN layer < 3 THEN MIN(1.0, importance + 0.02) ELSE importance END \
+             WHERE id = ?2",
             params![now_ms(), id],
         )?;
         Ok(())
