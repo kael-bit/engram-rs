@@ -68,16 +68,12 @@ impl MemoryDB {
         let now = now_ms();
         let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
 
-        // Importance-driven initial layer placement:
-        // - >= 0.9: explicit "remember this" → straight to Core
-        // - >= 0.7: significant fact → Working
-        // - default: transient → Buffer
-        // Caller can still override with explicit layer, but importance
-        // takes precedence when no layer is specified.
+        // All memories start in Buffer. Layer promotion is earned through
+        // access frequency, not declared at insert time. Caller can still
+        // set an explicit layer for admin/migration use, but importance
+        // alone doesn't bypass the promotion path.
         let layer_val = match input.layer {
             Some(l) => l,
-            None if importance >= 0.9 => 3,
-            None if importance >= 0.7 => 2,
             None => 1,
         };
         let layer: Layer = layer_val.try_into()?;
@@ -163,8 +159,6 @@ impl MemoryDB {
                 let now = now_ms();
                 let layer_val = match input.layer {
                     Some(l) => l,
-                    None if importance >= 0.9 => 3,
-                    None if importance >= 0.7 => 2,
                     None => 1,
                 };
                 let layer: Layer = match layer_val.try_into() {
@@ -1540,24 +1534,30 @@ mod tests {
     }
 
     #[test]
-    fn importance_drives_initial_layer() {
+    fn all_inserts_start_in_buffer() {
         let db = test_db();
 
         // Low importance → Buffer
         let buf = db.insert(MemoryInput::new("some random fact").importance(0.4)).unwrap();
         assert_eq!(buf.layer, Layer::Buffer);
 
-        // Medium importance → Working
+        // Medium importance → still Buffer (promotion is earned, not declared)
         let work = db.insert(MemoryInput::new("important decision about architecture").importance(0.7)).unwrap();
-        assert_eq!(work.layer, Layer::Working);
+        assert_eq!(work.layer, Layer::Buffer);
 
-        // High importance → Core
+        // High importance → still Buffer
         let core = db.insert(MemoryInput::new("user explicitly said remember this").importance(0.9)).unwrap();
-        assert_eq!(core.layer, Layer::Core);
+        assert_eq!(core.layer, Layer::Buffer);
+        // but importance is preserved for scoring
+        assert!(core.importance >= 0.9);
 
         // Default (no importance) → Buffer
         let def = db.insert(MemoryInput::new("default importance test")).unwrap();
         assert_eq!(def.layer, Layer::Buffer);
+
+        // Explicit layer override still works (for admin/migration)
+        let explicit = db.insert(MemoryInput { content: "admin override".into(), layer: Some(3), ..Default::default() }).unwrap();
+        assert_eq!(explicit.layer, Layer::Core);
     }
 
     #[test]
@@ -1577,7 +1577,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_insert_importance_driven_layer() {
+    fn batch_insert_all_start_in_buffer() {
         let db = test_db();
         let inputs = vec![
             MemoryInput { importance: Some(0.95), ..MemoryInput::new("explicit remember") },
@@ -1587,10 +1587,10 @@ mod tests {
         ];
         let results = db.insert_batch(inputs).unwrap();
         assert_eq!(results.len(), 4);
-        assert_eq!(results[0].layer, Layer::Core);      // 0.95 → Core
-        assert_eq!(results[1].layer, Layer::Working);    // 0.75 → Working
-        assert_eq!(results[2].layer, Layer::Buffer);     // 0.3  → Buffer
-        assert_eq!(results[3].layer, Layer::Working);    // explicit layer=2 wins
+        assert_eq!(results[0].layer, Layer::Buffer);     // importance doesn't skip layers
+        assert_eq!(results[1].layer, Layer::Buffer);
+        assert_eq!(results[2].layer, Layer::Buffer);
+        assert_eq!(results[3].layer, Layer::Working);    // explicit layer=2 still works
     }
 
     #[test]

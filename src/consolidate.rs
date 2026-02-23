@@ -130,10 +130,11 @@ pub async fn consolidate(
     }
 
     // Extract fact triples from Working/Core memories that don't have any yet.
-    // Process a few per cycle to avoid hammering the LLM.
-    if let Some(ref cfg) = ai {
-        result.facts_extracted = extract_facts_batch(&db, cfg, 5).await;
-    }
+    // Facts auto-extraction disabled — the extracted triples were low quality
+    // and duplicated information already in memories. Keep the API for manual use.
+    // if let Some(ref cfg) = ai {
+    //     result.facts_extracted = extract_facts_batch(&db, cfg, 5).await;
+    // }
 
     if do_merge {
         if let Some(cfg) = ai {
