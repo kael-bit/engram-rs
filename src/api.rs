@@ -227,6 +227,7 @@ async fn batch_create(
         }
     }
     let count = inputs.len();
+    let inputs_had_sync = inputs.iter().any(|i| i.sync_embed.unwrap_or(false));
     let db = state.db.clone();
     let results = tokio::task::spawn_blocking(move || db.insert_batch(inputs))
         .await
@@ -239,7 +240,24 @@ async fn batch_create(
                 .iter()
                 .map(|m| (m.id.clone(), m.content.clone()))
                 .collect();
-            spawn_embed_batch(state.db.clone(), cfg.clone(), items);
+            // if any input had sync_embed, do it synchronously
+            let any_sync = inputs_had_sync;
+            if any_sync {
+                match ai::get_embeddings(cfg, &items.iter().map(|(_, c)| c.clone()).collect::<Vec<_>>()).await {
+                    Ok(embs) => {
+                        let db = state.db.clone();
+                        let pairs: Vec<_> = items.into_iter().zip(embs).collect();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            for ((id, _), emb) in pairs {
+                                let _ = db.set_embedding(&id, &emb);
+                            }
+                        }).await;
+                    }
+                    Err(e) => warn!(error = %e, "sync batch embedding failed"),
+                }
+            } else {
+                spawn_embed_batch(state.db.clone(), cfg.clone(), items);
+            }
         }
     }
 
