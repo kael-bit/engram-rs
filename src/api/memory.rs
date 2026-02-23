@@ -207,6 +207,7 @@ pub(super) async fn batch_delete(
 pub(super) struct ListQuery {
     layer: Option<u8>,
     tag: Option<String>,
+    #[serde(alias = "namespace")]
     ns: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,

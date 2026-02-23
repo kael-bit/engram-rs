@@ -9,7 +9,7 @@ mod vec;
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
-fn jieba() -> &'static jieba_rs::Jieba {
+pub(crate) fn jieba() -> &'static jieba_rs::Jieba {
     static INSTANCE: OnceLock<jieba_rs::Jieba> = OnceLock::new();
     INSTANCE.get_or_init(jieba_rs::Jieba::new)
 }

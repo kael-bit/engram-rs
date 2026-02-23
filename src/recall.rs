@@ -312,6 +312,41 @@ pub fn recall(
         }
     }
 
+    // Keyword affinity: penalize semantic-only results that lack query terms.
+    // Mitigates text-embedding-3-small's CJK weakness where unrelated content
+    // gets high cosine. Only fires when we have an actual query string.
+    if !req.query.is_empty() {
+        let fts_ids: std::collections::HashSet<&String> =
+            fts.iter().map(|(id, _)| id).collect();
+
+        // Extract query terms — jieba for CJK, whitespace for latin
+        let query_terms: Vec<String> = {
+            let words = crate::db::jieba().cut_for_search(&req.query, false);
+            words.iter()
+                .filter(|w| w.trim().len() > 1)
+                .map(|w| w.trim().to_lowercase())
+                .collect()
+        };
+
+        if !query_terms.is_empty() {
+            for sm in scored.iter_mut() {
+                // Only penalize semantic-only hits (not boosted by FTS)
+                if fts_ids.contains(&sm.memory.id) {
+                    continue;
+                }
+                let content_lower = sm.memory.content.to_lowercase();
+                let has_any = query_terms.iter().any(|t| content_lower.contains(t));
+                if !has_any {
+                    // No query terms found — likely a false-positive embedding match
+                    sm.relevance *= 0.7;
+                    let rescored = score_memory(&sm.memory, sm.relevance);
+                    sm.score = rescored.score;
+                    sm.recency = rescored.recency;
+                }
+            }
+        }
+    }
+
     // Don't pad with unrelated core memories — they add noise.
 
     // Fact-based recall: pull linked memories at high relevance (exact knowledge match)
