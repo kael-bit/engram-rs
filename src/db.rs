@@ -84,6 +84,8 @@ pub struct Memory {
     pub namespace: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Vec<f64>>,
+    #[serde(skip)]
+    pub risk_score: f64,
 }
 
 fn is_default_ns(ns: &str) -> bool {
@@ -319,7 +321,8 @@ CREATE TABLE IF NOT EXISTS memories (
     source TEXT NOT NULL DEFAULT 'manual',
     tags TEXT NOT NULL DEFAULT '[]',
     namespace TEXT NOT NULL DEFAULT 'default',
-    embedding BLOB
+    embedding BLOB,
+    risk_score REAL NOT NULL DEFAULT 0.0
 );
 
 CREATE INDEX IF NOT EXISTS idx_layer ON memories(layer);
@@ -409,6 +412,12 @@ impl MemoryDB {
         if conn.prepare("SELECT repetition_count FROM memories LIMIT 0").is_err() {
             conn.execute(
                 "ALTER TABLE memories ADD COLUMN repetition_count INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if conn.prepare("SELECT risk_score FROM memories LIMIT 0").is_err() {
+            conn.execute(
+                "ALTER TABLE memories ADD COLUMN risk_score REAL NOT NULL DEFAULT 0.0",
                 [],
             )?;
         }
@@ -630,16 +639,21 @@ impl MemoryDB {
         let layer: Layer = layer_val.try_into()?;
         let id = Uuid::new_v4().to_string();
         let source = input.source.unwrap_or_else(|| "api".into());
-        let tags = input.tags.unwrap_or_default();
-        let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
+        let mut tags = input.tags.unwrap_or_default();
 
         let namespace = input.namespace.unwrap_or_else(|| "default".into());
+
+        let risk_score = crate::safety::assess_injection_risk(&input.content);
+        if risk_score >= 0.7 && !tags.contains(&"suspicious".to_string()) {
+            tags.push("suspicious".into());
+        }
+        let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
 
         self.conn()?.execute(
             "INSERT INTO memories \
              (id, content, layer, importance, created_at, last_accessed, \
-              access_count, decay_rate, source, tags, namespace) \
-             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10)",
+              access_count, decay_rate, source, tags, namespace, risk_score) \
+             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11)",
             params![
                 id,
                 input.content,
@@ -650,7 +664,8 @@ impl MemoryDB {
                 layer.default_decay(),
                 source,
                 tags_json,
-                namespace
+                namespace,
+                risk_score
             ],
         )?;
 
@@ -679,6 +694,7 @@ impl MemoryDB {
             tags,
             namespace,
             embedding: None,
+            risk_score,
         })
     }
 
@@ -709,18 +725,23 @@ impl MemoryDB {
                 let id = Uuid::new_v4().to_string();
                 let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
                 let source = input.source.unwrap_or_else(|| "api".into());
-                let tags = input.tags.unwrap_or_default();
-                let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
+                let mut tags = input.tags.unwrap_or_default();
                 let namespace = input.namespace.unwrap_or_else(|| "default".into());
+
+                let risk_score = crate::safety::assess_injection_risk(&input.content);
+                if risk_score >= 0.7 && !tags.contains(&"suspicious".to_string()) {
+                    tags.push("suspicious".into());
+                }
+                let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
 
                 conn.execute(
                     "INSERT INTO memories \
                      (id, content, layer, importance, created_at, last_accessed, \
-                      access_count, decay_rate, source, tags, namespace) \
-                     VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10)",
+                      access_count, decay_rate, source, tags, namespace, risk_score) \
+                     VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11)",
                     params![
                         id, input.content, layer_val, importance, now, now,
-                        layer.default_decay(), source, tags_json, namespace
+                        layer.default_decay(), source, tags_json, namespace, risk_score
                     ],
                 )?;
                 let processed = append_cjk_bigrams(&input.content);
@@ -743,6 +764,7 @@ impl MemoryDB {
                     tags,
                     namespace,
                     embedding: None,
+                    risk_score,
                 });
             }
             Ok(())
@@ -1745,8 +1767,8 @@ impl MemoryDB {
                 conn.execute(
                     "INSERT INTO memories \
                      (id, content, layer, importance, created_at, last_accessed, \
-                      access_count, repetition_count, decay_rate, source, tags, namespace, embedding) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                      access_count, repetition_count, decay_rate, source, tags, namespace, embedding, risk_score) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
                     params![
                         actual_id,
                         m.content,
@@ -1761,6 +1783,7 @@ impl MemoryDB {
                         tags_json,
                         m.namespace,
                         m.embedding.as_ref().map(|e| crate::ai::embedding_to_bytes(e)),
+                        m.risk_score,
                     ],
                 )?;
                 let processed = append_cjk_bigrams(&m.content);
@@ -1836,6 +1859,7 @@ fn row_to_memory_meta(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
         tags: serde_json::from_str(&tags_str).unwrap_or_default(),
         namespace: row.get::<_, String>("namespace").unwrap_or_else(|_| "default".into()),
         embedding: None,
+        risk_score: row.get::<_, f64>("risk_score").unwrap_or(0.0),
     })
 }
 
@@ -1862,6 +1886,7 @@ fn row_to_memory_impl(row: &rusqlite::Row, include_embedding: bool) -> rusqlite:
         tags: serde_json::from_str(&tags_str).unwrap_or_default(),
         namespace: row.get::<_, String>("namespace").unwrap_or_else(|_| "default".into()),
         embedding,
+        risk_score: row.get::<_, f64>("risk_score").unwrap_or(0.0),
     })
 }
 

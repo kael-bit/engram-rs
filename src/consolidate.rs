@@ -775,6 +775,7 @@ mod tests {
                 tags: vec![],
                 namespace: "default".into(),
                 embedding: None,
+                risk_score: 0.0,
             },
             emb,
         )
@@ -859,6 +860,7 @@ mod tests {
             tags: vec![],
             namespace: "default".into(),
             embedding: None,
+            risk_score: 0.0,
         }
     }
 

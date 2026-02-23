@@ -8,6 +8,7 @@ mod db;
 mod error;
 mod proxy;
 mod recall;
+mod safety;
 
 use clap::Parser;
 use std::sync::Arc;
@@ -263,6 +264,7 @@ async fn main() {
         "engram starting"
     );
 
+    let state_for_shutdown = state.clone();
     let addr = format!("0.0.0.0:{}", args.port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
@@ -272,6 +274,12 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("server error");
+
+    // Flush any buffered proxy conversations before exit
+    if state_for_shutdown.proxy.is_some() {
+        info!("flushing proxy window before exit");
+        proxy::flush_window(&state_for_shutdown).await;
+    }
 }
 
 async fn shutdown_signal() {

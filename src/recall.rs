@@ -103,8 +103,12 @@ fn score_combined(importance: f64, relevance: f64, last_accessed: i64) -> f64 {
 fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {
     let recency = recency_score(mem.last_accessed, mem.decay_rate);
     let bonus = mem.layer.score_bonus();
-    let score =
+    let mut score =
         (WEIGHT_IMPORTANCE * mem.importance + WEIGHT_RECENCY * recency + WEIGHT_RELEVANCE * relevance) * bonus;
+
+    if mem.risk_score > 0.5 {
+        score *= 1.0 - (mem.risk_score * 0.5);
+    }
 
     ScoredMemory {
         memory: mem.clone(),
@@ -346,6 +350,11 @@ pub fn recall(
     } else {
         None
     };
+
+    // Sanitize output content to strip dangerous tokens
+    for sm in &mut selected {
+        sm.memory.content = crate::safety::sanitize_for_output(&sm.memory.content);
+    }
 
     RecallResponse {
         memories: selected,
@@ -598,6 +607,7 @@ mod tests {
             tags: vec![],
             namespace: "default".into(),
             embedding: None,
+            risk_score: 0.0,
         };
         let recent = Memory {
             id: "new-one".into(),
@@ -613,6 +623,7 @@ mod tests {
             tags: vec![],
             namespace: "default".into(),
             embedding: None,
+            risk_score: 0.0,
         };
         db.import(&[old, recent]).unwrap();
 
