@@ -436,7 +436,7 @@ impl MemoryDB {
         let Ok(conn) = self.conn() else { return vec![]; };
         let Ok(mut stmt) = conn.prepare(
             "SELECT id, content, layer, importance, created_at, last_accessed, \
-             access_count, decay_rate, source, tags, namespace, kind \
+             access_count, repetition_count, decay_rate, source, tags, namespace, kind \
              FROM memories WHERE layer = ?1 ORDER BY importance DESC LIMIT ?2 OFFSET ?3",
         ) else {
             return vec![];
@@ -453,7 +453,7 @@ impl MemoryDB {
         let Ok(conn) = self.conn() else { return vec![]; };
         let Ok(mut stmt) = conn.prepare(
             "SELECT id, content, layer, importance, created_at, last_accessed, \
-             access_count, decay_rate, source, tags, namespace, kind \
+             access_count, repetition_count, decay_rate, source, tags, namespace, kind \
              FROM memories WHERE layer < 3",
         ) else {
             return vec![];
