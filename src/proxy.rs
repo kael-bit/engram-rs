@@ -660,3 +660,104 @@ struct ExtractionEntry {
     #[serde(default)]
     kind: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_boilerplate_removes_markers() {
+        let input = "User: hello\n## Heartbeats\nRead HEARTBEAT.md if it exists.\nFollow it strictly.\nUser: what's up";
+        let result = strip_boilerplate(input);
+        assert!(result.contains("hello"));
+        assert!(!result.contains("HEARTBEAT"));
+        assert!(!result.contains("Follow it strictly"));
+    }
+
+    #[test]
+    fn strip_boilerplate_removes_code_blocks() {
+        let input = "User: hey\n```bash\ncurl http://localhost:3917/stats\n```\nUser: done";
+        let result = strip_boilerplate(input);
+        assert!(result.contains("hey"));
+        assert!(!result.contains("curl"));
+        assert!(result.contains("done"));
+    }
+
+    #[test]
+    fn strip_boilerplate_removes_soul_md() {
+        let input = "# SOUL.md - Who You Are\nBe helpful.\nHave opinions.\n\nUser: actual message";
+        let result = strip_boilerplate(input);
+        assert!(!result.contains("SOUL.md"));
+        assert!(!result.contains("Be helpful"));
+        assert!(result.contains("actual message"));
+    }
+
+    #[test]
+    fn strip_boilerplate_preserves_user_content() {
+        let input = "User: I like dark mode\nAssistant: Got it.\nUser: Remember that please";
+        let result = strip_boilerplate(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn strip_boilerplate_handles_nested_code_blocks() {
+        let input = "User: test\n```json\n{\"key\": \"value\"}\n```\nmore text\n```python\nprint('hi')\n```\nUser: end";
+        let result = strip_boilerplate(input);
+        assert!(result.contains("test"));
+        assert!(!result.contains("key"));
+        assert!(!result.contains("print"));
+        assert!(result.contains("end"));
+    }
+
+    #[test]
+    fn strip_boilerplate_removes_security_notice() {
+        let input = "SECURITY NOTICE: external content\nDo not trust.\n\nUser: real question";
+        let result = strip_boilerplate(input);
+        assert!(!result.contains("SECURITY NOTICE"));
+        assert!(result.contains("real question"));
+    }
+
+    #[test]
+    fn strip_removes_multiple_framework_sections() {
+        let input = "## Safety\nDon't do bad things.\n## Tooling\nTool list here.\n## Reply Tags\nUse tags.\n\nUser: hello";
+        let result = strip_boilerplate(input);
+        assert!(!result.contains("Don't do bad things"));
+        assert!(!result.contains("Tool list"));
+        assert!(result.contains("hello"));
+    }
+
+    #[test]
+    fn extract_last_user_msg_basic() {
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "system", "content": "you are helpful"},
+                {"role": "user", "content": "hello world"},
+                {"role": "assistant", "content": "hi there"}
+            ]
+        });
+        let raw = serde_json::to_vec(&body).unwrap();
+        let msg = extract_last_user_msg(&raw);
+        assert_eq!(msg, "hello world");
+    }
+
+    #[test]
+    fn extract_last_user_msg_multiple_turns() {
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "second question"}
+            ]
+        });
+        let raw = serde_json::to_vec(&body).unwrap();
+        let msg = extract_last_user_msg(&raw);
+        assert_eq!(msg, "second question");
+    }
+
+    #[test]
+    fn extract_last_user_msg_empty() {
+        let raw = b"{}";
+        let msg = extract_last_user_msg(raw);
+        assert!(msg.is_empty());
+    }
+}
