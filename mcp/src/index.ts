@@ -57,8 +57,9 @@ server.tool(
     supersedes: z.array(z.string()).optional().describe("IDs of old memories this one replaces"),
     skip_dedup: z.boolean().optional().describe("Skip near-duplicate detection"),
     namespace: z.string().optional().describe("Namespace for multi-agent isolation"),
+    sync_embed: z.boolean().optional().describe("Wait for embedding generation before returning (default: false)"),
   },
-  async ({ content, importance, layer, tags, source, supersedes, skip_dedup, namespace }) => {
+  async ({ content, importance, layer, tags, source, supersedes, skip_dedup, namespace, sync_embed }) => {
     const body: Record<string, unknown> = { content };
     if (importance !== undefined) body.importance = importance;
     if (layer !== undefined) body.layer = layer;
@@ -67,6 +68,7 @@ server.tool(
     if (supersedes !== undefined) body.supersedes = supersedes;
     if (skip_dedup !== undefined) body.skip_dedup = skip_dedup;
     if (namespace !== undefined) body.namespace = namespace;
+    if (sync_embed !== undefined) body.sync_embed = sync_embed;
 
     const result = await engramFetch("/memories", body);
     return {
