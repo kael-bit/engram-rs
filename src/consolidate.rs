@@ -24,6 +24,8 @@ pub struct ConsolidateResponse {
     pub decayed: usize,
     pub demoted: usize,
     pub merged: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub importance_decayed: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub promoted_ids: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -32,6 +34,8 @@ pub struct ConsolidateResponse {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub merged_ids: Vec<String>,
 }
+
+fn is_zero(n: &usize) -> bool { *n == 0 }
 
 pub async fn consolidate(
     db: SharedDB,
@@ -177,6 +181,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         decayed,
         demoted,
         merged: 0,
+        importance_decayed,
         promoted_ids,
         dropped_ids,
         merged_ids: vec![],
