@@ -41,7 +41,7 @@ async function engramFetch(path: string, body?: unknown): Promise<unknown> {
 
 const server = new McpServer({
   name: "engram",
-  version: "0.4.0",
+  version: "0.5.0",
 });
 
 server.tool(
@@ -124,13 +124,15 @@ server.tool(
     limit: z.number().int().min(1).max(100).optional().describe("Max results (default 20)"),
     layer: z.number().int().min(1).max(3).optional().describe("Filter by layer"),
     source: z.string().optional().describe("Filter by source (e.g. session)"),
+    namespace: z.string().optional().describe("Filter by namespace"),
   },
-  async ({ hours, limit, layer, source }) => {
+  async ({ hours, limit, layer, source, namespace }) => {
     const params = new URLSearchParams();
     if (hours !== undefined) params.set("hours", String(hours));
     if (limit !== undefined) params.set("limit", String(limit));
     if (layer !== undefined) params.set("layer", String(layer));
     if (source !== undefined) params.set("source", source);
+    if (namespace !== undefined) params.set("ns", namespace);
     const qs = params.toString();
     const result = await engramFetch(`/recent${qs ? "?" + qs : ""}`);
     return {
@@ -146,10 +148,12 @@ server.tool(
     "Use this when waking up to restore context fast.",
   {
     hours: z.number().positive().optional().describe("Look back N hours (default 4)"),
+    namespace: z.string().optional().describe("Filter by namespace"),
   },
-  async ({ hours }) => {
+  async ({ hours, namespace }) => {
     const params = new URLSearchParams();
     if (hours !== undefined) params.set("hours", String(hours));
+    if (namespace !== undefined) params.set("ns", namespace);
     const qs = params.toString();
     const result = await engramFetch(`/resume${qs ? "?" + qs : ""}`);
     return {
