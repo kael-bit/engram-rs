@@ -174,7 +174,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "POST /recall": "hybrid search (semantic + keyword)",
             "GET /search?q=term": "quick keyword search",
             "GET /recent?hours=2": "recent memories by time",
-            "GET /resume?hours=4": "session recovery (identity + recent + sessions)",
+            "GET /resume?hours=4&workspace=tags&limit=100": "full memory bootstrap (core + working + buffer + recent + sessions)",
             "GET /triggers/:action": "pre-action recall (e.g. /triggers/git-push)",
             "POST /consolidate": "run maintenance cycle",
             "POST /repair": "auto-repair FTS index (remove orphans, rebuild missing)",
@@ -674,8 +674,9 @@ async fn do_resume(
     let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
     let core_limit = q.limit.unwrap_or(100);
 
-    // Parse workspace tags
+    // Parse workspace tags — from query param, or fall back to env default
     let ws_tags: Vec<String> = q.workspace
+        .or_else(|| std::env::var("ENGRAM_WORKSPACE").ok())
         .map(|w| w.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect())
         .unwrap_or_default();
 
