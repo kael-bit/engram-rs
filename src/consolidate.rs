@@ -207,7 +207,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                 .map(|&i| ns_mems[i].0.importance)
                 .fold(0.0_f64, f64::max);
 
-            // merge all tags
+            // merge all tags (cap at 20)
             let mut all_tags: Vec<String> = Vec::new();
             for &idx in &cluster {
                 for tag in &ns_mems[idx].0.tags {
@@ -216,6 +216,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                     }
                 }
             }
+            all_tags.truncate(20);
 
             // update the winner
             let best_id = ns_mems[best_idx].0.id.clone();
