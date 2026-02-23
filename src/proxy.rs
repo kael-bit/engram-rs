@@ -204,15 +204,21 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
     let req_preview: String = req_text.chars().take(max_chars).collect();
     let res_preview: String = res_text.chars().take(max_chars).collect();
 
-    let system = "You extract key memories from LLM conversations. \
-        Return a JSON array of objects with \"content\" and \"tags\" fields. \
-        Only extract genuinely important, long-term-relevant information. \
-        If nothing is worth remembering, return [].";
+    let system = "You extract memories from LLM conversations. Be extremely selective.\n\
+        Rules:\n\
+        - MAX 3 items per extraction. Quality over quantity.\n\
+        - Only extract NEW information: concrete decisions, specific preferences, \
+          learned lessons, or critical facts.\n\
+        - Each item must be specific and actionable, not vague summaries.\n\
+        - Skip: anything that sounds like a summary or recap of prior context.\n\
+        - Skip: routine technical details, code snippets, debugging steps.\n\
+        - Skip: general knowledge that anyone could look up.\n\
+        - If nothing genuinely new and important was discussed, return [].\n\
+        Return a JSON array of {\"content\": \"...\", \"tags\": [\"...\"]}. Keep content under 200 chars.";
 
     let user = format!(
-        "Extract memories from this LLM API exchange.\n\
-         Focus on: decisions, preferences, rules, lessons, important facts, architecture choices.\n\
-         Skip: routine code, debugging noise, ephemeral details.\n\n\
+        "Extract at most 3 genuinely new, important memories from this exchange.\n\
+         If this is just routine conversation with nothing worth remembering, return [].\n\n\
          === REQUEST ===\n{req_preview}\n\n=== RESPONSE ===\n{res_preview}"
     );
 
