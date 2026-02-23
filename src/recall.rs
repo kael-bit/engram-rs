@@ -83,15 +83,13 @@ pub fn estimate_tokens(text: &str) -> usize {
 fn recency_score(last_accessed: i64, decay_rate: f64) -> f64 {
     let now = crate::db::now_ms();
     let hours = ((now - last_accessed) as f64 / 3_600_000.0).max(0.0);
-    (-decay_rate * hours / 168.0).exp()
+    let rate = if decay_rate.is_finite() { decay_rate.clamp(0.0, 10.0) } else { 0.1 };
+    (-rate * hours / 168.0).exp()
 }
 
 #[cfg(test)]
 fn score_combined(importance: f64, relevance: f64, last_accessed: i64) -> f64 {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
+    let now = crate::db::now_ms();
     let age_hours = ((now - last_accessed) as f64 / 3_600_000.0).max(0.0);
     // simplified recency for rescore — uses default decay
     let recency = (-0.1 * age_hours).exp();
@@ -207,23 +205,13 @@ pub fn recall(
     let fts = db.search_fts(&req.query, limit * 3);
     let max_bm25 = fts.iter().map(|r| r.1).fold(0.001_f64, f64::max);
 
-    // O(1) lookup: memory id → index in scored
-    let scored_idx: HashMap<String, usize> = scored
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (s.memory.id.clone(), i))
-        .collect();
-
     for (id, bm25) in &fts {
         let fts_rel = bm25 / max_bm25;
         if seen.contains(id) {
             // Boost: found by both semantic AND keyword — strong relevance signal.
-            // Use multiplicative boost so it still helps even when relevance is already high.
-            if let Some(&idx) = scored_idx.get(id) {
-                let sm = &mut scored[idx];
+            if let Some(sm) = scored.iter_mut().find(|s| &s.memory.id == id) {
                 let boost = 1.0 + fts_rel * 0.3;  // 1.0 to 1.3x multiplier
                 sm.relevance = (sm.relevance * boost).min(1.5);
-                // rescore using the full scoring formula (decay_rate + layer bonus)
                 let rescored = score_memory(&sm.memory, sm.relevance);
                 sm.score = rescored.score;
                 sm.recency = rescored.recency;

@@ -109,7 +109,9 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         }
         let dominated_by_access = mem.access_count >= promote_threshold
             && mem.importance >= promote_min_imp;
-        let aged_in = (now - mem.created_at) > working_age && mem.access_count > 0;
+        let aged_in = (now - mem.created_at) > working_age
+            && mem.access_count > 0
+            && mem.importance >= promote_min_imp;
 
         if (dominated_by_access || aged_in)
             && db.promote(&mem.id, Layer::Core).is_ok()
@@ -200,7 +202,10 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
     let db2 = db.clone();
     let all = tokio::task::spawn_blocking(move || db2.get_all_with_embeddings())
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            warn!(error = %e, "get_all_with_embeddings task failed");
+            vec![]
+        });
 
     if all.len() < 2 {
         return (0, vec![]);
@@ -274,7 +279,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
             let total_input_len: usize = cluster.iter()
                 .map(|&i| ns_mems[i].0.content.chars().count())
                 .sum();
-            if merged_content.chars().count() >= total_input_len && total_input_len > 0 {
+            if total_input_len == 0 || merged_content.chars().count() >= total_input_len {
                 let preview: String = cluster.iter()
                     .map(|&i| ns_mems[i].0.content.chars().take(40).collect::<String>())
                     .collect::<Vec<_>>()
@@ -346,21 +351,28 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
             }
 
             // regenerate embedding for merged content
-            if cfg.has_embed() {
+            let embed_ok = if cfg.has_embed() {
                 match ai::get_embeddings(cfg, &[merged_content]).await {
                     Ok(embs) if !embs.is_empty() => {
                         if let Some(emb) = embs.into_iter().next() {
                             let db2 = db.clone();
                             let id = best_id.clone();
-                            let _ = tokio::task::spawn_blocking(move || {
+                            let res = tokio::task::spawn_blocking(move || {
                                 db2.set_embedding(&id, &emb)
-                            })
-                            .await;
-                        }
+                            }).await;
+                            res.is_ok()
+                        } else { true }
                     }
-                    Err(e) => warn!(error = %e, "embedding for merged memory failed"),
-                    _ => {}
+                    Err(e) => {
+                        warn!(error = %e, "embedding for merged memory failed, skipping loser deletion");
+                        false
+                    }
+                    _ => true
                 }
+            } else { true };
+
+            if !embed_ok {
+                continue; // don't delete losers without a valid winner embedding
             }
 
             // delete the rest
