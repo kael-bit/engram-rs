@@ -472,8 +472,8 @@ const DROP_TRIGGERS: [&str; 3] = [
 pub struct MemoryDB {
     pool: Pool<SqliteConnectionManager>,
     /// In-memory vector index for fast semantic search.
-    /// Avoids full table scan + blob deserialization on every recall.
-    vec_index: RwLock<HashMap<String, Vec<f64>>>,
+    /// Stores embeddings + namespace to avoid DB lookups during filtering.
+    vec_index: RwLock<HashMap<String, vec::VecEntry>>,
 }
 
 

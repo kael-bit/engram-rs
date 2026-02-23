@@ -5,18 +5,26 @@ use std::collections::HashSet;
 
 use super::*;
 
+/// In-memory vector entry: embedding + namespace for filtering without DB lookup.
+#[derive(Clone)]
+pub(crate) struct VecEntry {
+    emb: Vec<f64>,
+    namespace: String,
+}
+
 impl MemoryDB {
     /// Load all embeddings from DB into the in-memory vector index.
     pub(super) fn load_vec_index(&self) {
         let Ok(conn) = self.conn() else { return };
         let Ok(mut stmt) = conn.prepare(
-            "SELECT id, embedding FROM memories WHERE embedding IS NOT NULL"
+            "SELECT id, embedding, namespace FROM memories WHERE embedding IS NOT NULL"
         ) else { return };
 
-        let pairs: Vec<(String, Vec<f64>)> = stmt.query_map([], |row| {
+        let pairs: Vec<(String, VecEntry)> = stmt.query_map([], |row| {
             let id: String = row.get(0)?;
             let blob: Vec<u8> = row.get(1)?;
-            Ok((id, crate::ai::bytes_to_embedding(&blob)))
+            let namespace: String = row.get(2)?;
+            Ok((id, VecEntry { emb: crate::ai::bytes_to_embedding(&blob), namespace }))
         })
         .map(|iter| iter.filter_map(|r| r.ok()).collect())
         .unwrap_or_default();
@@ -24,8 +32,8 @@ impl MemoryDB {
         if let Ok(mut idx) = self.vec_index.write() {
             idx.clear();
             let count = pairs.len();
-            for (id, emb) in pairs {
-                idx.insert(id, emb);
+            for (id, entry) in pairs {
+                idx.insert(id, entry);
             }
             tracing::debug!(count, "loaded vector index");
         }
@@ -33,8 +41,12 @@ impl MemoryDB {
 
     /// Add or update an embedding in the vector index.
     pub(super) fn vec_index_put(&self, id: &str, emb: Vec<f64>) {
+        // Look up namespace from DB; fall back to "default".
+        let namespace = self.get(id).ok().flatten()
+            .map(|m| m.namespace)
+            .unwrap_or_else(|| "default".into());
         if let Ok(mut idx) = self.vec_index.write() {
-            idx.insert(id.to_string(), emb);
+            idx.insert(id.to_string(), VecEntry { emb, namespace });
         }
     }
 
@@ -96,20 +108,13 @@ impl MemoryDB {
             if !idx.is_empty() {
                 let mut scored: Vec<(String, f64)> = idx
                     .iter()
-                    .map(|(id, emb)| {
-                        let sim = crate::ai::cosine_similarity(query_emb, emb);
+                    .filter(|(_, entry)| ns.is_none_or(|n| entry.namespace == n))
+                    .map(|(id, entry)| {
+                        let sim = crate::ai::cosine_similarity(query_emb, &entry.emb);
                         (id.clone(), sim)
                     })
                     .filter(|(_, sim)| *sim > 0.0)
                     .collect();
-
-                // Namespace filter: need to look up the memory to check namespace.
-                // Only do this if a namespace filter is specified.
-                if let Some(ns) = ns {
-                    scored.retain(|(id, _)| {
-                        self.get(id).ok().flatten().is_some_and(|m| m.namespace == ns)
-                    });
-                }
 
                 scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                 scored.truncate(limit);
@@ -143,8 +148,8 @@ impl MemoryDB {
             let mut scored: Vec<(String, f64)> = ids
                 .iter()
                 .filter_map(|id| {
-                    idx.get(id).map(|emb| {
-                        let sim = crate::ai::cosine_similarity(query_emb, emb);
+                    idx.get(id).map(|entry| {
+                        let sim = crate::ai::cosine_similarity(query_emb, &entry.emb);
                         (id.clone(), sim)
                     })
                 })

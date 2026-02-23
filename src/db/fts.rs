@@ -97,6 +97,11 @@ impl MemoryDB {
 
     /// Full-text search using FTS5. Returns `(id, bm25_score)` pairs.
     pub fn search_fts(&self, query: &str, limit: usize) -> Vec<(String, f64)> {
+        self.search_fts_ns(query, limit, None)
+    }
+
+    /// FTS search with optional namespace filter (JOIN against memories table).
+    pub fn search_fts_ns(&self, query: &str, limit: usize, ns: Option<&str>) -> Vec<(String, f64)> {
         let sanitized: String = query
             .chars()
             .map(|c| if c.is_alphanumeric() || is_cjk(c) { c } else { ' ' })
@@ -106,23 +111,38 @@ impl MemoryDB {
             return vec![];
         }
 
-        // Pre-process query: segment CJK so "天气" matches bigram-indexed content
         let processed = append_segmented(sanitized);
         let fts_query: String = processed.split_whitespace().collect::<Vec<_>>().join(" OR ");
 
         let Ok(conn) = self.conn() else { return vec![]; };
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT id, rank FROM memories_fts \
-             WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2",
-        ) else {
-            return vec![];
-        };
 
-        stmt.query_map(params![fts_query, limit as i64], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-        })
-        .map(|iter| iter.filter_map(|r| r.ok()).map(|(id, rank)| (id, -rank)).collect())
-        .unwrap_or_default()
+        if let Some(ns) = ns {
+            let Ok(mut stmt) = conn.prepare(
+                "SELECT f.id, f.rank FROM memories_fts f \
+                 JOIN memories m ON m.id = f.id \
+                 WHERE f.memories_fts MATCH ?1 AND m.namespace = ?3 \
+                 ORDER BY f.rank LIMIT ?2",
+            ) else {
+                return vec![];
+            };
+            stmt.query_map(params![fts_query, limit as i64, ns], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })
+            .map(|iter| iter.filter_map(|r| r.ok()).map(|(id, rank)| (id, -rank)).collect())
+            .unwrap_or_default()
+        } else {
+            let Ok(mut stmt) = conn.prepare(
+                "SELECT id, rank FROM memories_fts \
+                 WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+            ) else {
+                return vec![];
+            };
+            stmt.query_map(params![fts_query, limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })
+            .map(|iter| iter.filter_map(|r| r.ok()).map(|(id, rank)| (id, -rank)).collect())
+            .unwrap_or_default()
+        }
     }
 
     /// Auto-repair FTS index: remove orphans and rebuild missing entries.

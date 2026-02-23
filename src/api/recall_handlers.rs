@@ -34,14 +34,11 @@ pub(super) async fn quick_search(
     let query = sq.q.clone();
     let results = blocking(move || {
         let d = db;
-        let hits = d.search_fts(&query, limit);
-        let mut memories: Vec<db::Memory> = hits
+        let hits = d.search_fts_ns(&query, limit, ns_filter.as_deref());
+        let memories: Vec<db::Memory> = hits
             .into_iter()
             .filter_map(|(id, _)| d.get(&id).ok().flatten())
             .collect();
-        if let Some(ref ns) = ns_filter {
-            memories.retain(|m| m.namespace == *ns);
-        }
         memories
     })
     .await?;
@@ -91,20 +88,14 @@ pub(super) async fn list_recent(
     let db = state.db.clone();
     let result = blocking(move || {
         let d = db;
-        let mut memories = d.list_since(since_ms, limit)?;
-        if let Some(l) = layer_filter {
-            memories.retain(|m| m.layer as u8 == l);
-        }
-        if min_imp > 0.0 {
-            memories.retain(|m| m.importance >= min_imp);
-        }
-        if let Some(ref src) = source_filter {
-            memories.retain(|m| m.source == *src);
-        }
-        if let Some(ref ns) = ns_filter {
-            memories.retain(|m| m.namespace == *ns);
-        }
-        Ok::<_, EngramError>(memories)
+        d.list_since_filtered(
+            since_ms,
+            limit,
+            ns_filter.as_deref(),
+            layer_filter,
+            if min_imp > 0.0 { Some(min_imp) } else { None },
+            source_filter.as_deref(),
+        )
     })
     .await??;
 

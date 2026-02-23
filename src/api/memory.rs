@@ -227,21 +227,13 @@ pub(super) async fn list_memories(
         let limit = q.limit.unwrap_or(50).min(200);
         let offset = q.offset.unwrap_or(0);
 
-        // filter by layer if specified
-        let mut memories = if let Some(layer_val) = q.layer {
-            if let Ok(layer) = layer_val.try_into() {
-                d.list_by_layer(layer, limit, offset)
-            } else {
-                vec![]
-            }
-        } else {
-            d.list_all_ns(limit, offset, q.ns.as_deref())?
-        };
-
-        // filter by tag if specified
-        if let Some(ref tag) = q.tag {
-            memories.retain(|m| m.tags.iter().any(|t| t == tag));
-        }
+        let memories = d.list_filtered(
+            limit,
+            offset,
+            q.ns.as_deref(),
+            q.layer,
+            q.tag.as_deref(),
+        )?;
 
         let count = memories.len();
         let stats = d.stats();

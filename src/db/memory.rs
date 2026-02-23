@@ -474,7 +474,7 @@ impl MemoryDB {
 
     /// List all memories with pagination.
     pub fn list_all(&self, limit: usize, offset: usize) -> Result<Vec<Memory>, EngramError> {
-        self.list_all_ns(limit, offset, None)
+        self.list_filtered(limit, offset, None, None, None)
     }
 
     pub fn list_all_ns(
@@ -483,41 +483,111 @@ impl MemoryDB {
         offset: usize,
         ns: Option<&str>,
     ) -> Result<Vec<Memory>, EngramError> {
-        match ns {
-            Some(ns) => {
-                let conn = self.conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT * FROM memories WHERE namespace = ?3 \
-                     ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
-                )?;
-                let rows: Vec<Memory> = stmt
-                    .query_map(params![limit as i64, offset as i64, ns], row_to_memory)?
-                    .filter_map(|r| r.ok())
-                    .collect();
-                Ok(rows)
-            }
-            None => {
-                let conn = self.conn()?;
-                let mut stmt = conn.prepare(
-                    "SELECT * FROM memories ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
-                )?;
-                let rows: Vec<Memory> = stmt
-                    .query_map(params![limit as i64, offset as i64], row_to_memory)?
-                    .filter_map(|r| r.ok())
-                    .collect();
-                Ok(rows)
-            }
+        self.list_filtered(limit, offset, ns, None, None)
+    }
+
+    /// List memories with optional namespace, layer, and tag filters — all pushed to SQL.
+    pub fn list_filtered(
+        &self,
+        limit: usize,
+        offset: usize,
+        ns: Option<&str>,
+        layer: Option<u8>,
+        tag: Option<&str>,
+    ) -> Result<Vec<Memory>, EngramError> {
+        let conn = self.conn()?;
+
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut clauses = Vec::new();
+
+        if let Some(n) = ns {
+            params_vec.push(Box::new(n.to_string()));
+            clauses.push(format!("namespace = ?{}", params_vec.len()));
         }
+        if let Some(l) = layer {
+            params_vec.push(Box::new(l as i64));
+            clauses.push(format!("layer = ?{}", params_vec.len()));
+        }
+        if let Some(t) = tag {
+            let pattern = format!("%\"{}\"%" , t.replace('"', ""));
+            params_vec.push(Box::new(pattern));
+            clauses.push(format!("tags LIKE ?{}", params_vec.len()));
+        }
+
+        params_vec.push(Box::new(limit as i64));
+        let limit_idx = params_vec.len();
+        params_vec.push(Box::new(offset as i64));
+        let offset_idx = params_vec.len();
+
+        let mut sql = String::from("SELECT * FROM memories");
+        if !clauses.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&clauses.join(" AND "));
+        }
+        sql.push_str(&format!(" ORDER BY created_at DESC LIMIT ?{limit_idx} OFFSET ?{offset_idx}"));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+        let rows: Vec<Memory> = stmt
+            .query_map(param_refs.as_slice(), row_to_memory)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
     }
 
     /// List memories created since a given timestamp, ordered by creation time descending.
     pub fn list_since(&self, since_ms: i64, limit: usize) -> Result<Vec<Memory>, EngramError> {
+        self.list_since_filtered(since_ms, limit, None, None, None, None)
+    }
+
+    /// Filtered variant — pushes all filters to SQL instead of Rust `retain()`.
+    pub fn list_since_filtered(
+        &self,
+        since_ms: i64,
+        limit: usize,
+        ns: Option<&str>,
+        layer: Option<u8>,
+        min_importance: Option<f64>,
+        source: Option<&str>,
+    ) -> Result<Vec<Memory>, EngramError> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT * FROM memories WHERE created_at >= ?1 ORDER BY created_at DESC LIMIT ?2",
-        )?;
+
+        // Collect parameter values first, track SQL fragments
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(since_ms)];
+        let mut clauses = Vec::new();
+
+        if let Some(n) = ns {
+            params_vec.push(Box::new(n.to_string()));
+            clauses.push(format!("namespace = ?{}", params_vec.len()));
+        }
+        if let Some(l) = layer {
+            params_vec.push(Box::new(l as i64));
+            clauses.push(format!("layer = ?{}", params_vec.len()));
+        }
+        if let Some(mi) = min_importance {
+            params_vec.push(Box::new(mi));
+            clauses.push(format!("importance >= ?{}", params_vec.len()));
+        }
+        if let Some(s) = source {
+            params_vec.push(Box::new(s.to_string()));
+            clauses.push(format!("source = ?{}", params_vec.len()));
+        }
+        params_vec.push(Box::new(limit as i64));
+        let limit_idx = params_vec.len();
+
+        let mut sql = "SELECT * FROM memories WHERE created_at >= ?1".to_string();
+        for c in &clauses {
+            sql.push_str(" AND ");
+            sql.push_str(c);
+        }
+        sql.push_str(&format!(" ORDER BY created_at DESC LIMIT ?{limit_idx}"));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
         let rows = stmt
-            .query_map(params![since_ms, limit as i64], row_to_memory)?
+            .query_map(param_refs.as_slice(), row_to_memory)?
             .filter_map(|r| r.ok())
             .collect();
         Ok(rows)
@@ -1151,6 +1221,83 @@ mod tests {
 
         let page2 = db.list_all(3, 3).unwrap();
         assert_eq!(page2.len(), 2);
+    }
+
+    #[test]
+    fn list_filtered_by_ns_layer_tag() {
+        let db = test_db();
+        db.insert(MemoryInput {
+            content: "alpha in ns-a".into(),
+            namespace: Some("ns-a".into()),
+            tags: Some(vec!["hot".into()]),
+            ..Default::default()
+        }).unwrap();
+        db.insert(MemoryInput {
+            content: "beta in ns-b".into(),
+            namespace: Some("ns-b".into()),
+            tags: Some(vec!["cold".into()]),
+            ..Default::default()
+        }).unwrap();
+        db.insert(MemoryInput {
+            content: "gamma in ns-a layer 2".into(),
+            namespace: Some("ns-a".into()),
+            layer: Some(2),
+            tags: Some(vec!["hot".into()]),
+            ..Default::default()
+        }).unwrap();
+
+        // namespace filter
+        let nsa = db.list_filtered(10, 0, Some("ns-a"), None, None).unwrap();
+        assert_eq!(nsa.len(), 2);
+
+        // namespace + layer
+        let nsa_l2 = db.list_filtered(10, 0, Some("ns-a"), Some(2), None).unwrap();
+        assert_eq!(nsa_l2.len(), 1);
+        assert!(nsa_l2[0].content.contains("gamma"));
+
+        // tag filter
+        let hot = db.list_filtered(10, 0, None, None, Some("hot")).unwrap();
+        assert_eq!(hot.len(), 2);
+
+        // all combined
+        let combo = db.list_filtered(10, 0, Some("ns-a"), Some(2), Some("hot")).unwrap();
+        assert_eq!(combo.len(), 1);
+
+        // no match
+        let empty = db.list_filtered(10, 0, Some("ns-a"), None, Some("cold")).unwrap();
+        assert_eq!(empty.len(), 0);
+    }
+
+    #[test]
+    fn list_since_filtered_params() {
+        let db = test_db();
+        let now = super::now_ms();
+        db.insert(MemoryInput {
+            content: "recent in ns-x".into(),
+            namespace: Some("ns-x".into()),
+            source: Some("api".into()),
+            ..Default::default()
+        }).unwrap();
+        db.insert(MemoryInput {
+            content: "recent in default".into(),
+            source: Some("session".into()),
+            ..Default::default()
+        }).unwrap();
+
+        let since = now - 5000;
+        // namespace filter
+        let nsx = db.list_since_filtered(since, 10, Some("ns-x"), None, None, None).unwrap();
+        assert_eq!(nsx.len(), 1);
+        assert!(nsx[0].content.contains("ns-x"));
+
+        // source filter
+        let sess = db.list_since_filtered(since, 10, None, None, None, Some("session")).unwrap();
+        assert_eq!(sess.len(), 1);
+        assert!(sess[0].content.contains("default"));
+
+        // no filter returns all
+        let all = db.list_since_filtered(since, 10, None, None, None, None).unwrap();
+        assert_eq!(all.len(), 2);
     }
 
     #[test]
