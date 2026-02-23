@@ -35,6 +35,12 @@ pub struct ConsolidateResponse {
     /// IDs of memories that absorbed others during merge (winners).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub merged_ids: Vec<String>,
+    /// Number of memories updated via reconciliation (newer superseded older).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub reconciled: usize,
+    /// IDs of memories that were superseded (deleted) during reconciliation.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reconciled_ids: Vec<String>,
     /// IDs that passed access/age thresholds but await LLM gate review.
     #[serde(skip)]
     pub(crate) promotion_candidates: Vec<(String, String)>, // (id, content)
@@ -97,6 +103,14 @@ pub async fn consolidate(
                 }
             }
         }
+    }
+
+    // Reconcile: detect same-topic memories where newer one updates/supersedes older.
+    // Runs every consolidation cycle (not just when merge is requested).
+    if let Some(ref cfg) = ai {
+        let (count, ids) = reconcile_updates(&db, cfg).await;
+        result.reconciled = count;
+        result.reconciled_ids = ids;
     }
 
     if do_merge {
@@ -234,6 +248,8 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         promoted_ids,
         dropped_ids,
         merged_ids: vec![],
+        reconciled: 0,
+        reconciled_ids: vec![],
         promotion_candidates,
     }
 }
@@ -271,6 +287,173 @@ async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<bool, Strin
     let response = ai::llm_chat_as(cfg, "gate", GATE_SYSTEM, truncated).await?;
     let decision = response.trim().to_uppercase();
     Ok(decision.starts_with("APPROVE"))
+}
+
+// --- Reconcile: same-topic update detection ---
+
+const RECONCILE_PROMPT: &str = "You are comparing two memory entries about potentially the same topic.\n\
+    The NEWER entry was created after the OLDER one.\n\n\
+    Decide:\n\
+    - UPDATE: The newer entry is an updated version of the same information. \
+    The older one is now stale/outdated and should be removed.\n\
+    - ABSORB: The newer entry contains all useful info from the older one plus more. \
+    The older one is redundant.\n\
+    - KEEP_BOTH: They cover genuinely different aspects or the older one has \
+    unique details not in the newer one.\n\n\
+    Reply with ONLY one word: UPDATE, ABSORB, or KEEP_BOTH";
+
+/// Detect same-topic memories where a newer one supersedes an older one.
+/// Runs every consolidation cycle. Uses a moderate similarity threshold
+/// (0.55-0.78) to find topically related but not near-duplicate pairs.
+/// Near-duplicates (>0.78) are handled by merge_similar instead.
+async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
+    let db2 = db.clone();
+    let all = tokio::task::spawn_blocking(move || db2.get_all_with_embeddings())
+        .await
+        .unwrap_or_else(|e| {
+            warn!(error = %e, "reconcile: get_all_with_embeddings failed");
+            vec![]
+        });
+
+    // Only reconcile Working and Core layers (Buffer is too transient)
+    let candidates: Vec<&(Memory, Vec<f64>)> = all
+        .iter()
+        .filter(|(m, e)| !e.is_empty() && (m.layer == Layer::Working || m.layer == Layer::Core))
+        .collect();
+
+    if candidates.len() < 2 {
+        return (0, vec![]);
+    }
+
+    let mut reconciled = 0;
+    let mut removed_ids: Vec<String> = Vec::new();
+    let one_hour_ms: i64 = 3600 * 1000;
+
+    // Find pairs with moderate similarity (related but not duplicate)
+    for i in 0..candidates.len() {
+        if removed_ids.contains(&candidates[i].0.id) {
+            continue;
+        }
+        for j in (i + 1)..candidates.len() {
+            if removed_ids.contains(&candidates[j].0.id) {
+                continue;
+            }
+
+            let sim = cosine_similarity(&candidates[i].1, &candidates[j].1);
+
+            // Skip near-duplicates (merge handles those) and unrelated pairs
+            if !(0.55..=0.78).contains(&sim) {
+                continue;
+            }
+
+            let (older, newer) = if candidates[i].0.created_at <= candidates[j].0.created_at {
+                (&candidates[i].0, &candidates[j].0)
+            } else {
+                (&candidates[j].0, &candidates[i].0)
+            };
+
+            // Only consider pairs with meaningful time gap
+            if (newer.created_at - older.created_at) < one_hour_ms {
+                continue;
+            }
+
+            // Same namespace only
+            if older.namespace != newer.namespace {
+                continue;
+            }
+
+            // Ask LLM to judge the relationship
+            let user_msg = format!(
+                "OLDER (created {}):\n{}\n\nNEWER (created {}):\n{}",
+                format_ts(older.created_at),
+                truncate_chars(&older.content, 400),
+                format_ts(newer.created_at),
+                truncate_chars(&newer.content, 400),
+            );
+
+            match ai::llm_chat_as(cfg, "gate", RECONCILE_PROMPT, &user_msg).await {
+                Ok(resp) => {
+                    let decision = resp.trim().to_uppercase();
+                    if decision.starts_with("UPDATE") || decision.starts_with("ABSORB") {
+                        // Newer supersedes older: transfer any unique tags, then delete old
+                        let mut new_tags: Vec<String> = newer.tags.clone();
+                        for tag in &older.tags {
+                            if !new_tags.contains(tag) {
+                                new_tags.push(tag.clone());
+                            }
+                        }
+                        new_tags.truncate(20);
+
+                        // Bump newer's importance if older had higher
+                        let imp = newer.importance.max(older.importance);
+                        let access = newer.access_count + older.access_count;
+
+                        let newer_id = newer.id.clone();
+                        let older_id = older.id.clone();
+                        let db2 = db.clone();
+                        let update_result = tokio::task::spawn_blocking(move || {
+                            db2.update_fields(&newer_id, None, None, Some(imp), Some(&new_tags))?;
+                            db2.set_access_count(&newer_id, access)?;
+                            db2.delete(&older_id)?;
+                            Ok::<_, EngramError>(())
+                        }).await;
+
+                        match update_result {
+                            Ok(Ok(())) => {
+                                info!(
+                                    newer = %newer.id,
+                                    older = %older.id,
+                                    sim = format!("{:.3}", sim),
+                                    decision = %decision,
+                                    "reconciled: newer supersedes older"
+                                );
+                                removed_ids.push(older.id.clone());
+                                reconciled += 1;
+                            }
+                            Ok(Err(e)) => warn!(error = %e, "reconcile update failed"),
+                            Err(e) => warn!(error = %e, "reconcile task panicked"),
+                        }
+                    } else {
+                        debug!(
+                            older = %older.id,
+                            newer = %newer.id,
+                            "reconcile: keeping both (different topics)"
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "reconcile LLM call failed, skipping pair");
+                }
+            }
+        }
+    }
+
+    if reconciled > 0 {
+        info!(reconciled, "reconciliation complete");
+    }
+
+    (reconciled, removed_ids)
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max).collect();
+        format!("{truncated}…")
+    }
+}
+
+fn format_ts(ms: i64) -> String {
+    // Simple relative time format — no chrono dependency needed
+    let age_secs = (crate::db::now_ms() - ms) / 1000;
+    if age_secs < 3600 {
+        format!("{}m ago", age_secs / 60)
+    } else if age_secs < 86400 {
+        format!("{}h ago", age_secs / 3600)
+    } else {
+        format!("{}d ago", age_secs / 86400)
+    }
 }
 
 const MERGE_SYSTEM: &str = "Merge these related memory entries into a single concise note. Rules:\n\

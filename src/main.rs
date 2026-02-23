@@ -190,12 +190,13 @@ async fn main() {
                     bg_state.db.clone(), req, ai_cfg,
                 ).await;
                 if r.promoted > 0 || r.decayed > 0 || r.merged > 0
-                    || r.gate_rejected > 0 || r.demoted > 0
+                    || r.gate_rejected > 0 || r.demoted > 0 || r.reconciled > 0
                 {
                     info!(
                         promoted = r.promoted,
                         decayed = r.decayed,
                         merged = r.merged,
+                        reconciled = r.reconciled,
                         gate_rejected = r.gate_rejected,
                         demoted = r.demoted,
                         "auto-consolidate"
