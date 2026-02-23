@@ -784,6 +784,20 @@ impl MemoryDB {
         self.get(id)
     }
 
+    pub fn demote(&self, id: &str, target: Layer) -> Result<Option<Memory>, EngramError> {
+        let Some(m) = self.get(id)? else {
+            return Ok(None);
+        };
+        if (m.layer as u8) <= (target as u8) {
+            return Ok(Some(m));
+        }
+        self.conn()?.execute(
+            "UPDATE memories SET layer = ?1, decay_rate = ?2 WHERE id = ?3",
+            params![target as u8, target.default_decay(), id],
+        )?;
+        self.get(id)
+    }
+
     pub fn stats(&self) -> Stats {
         let mut s = Stats {
             total: 0,

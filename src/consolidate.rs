@@ -22,6 +22,7 @@ pub struct ConsolidateRequest {
 pub struct ConsolidateResponse {
     pub promoted: usize,
     pub decayed: usize,
+    pub demoted: usize,
     pub merged: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub promoted_ids: Vec<String>,
@@ -80,8 +81,24 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     let mut promoted_ids = Vec::new();
     let mut dropped_ids = Vec::new();
 
+    // Demote session notes that shouldn't be in Core.
+    // Session logs are episodic — they belong in Working at most.
+    let mut demoted = 0_usize;
+    for mem in db.list_by_layer(Layer::Core, 10000, 0) {
+        if mem.source == "session" || mem.tags.iter().any(|t| t == "ephemeral") {
+            if db.demote(&mem.id, Layer::Working).is_ok() {
+                demoted += 1;
+            }
+        }
+    }
+
     // Working → Core: access-based or age-based (single pass)
+    // Session notes (source="session") are capped at Working — they're
+    // episodic work logs, not core knowledge.
     for mem in db.list_by_layer(Layer::Working, 10000, 0) {
+        if mem.source == "session" || mem.tags.iter().any(|t| t == "ephemeral") {
+            continue;
+        }
         let dominated_by_access = mem.access_count >= promote_threshold
             && mem.importance >= promote_min_imp;
         let aged_in = (now - mem.created_at) > working_age && mem.access_count > 0;
@@ -135,8 +152,8 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         }
     }
 
-    if promoted > 0 || decayed > 0 {
-        info!(promoted, decayed, "consolidation complete");
+    if promoted > 0 || decayed > 0 || demoted > 0 {
+        info!(promoted, decayed, demoted, "consolidation complete");
     } else {
         debug!("consolidation: nothing to do");
     }
@@ -144,6 +161,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     ConsolidateResponse {
         promoted,
         decayed,
+        demoted,
         merged: 0,
         promoted_ids,
         dropped_ids,
