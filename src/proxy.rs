@@ -15,21 +15,26 @@ static PROXY_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static PROXY_EXTRACTED: AtomicU64 = AtomicU64::new(0);
 
 pub fn proxy_stats() -> (u64, u64, usize) {
+    let buffered = {
+        let guard = WINDOWS.lock().unwrap();
+        guard.as_ref().map(|m| m.values().map(|w| w.turns.len()).sum()).unwrap_or(0)
+    };
     (
         PROXY_REQUESTS.load(Ordering::Relaxed),
         PROXY_EXTRACTED.load(Ordering::Relaxed),
-        with_window(|w| w.turns.len()),
+        buffered,
     )
 }
 
-// Sliding window: buffer recent exchanges, extract when enough context accumulates.
-// This beats per-request extraction because a single "ok do it" means nothing alone,
-// but with context it might be a key decision.
+use std::collections::HashMap;
+
+// Sliding window: buffer recent exchanges per conversation, extract when
+// enough context accumulates. Keyed by auth token to separate different callers.
 const WINDOW_MAX_TURNS: usize = 5;
 const WINDOW_MAX_CHARS: usize = 8000;
 
 struct ConversationWindow {
-    turns: Vec<String>, // each entry = "User: ...\nAssistant: ..."
+    turns: Vec<String>,
     total_chars: usize,
 }
 
@@ -59,15 +64,30 @@ impl ConversationWindow {
     }
 }
 
-static WINDOW: Mutex<Option<ConversationWindow>> = Mutex::new(None);
+static WINDOWS: Mutex<Option<HashMap<String, ConversationWindow>>> = Mutex::new(None);
 
-fn with_window<F, R>(f: F) -> R
+fn with_window<F, R>(key: &str, f: F) -> R
 where
     F: FnOnce(&mut ConversationWindow) -> R,
 {
-    let mut guard = WINDOW.lock().unwrap();
-    let w = guard.get_or_insert_with(ConversationWindow::new);
+    let mut guard = WINDOWS.lock().unwrap();
+    let map = guard.get_or_insert_with(HashMap::new);
+    let w = map.entry(key.to_string()).or_insert_with(ConversationWindow::new);
     f(w)
+}
+
+fn drain_all_windows() -> Vec<(String, String)> {
+    let mut guard = WINDOWS.lock().unwrap();
+    let Some(map) = guard.as_mut() else { return vec![] };
+    let mut results = Vec::new();
+    for (key, w) in map.iter_mut() {
+        if !w.is_empty() {
+            results.push((key.clone(), w.drain()));
+        }
+    }
+    // remove empty entries
+    map.retain(|_, w| !w.is_empty());
+    results
 }
 
 #[derive(Clone)]
@@ -157,10 +177,20 @@ pub async fn handle(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|ct| ct.contains("text/event-stream"));
 
+    // Use auth token (last 8 chars) as session key to separate conversation windows
+    let session_key = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            let s = s.strip_prefix("Bearer ").unwrap_or(s);
+            if s.len() > 8 { s[s.len()-8..].to_string() } else { s.to_string() }
+        })
+        .unwrap_or_else(|| "default".into());
+
     if is_stream {
-        stream_response(state, status, res_headers, upstream_res, req_capture).await
+        stream_response(state, status, res_headers, upstream_res, req_capture, session_key).await
     } else {
-        buffered_response(state, status, res_headers, upstream_res, req_capture).await
+        buffered_response(state, status, res_headers, upstream_res, req_capture, session_key).await
     }
 }
 
@@ -170,6 +200,7 @@ async fn buffered_response(
     headers: HeaderMap,
     upstream_res: reqwest::Response,
     req_capture: Vec<u8>,
+    session_key: String,
 ) -> Response {
     let res_bytes = match upstream_res.bytes().await {
         Ok(b) => b,
@@ -181,7 +212,7 @@ async fn buffered_response(
     let res_capture = res_bytes.to_vec();
 
     if status.is_success() {
-        tokio::spawn(buffer_exchange(state, req_capture, res_capture));
+        tokio::spawn(buffer_exchange(state, req_capture, res_capture, session_key));
     }
 
     let mut response = (status, res_bytes.to_vec()).into_response();
@@ -195,6 +226,7 @@ async fn stream_response(
     headers: HeaderMap,
     upstream_res: reqwest::Response,
     req_capture: Vec<u8>,
+    session_key: String,
 ) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(32);
     let state_clone = state.clone();
@@ -221,7 +253,7 @@ async fn stream_response(
         drop(tx);
 
         if !buf.is_empty() {
-            buffer_exchange(state_clone, req_capture, buf).await;
+            buffer_exchange(state_clone, req_capture, buf, session_key).await;
         }
     });
 
@@ -238,7 +270,7 @@ async fn stream_response(
 
 /// Parse a single exchange from raw request/response bytes, add to the sliding window.
 /// When window is full, flush and extract memories from the accumulated context.
-async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
+async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, session_key: String) {
     let user_msg = extract_last_user_msg(&req_raw);
     let assistant_msg = extract_assistant_msg(&res_raw);
 
@@ -254,7 +286,7 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
 
     let turn = format!("User: {}\nAssistant: {}", user_msg, assistant_msg);
 
-    let context = with_window(|w| {
+    let context = with_window(&session_key, |w| {
         w.push(turn);
         if w.should_flush() {
             Some(w.drain())
@@ -268,16 +300,13 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
     }
 }
 
-/// Flush any remaining buffered turns. Called from background consolidation timer.
+/// Flush all remaining buffered turns. Called from background timer.
 pub async fn flush_window(state: &AppState) {
-    let context = with_window(|w| {
-        if w.is_empty() {
-            return String::new();
+    let pending = drain_all_windows();
+    for (_key, context) in pending {
+        if !context.is_empty() {
+            extract_from_context(state.clone(), &context).await;
         }
-        w.drain()
-    });
-    if !context.is_empty() {
-        extract_from_context(state.clone(), &context).await;
     }
 }
 

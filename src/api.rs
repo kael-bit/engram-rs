@@ -157,6 +157,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "requests": proxy_reqs,
             "extracted": proxy_extracted,
             "buffered_turns": proxy_buffered,
+            "buffered_turns": proxy_buffered,
         },
         "integrity": integrity,
         "stats": s,
