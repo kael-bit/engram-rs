@@ -150,10 +150,24 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
             continue;
         }
 
+        // group by namespace so we never merge across agents
+        let mut by_ns: std::collections::HashMap<&str, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, (m, _)) in layer_mems.iter().enumerate() {
+            by_ns.entry(&m.namespace).or_default().push(i);
+        }
+
+        for ns_indices in by_ns.values() {
+            if ns_indices.len() < 2 {
+                continue;
+            }
+            let ns_mems: Vec<&(Memory, Vec<f64>)> =
+                ns_indices.iter().map(|&i| layer_mems[i]).collect();
+
         // text-embedding-3-small produces lower cosine scores for short CJK text,
         // so 0.75 was too aggressive. 0.68 catches real semantic duplicates without
         // merging unrelated memories (validated on actual CJK memory pairs).
-        let clusters = find_clusters(&layer_mems, 0.68);
+        let clusters = find_clusters(&ns_mems, 0.68);
 
         for cluster in clusters {
             if cluster.len() < 2 {
@@ -163,7 +177,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
             let mut input = String::new();
             for (i, &idx) in cluster.iter().enumerate() {
                 use std::fmt::Write;
-                let _ = writeln!(input, "{}. {}", i + 1, layer_mems[idx].0.content);
+                let _ = writeln!(input, "{}. {}", i + 1, ns_mems[idx].0.content);
             }
 
             let merged_content = match ai::llm_chat(cfg, MERGE_SYSTEM, &input).await {
@@ -182,7 +196,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
             // if two memories conflict, the newer one is more likely correct
             let Some(&best_idx) = cluster
                 .iter()
-                .max_by_key(|&&i| layer_mems[i].0.created_at)
+                .max_by_key(|&&i| ns_mems[i].0.created_at)
             else {
                 continue;
             };
@@ -190,13 +204,13 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
             // take the highest importance from the cluster
             let max_importance = cluster
                 .iter()
-                .map(|&i| layer_mems[i].0.importance)
+                .map(|&i| ns_mems[i].0.importance)
                 .fold(0.0_f64, f64::max);
 
             // merge all tags
             let mut all_tags: Vec<String> = Vec::new();
             for &idx in &cluster {
-                for tag in &layer_mems[idx].0.tags {
+                for tag in &ns_mems[idx].0.tags {
                     if !all_tags.contains(tag) {
                         all_tags.push(tag.clone());
                     }
@@ -204,7 +218,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
             }
 
             // update the winner
-            let best_id = layer_mems[best_idx].0.id.clone();
+            let best_id = ns_mems[best_idx].0.id.clone();
             {
                 let db2 = db.clone();
                 let id = best_id.clone();
@@ -247,13 +261,14 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                 if idx == best_idx {
                     continue;
                 }
-                let id = layer_mems[idx].0.id.clone();
+                let id = ns_mems[idx].0.id.clone();
                 let db2 = db.clone();
                 let _ = tokio::task::spawn_blocking(move || db2.delete(&id)).await;
             }
 
             merged_total += 1;
         }
+        } // ns_indices
     }
 
     if merged_total > 0 {

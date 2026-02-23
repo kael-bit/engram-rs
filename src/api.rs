@@ -315,8 +315,12 @@ struct ListQuery {
 
 async fn list_memories(
     State(state): State<AppState>,
-    Query(q): Query<ListQuery>,
+    headers: axum::http::HeaderMap,
+    Query(mut q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
+    if q.ns.is_none() {
+        q.ns = get_namespace(&headers);
+    }
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || {
         let d = db;
@@ -415,8 +419,12 @@ struct RecentQuery {
 
 async fn list_recent(
     State(state): State<AppState>,
-    Query(q): Query<RecentQuery>,
+    headers: axum::http::HeaderMap,
+    Query(mut q): Query<RecentQuery>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
+    if q.ns.is_none() {
+        q.ns = get_namespace(&headers);
+    }
     let hours = q.hours.unwrap_or(2.0);
     let limit = q.limit.unwrap_or(20).min(100);
     let layer_filter = q.layer;
@@ -533,10 +541,14 @@ async fn do_resume(
 
 async fn do_recall(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(mut req): Json<recall::RecallRequest>,
 ) -> Result<Json<recall::RecallResponse>, EngramError> {
     if req.query.is_empty() {
         return Err(EngramError::EmptyQuery);
+    }
+    if req.namespace.is_none() {
+        req.namespace = get_namespace(&headers);
     }
 
     let do_rerank =
