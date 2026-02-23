@@ -12,6 +12,17 @@ use tracing::{debug, warn};
 use crate::error::EngramError;
 use crate::{ai, consolidate, db, recall, AppState};
 
+/// Run a blocking closure on the spawn_blocking pool and map JoinError.
+async fn blocking<T, F>(f: F) -> Result<T, EngramError>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| EngramError::Internal(e.to_string()))
+}
+
 /// Extract namespace from X-Namespace header, defaulting to None (= all namespaces).
 fn get_namespace(headers: &axum::http::HeaderMap) -> Option<String> {
     headers
@@ -86,7 +97,7 @@ pub fn router(state: AppState) -> Router {
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let db = state.db.clone();
-    let s = tokio::task::spawn_blocking(move || db.stats())
+    let s = blocking(move || db.stats())
         .await
         .unwrap_or(db::Stats { total: 0, buffer: 0, working: 0, core: 0 });
 
@@ -124,7 +135,7 @@ async fn stats(
 ) -> Json<db::Stats> {
     let ns = q.get("ns").cloned().or_else(|| get_namespace(&headers));
     let db = state.db.clone();
-    let s = tokio::task::spawn_blocking(move || {
+    let s = blocking(move || {
         match ns {
             Some(n) => db.stats_ns(&n),
             None => db.stats(),
@@ -187,9 +198,8 @@ async fn create_memory(
     }
     let sync = input.sync_embed.unwrap_or(false);
     let db = state.db.clone();
-    let mem = tokio::task::spawn_blocking(move || db.insert(input))
-        .await
-        .map_err(|e| EngramError::Internal(e.to_string()))??;
+    let mem = blocking(move || db.insert(input))
+        .await??;
 
     if let Some(ref cfg) = state.ai {
         if cfg.has_embed() {
@@ -234,9 +244,8 @@ async fn batch_create(
     let count = inputs.len();
     let inputs_had_sync = inputs.iter().any(|i| i.sync_embed.unwrap_or(false));
     let db = state.db.clone();
-    let results = tokio::task::spawn_blocking(move || db.insert_batch(inputs))
-        .await
-        .map_err(|e| EngramError::Internal(e.to_string()))??;
+    let results = blocking(move || db.insert_batch(inputs))
+        .await??;
 
     // batch embed if AI is configured
     if let Some(ref cfg) = state.ai {
@@ -278,9 +287,8 @@ async fn get_memory(
     Path(id): Path<String>,
 ) -> Result<Json<db::Memory>, EngramError> {
     let db = state.db.clone();
-    let mem = tokio::task::spawn_blocking(move || db.get(&id))
-        .await
-        .map_err(|e| EngramError::Internal(e.to_string()))??;
+    let mem = blocking(move || db.get(&id))
+        .await??;
     mem.ok_or(EngramError::NotFound).map(Json)
 }
 
@@ -298,7 +306,7 @@ async fn update_memory(
     Json(body): Json<UpdateBody>,
 ) -> Result<Json<db::Memory>, EngramError> {
     let db = state.db.clone();
-    let mem = tokio::task::spawn_blocking(move || {
+    let mem = blocking(move || {
         db.update_fields(
             &id,
             body.content.as_deref(),
@@ -307,8 +315,7 @@ async fn update_memory(
             body.tags.as_deref(),
         )
     })
-    .await
-    .map_err(|e| EngramError::Internal(e.to_string()))??;
+    .await??;
 
     mem.ok_or(EngramError::NotFound).map(Json)
 }
@@ -318,9 +325,8 @@ async fn delete_memory(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
-    let deleted = tokio::task::spawn_blocking(move || db.delete(&id))
-        .await
-        .map_err(|e| EngramError::Internal(e.to_string()))??;
+    let deleted = blocking(move || db.delete(&id))
+        .await??;
 
     if deleted {
         Ok(Json(serde_json::json!({"ok": true})))
@@ -341,7 +347,7 @@ async fn batch_delete(
     Json(body): Json<BatchDeleteBody>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
-    let deleted = tokio::task::spawn_blocking(move || {
+    let deleted = blocking(move || {
         let mut count = 0usize;
         // namespace wipe takes priority
         if let Some(ns) = &body.namespace {
@@ -354,8 +360,7 @@ async fn batch_delete(
         }
         count
     })
-    .await
-    .map_err(|e| EngramError::Internal(e.to_string()))?;
+    .await?;
 
     Ok(Json(serde_json::json!({"deleted": deleted})))
 }
@@ -378,7 +383,7 @@ async fn list_memories(
         q.ns = get_namespace(&headers);
     }
     let db = state.db.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let result = blocking(move || {
         let d = db;
         let limit = q.limit.unwrap_or(50).min(200);
         let offset = q.offset.unwrap_or(0);
@@ -413,8 +418,7 @@ async fn list_memories(
             "offset": offset,
         }))
     })
-    .await
-    .map_err(|e| EngramError::Internal(e.to_string()))??;
+    .await??;
 
     Ok(Json(result))
 }
@@ -442,7 +446,7 @@ async fn quick_search(
     let ns_filter = sq.ns;
     let db = state.db.clone();
     let query = sq.q.clone();
-    let results = tokio::task::spawn_blocking(move || {
+    let results = blocking(move || {
         let d = db;
         let hits = d.search_fts(&query, limit);
         let mut memories: Vec<db::Memory> = hits
@@ -454,8 +458,7 @@ async fn quick_search(
         }
         memories
     })
-    .await
-    .map_err(|e| EngramError::Internal(e.to_string()))?;
+    .await?;
 
     let count = results.len();
     Ok(Json(serde_json::json!({
@@ -499,7 +502,7 @@ async fn list_recent(
     let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
 
     let db = state.db.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let result = blocking(move || {
         let d = db;
         let mut memories = d.list_since(since_ms, limit)?;
         if let Some(l) = layer_filter {
@@ -516,8 +519,7 @@ async fn list_recent(
         }
         Ok::<_, EngramError>(memories)
     })
-    .await
-    .map_err(|e| EngramError::Internal(e.to_string()))??;
+    .await??;
 
     let count = result.len();
     Ok(Json(serde_json::json!({
@@ -549,7 +551,7 @@ async fn do_resume(
     let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
 
     let db = state.db.clone();
-    let sections = tokio::task::spawn_blocking(move || {
+    let sections = blocking(move || {
         let d = db;
         let ns_ok = |m: &db::Memory| -> bool {
             ns_filter.as_ref().is_none_or(|ns| m.namespace == *ns)
@@ -591,8 +593,7 @@ async fn do_resume(
 
         (identity, recent, sessions, next_actions)
     })
-    .await
-    .map_err(|e| EngramError::Internal(e.to_string()))?;
+    .await?;
 
     let (identity, recent, sessions, next_actions) = sections;
     Ok(Json(serde_json::json!({
@@ -680,12 +681,11 @@ async fn do_recall(
     let expanded_for_response = expanded.clone();
 
     let db = state.db.clone();
-    let mut result = tokio::task::spawn_blocking(move || {
+    let mut result = blocking(move || {
         let eq = if expanded.is_empty() { None } else { Some(expanded.as_slice()) };
         recall::recall(&db, &req, query_emb.as_deref(), eq)
     })
-    .await
-    .map_err(|e| EngramError::Internal(e.to_string()))?;
+    .await?;
 
     if do_rerank {
         if let Some(cfg) = state.ai.as_ref() {
@@ -761,9 +761,8 @@ async fn do_extract(
         };
 
         let db = state.db.clone();
-        let mem = tokio::task::spawn_blocking(move || db.insert(input))
-            .await
-            .map_err(|e| EngramError::Internal(e.to_string()))??;
+        let mem = blocking(move || db.insert(input))
+            .await??;
 
         if auto_embed {
             embed_batch.push((mem.id.clone(), mem.content.clone()));
@@ -790,9 +789,8 @@ async fn do_export(
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let include_embed = q.get("embed").map(|v| v == "true" || v == "1").unwrap_or(false);
     let db = state.db.clone();
-    let memories = tokio::task::spawn_blocking(move || db.export_with_embeddings(include_embed))
-        .await
-        .map_err(|e| EngramError::Internal(e.to_string()))??;
+    let memories = blocking(move || db.export_with_embeddings(include_embed))
+        .await??;
 
     let count = memories.len();
     Ok(Json(serde_json::json!({
@@ -822,9 +820,8 @@ async fn do_import(
     }
 
     let db = state.db.clone();
-    let imported = tokio::task::spawn_blocking(move || db.import(&memories))
-        .await
-        .map_err(|e| EngramError::Internal(e.to_string()))??;
+    let imported = blocking(move || db.import(&memories))
+        .await??;
 
     Ok(Json(serde_json::json!({
         "imported": imported,
