@@ -29,6 +29,7 @@ Memories promote upward through access frequency and importance, and decay natur
 - Near-duplicate detection on insert
 - Supersede: replace outdated memories by id
 - Multi-agent namespace isolation
+- Query expansion: LLM bridges abstract queries to concrete terms
 - Connection pool (r2d2) for concurrent access
 - Optional Bearer token auth
 - AI-optional: works without AI (pure FTS), gains semantic search + LLM features with it
@@ -105,6 +106,11 @@ curl -X POST http://localhost:3917/recall \
 curl -X POST http://localhost:3917/recall \
   -H 'Content-Type: application/json' \
   -d '{"query": "recent work", "budget_tokens": 500, "since": 1708600000000}'
+
+# With query expansion (bridges abstract → concrete terms)
+curl -X POST http://localhost:3917/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "observability stack", "expand": true}'
 ```
 
 Scoring: `(0.45 × relevance + 0.3 × importance + 0.25 × recency) × layer_bonus`. Core memories always included.
@@ -202,6 +208,7 @@ Tools: `engram_store`, `engram_recall`, `engram_recent`, `engram_search`, `engra
 | `ENGRAM_EMBED_KEY` | *(same as LLM)* | Embeddings API key |
 | `ENGRAM_EMBED_MODEL` | `text-embedding-3-small` | Embedding model |
 | `ENGRAM_CONSOLIDATE_MINS` | `30` | Auto-consolidation interval (0 to disable) |
+| `ENGRAM_AUTO_MERGE` | `false` | Enable LLM merge in auto-consolidation |
 | `RUST_LOG` | `info` | Log level |
 
 ## License

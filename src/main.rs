@@ -113,6 +113,10 @@ async fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(30);
+    let auto_merge = std::env::var("ENGRAM_AUTO_MERGE")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     if consolidate_mins > 0 {
         let bg_state = state.clone();
         tokio::spawn(async move {
@@ -120,23 +124,34 @@ async fn main() {
             // wait a bit before first run so startup isn't slowed
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             loop {
-                let db = bg_state.db.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    consolidate::consolidate_sync(&db, None)
-                })
-                .await;
-                match result {
-                    Ok(r) => {
-                        if r.promoted > 0 || r.decayed > 0 {
-                            info!(promoted = r.promoted, decayed = r.decayed, "auto-consolidate");
-                        }
-                    }
-                    Err(e) => tracing::warn!(error = %e, "auto-consolidate failed"),
+                let req = if auto_merge {
+                    Some(consolidate::ConsolidateRequest {
+                        merge: Some(true),
+                        promote_threshold: None,
+                        promote_min_importance: None,
+                        decay_drop_threshold: None,
+                        buffer_ttl_secs: None,
+                        working_age_promote_secs: None,
+                    })
+                } else {
+                    None
+                };
+                let ai_cfg = bg_state.ai.clone();
+                let r = consolidate::consolidate(
+                    bg_state.db.clone(), req, ai_cfg,
+                ).await;
+                if r.promoted > 0 || r.decayed > 0 || r.merged > 0 {
+                    info!(
+                        promoted = r.promoted,
+                        decayed = r.decayed,
+                        merged = r.merged,
+                        "auto-consolidate"
+                    );
                 }
                 tokio::time::sleep(interval).await;
             }
         });
-        info!(every_mins = consolidate_mins, "background consolidation enabled");
+        info!(every_mins = consolidate_mins, auto_merge = auto_merge, "background consolidation enabled");
     }
 
     info!(
