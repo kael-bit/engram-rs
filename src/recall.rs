@@ -221,6 +221,14 @@ pub fn recall(
         candidate_ids.insert(fact.memory_id.clone());
     }
 
+    // Core memories are always candidates — they're identity/principles and
+    // must never be excluded by prefiltering. A query like "我叫什么" might
+    // not match any FTS terms in the identity memory but should still find it
+    // via semantic similarity.
+    for m in db.list_by_layer(crate::db::Layer::Core, 200, 0) {
+        candidate_ids.insert(m.id.clone());
+    }
+
     // Semantic search — restrict to candidates when we have enough,
     // otherwise fall back to full scan so we don't miss anything.
     if let Some(qemb) = query_emb {
