@@ -1700,4 +1700,33 @@ mod tests {
         assert!(kinds.contains(&"procedural"));
         assert!(kinds.contains(&"semantic"));
     }
+
+    #[test]
+    fn soft_delete_and_restore() {
+        let db = test_db();
+        let mem = db.insert(MemoryInput::new("important fact").importance(0.8)).unwrap();
+        let id = mem.id.clone();
+
+        // Delete → goes to trash
+        assert!(db.delete(&id).unwrap());
+        assert!(db.get(&id).unwrap().is_none());
+        assert_eq!(db.trash_count().unwrap(), 1);
+
+        let trash = db.trash_list(10).unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].content, "important fact");
+        assert!(trash[0].importance >= 0.8);
+
+        // Restore → back in memories
+        assert!(db.trash_restore(&id).unwrap());
+        assert!(db.get(&id).unwrap().is_some());
+        assert_eq!(db.trash_count().unwrap(), 0);
+
+        // Purge
+        db.delete(&id).unwrap();
+        assert_eq!(db.trash_count().unwrap(), 1);
+        let purged = db.trash_purge().unwrap();
+        assert_eq!(purged, 1);
+        assert_eq!(db.trash_count().unwrap(), 0);
+    }
 }
