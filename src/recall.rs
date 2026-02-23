@@ -288,8 +288,11 @@ pub fn recall(
             if !passes_filters(&mem) {
                 continue;
             }
+            // FTS-only hits: keyword match without semantic confirmation.
+            // Cap relevance — keyword presence alone is a weaker signal than cosine.
+            let capped = fts_rel * 0.5;
             seen.insert(id.clone());
-            scored.push(score_memory(&mem, fts_rel));
+            scored.push(score_memory(&mem, capped));
         }
     }
 
