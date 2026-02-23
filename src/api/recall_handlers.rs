@@ -186,9 +186,6 @@ pub(super) async fn do_resume(
     let db = state.db.clone();
     let sections = blocking(move || {
         let d = db;
-        let ns_ok = |m: &db::Memory| -> bool {
-            ns_filter.as_ref().is_none_or(|ns| m.namespace == *ns)
-        };
 
         // Workspace tag matching: exact match or prefix (e.g. "engram" matches
         // tag "engram" and "engram:proxy", but NOT "engram-rs")
@@ -204,24 +201,23 @@ pub(super) async fn do_resume(
         // Use list_by_layer_meta — skip embedding blobs, resume doesn't need them.
         // DB already sorts by importance DESC.
         let core: Vec<db::Memory> = d
-            .list_by_layer_meta(db::Layer::Core, core_limit * 2, 0)
+            .list_by_layer_meta_ns(db::Layer::Core, core_limit * 2, 0, ns_filter.as_deref())
             .into_iter()
-            .filter(|m| ns_ok(m) && ws_match(m))
+            .filter(|m| ws_match(m))
             .take(core_limit)
             .collect();
 
         // Working: exclude session-source memories (they go in sessions/next_actions)
         let working: Vec<db::Memory> = d
-            .list_by_layer_meta(db::Layer::Working, core_limit * 2, 0)
+            .list_by_layer_meta_ns(db::Layer::Working, core_limit * 2, 0, ns_filter.as_deref())
             .into_iter()
-            .filter(|m| ns_ok(m) && ws_match(m) && m.source != "session")
+            .filter(|m| ws_match(m) && m.source != "session")
             .take(core_limit)
             .collect();
 
         let mut buffer: Vec<db::Memory> = d
-            .list_by_layer_meta(db::Layer::Buffer, 100, 0)
+            .list_by_layer_meta_ns(db::Layer::Buffer, 100, 0, ns_filter.as_deref())
             .into_iter()
-            .filter(|m| ns_ok(m))
             .collect();
         buffer.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         buffer.truncate(50);
@@ -233,10 +229,9 @@ pub(super) async fn do_resume(
             .map(|m| m.id.clone())
             .collect();
 
-        let all_recent: Vec<db::Memory> = d.list_since(since_ms, 100).unwrap_or_default()
-            .into_iter()
-            .filter(|m| ns_ok(m))
-            .collect();
+        let all_recent: Vec<db::Memory> = d
+            .list_since_filtered(since_ms, 100, ns_filter.as_deref(), None, None, None)
+            .unwrap_or_default();
 
         // Recent activity: dedup against layer sections so we don't repeat
         // Recent, sessions, next-actions: all deduped against layer sections.

@@ -434,18 +434,40 @@ impl MemoryDB {
     /// Use this when you only need metadata — saves significant memory when
     /// the DB has thousands of entries with 1536-dim embeddings.
     pub fn list_by_layer_meta(&self, layer: Layer, limit: usize, offset: usize) -> Vec<Memory> {
-        let Ok(conn) = self.conn() else { return vec![]; };
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT id, content, layer, importance, created_at, last_accessed, \
-             access_count, repetition_count, decay_rate, source, tags, namespace, kind \
-             FROM memories WHERE layer = ?1 ORDER BY importance DESC LIMIT ?2 OFFSET ?3",
-        ) else {
-            return vec![];
-        };
+        self.list_by_layer_meta_ns(layer, limit, offset, None)
+    }
 
-        stmt.query_map(params![layer as u8, limit as i64, offset as i64], row_to_memory_meta)
+    /// Like `list_by_layer_meta` but with optional namespace filter in SQL.
+    pub fn list_by_layer_meta_ns(
+        &self, layer: Layer, limit: usize, offset: usize, ns: Option<&str>,
+    ) -> Vec<Memory> {
+        let Ok(conn) = self.conn() else { return vec![]; };
+        if let Some(ns) = ns {
+            let Ok(mut stmt) = conn.prepare(
+                "SELECT id, content, layer, importance, created_at, last_accessed, \
+                 access_count, repetition_count, decay_rate, source, tags, namespace, kind \
+                 FROM memories WHERE layer = ?1 AND namespace = ?4 \
+                 ORDER BY importance DESC LIMIT ?2 OFFSET ?3",
+            ) else { return vec![]; };
+            stmt.query_map(
+                params![layer as u8, limit as i64, offset as i64, ns],
+                row_to_memory_meta,
+            )
             .map(|iter| iter.filter_map(|r| r.ok()).collect())
             .unwrap_or_default()
+        } else {
+            let Ok(mut stmt) = conn.prepare(
+                "SELECT id, content, layer, importance, created_at, last_accessed, \
+                 access_count, repetition_count, decay_rate, source, tags, namespace, kind \
+                 FROM memories WHERE layer = ?1 ORDER BY importance DESC LIMIT ?2 OFFSET ?3",
+            ) else { return vec![]; };
+            stmt.query_map(
+                params![layer as u8, limit as i64, offset as i64],
+                row_to_memory_meta,
+            )
+            .map(|iter| iter.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+        }
     }
 
     /// Like `get_decayed` but excludes the embedding blob.
