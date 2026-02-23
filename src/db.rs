@@ -1573,4 +1573,84 @@ mod tests {
         assert_eq!(db.list_all_ns(50, 0, Some("ns-a")).unwrap().len(), 1);
         assert_eq!(db.list_all_ns(50, 0, Some("ns-b")).unwrap().len(), 1);
     }
+
+    #[test]
+    fn input_builder_chain() {
+        let input = MemoryInput::new("test content")
+            .layer(3)
+            .importance(0.9)
+            .source("unit-test")
+            .tags(vec!["a".into(), "b".into()])
+            .supersedes(vec!["old-id".into()])
+            .skip_dedup()
+            .namespace("test-ns");
+
+        assert_eq!(input.content, "test content");
+        assert_eq!(input.layer, Some(3));
+        assert_eq!(input.importance, Some(0.9));
+        assert_eq!(input.source.as_deref(), Some("unit-test"));
+        assert_eq!(input.tags.as_ref().unwrap().len(), 2);
+        assert_eq!(input.supersedes.as_ref().unwrap(), &["old-id"]);
+        assert_eq!(input.skip_dedup, Some(true));
+        assert_eq!(input.namespace.as_deref(), Some("test-ns"));
+        assert_eq!(input.sync_embed, None);
+    }
+
+    #[test]
+    fn delete_namespace_removes_all() {
+        let db = test_db();
+        db.insert(MemoryInput::new("ns-a mem 1").namespace("wipe-me")).unwrap();
+        db.insert(MemoryInput::new("ns-a mem 2").namespace("wipe-me")).unwrap();
+        db.insert(MemoryInput::new("keep this").namespace("safe")).unwrap();
+
+        let deleted = db.delete_namespace("wipe-me").unwrap();
+        assert_eq!(deleted, 2);
+
+        // namespace "safe" untouched
+        assert_eq!(db.list_all_ns(10, 0, Some("safe")).unwrap().len(), 1);
+        // "wipe-me" is gone
+        assert_eq!(db.list_all_ns(10, 0, Some("wipe-me")).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn delete_batch_by_ids() {
+        let db = test_db();
+        let m1 = db.insert(MemoryInput::new("batch del 1")).unwrap();
+        let m2 = db.insert(MemoryInput::new("batch del 2")).unwrap();
+        let m3 = db.insert(MemoryInput::new("batch keep")).unwrap();
+
+        assert!(db.delete(&m1.id).unwrap());
+        assert!(db.delete(&m2.id).unwrap());
+
+        assert!(db.get(&m1.id).unwrap().is_none());
+        assert!(db.get(&m2.id).unwrap().is_none());
+        assert!(db.get(&m3.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn update_nonexistent_returns_none() {
+        let db = test_db();
+        let result = db.update_fields("no-such-id", Some("new content"), None, None, None).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn export_import_roundtrip() {
+        let db = test_db();
+        db.insert(MemoryInput::new("roundtrip A").importance(0.8).source("test")).unwrap();
+        db.insert(MemoryInput::new("roundtrip B").layer(3).tags(vec!["x".into()])).unwrap();
+
+        let exported = db.export_all().unwrap();
+        assert_eq!(exported.len(), 2);
+
+        // import into fresh db
+        let db2 = MemoryDB::open(":memory:").unwrap();
+        let imported = db2.import(&exported).unwrap();
+        assert_eq!(imported, 2);
+
+        let re_exported = db2.export_all().unwrap();
+        assert_eq!(re_exported.len(), 2);
+        assert_eq!(re_exported[0].content, "roundtrip A");
+        assert_eq!(re_exported[1].content, "roundtrip B");
+    }
 }
