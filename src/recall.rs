@@ -319,12 +319,16 @@ pub fn recall(
         let fts_ids: std::collections::HashSet<&String> =
             fts.iter().map(|(id, _)| id).collect();
 
-        // Extract query terms — jieba for CJK, whitespace for latin
+        // Extract query terms — jieba for CJK, whitespace for latin.
+        // Single CJK characters (1 char, 3 bytes) are too common to be useful
+        // for affinity checks — "用" appears in nearly every Chinese text.
+        // Require at least 2 characters.
         let query_terms: Vec<String> = {
             let words = crate::db::jieba().cut_for_search(&req.query, false);
             words.iter()
-                .filter(|w| w.trim().len() > 1)
-                .map(|w| w.trim().to_lowercase())
+                .map(|w| w.trim())
+                .filter(|w| w.chars().count() >= 2)
+                .map(|w| w.to_lowercase())
                 .collect()
         };
 
@@ -1145,6 +1149,28 @@ mod tests {
         assert!(
             found_semantic,
             "full scan should find semantically similar memories"
+        );
+    }
+
+    #[test]
+    fn cjk_single_char_excluded_from_affinity() {
+        // Single CJK characters like "用" are too common — they should NOT
+        // count as meaningful query terms for the affinity penalty check.
+        let j = crate::db::jieba();
+        let words = j.cut_for_search("proxy怎么用", false);
+        let terms: Vec<String> = words
+            .iter()
+            .map(|w| w.trim())
+            .filter(|w| w.chars().count() >= 2)
+            .map(|w| w.to_lowercase())
+            .collect();
+
+        assert!(terms.contains(&"proxy".to_string()));
+        assert!(terms.contains(&"怎么".to_string()));
+        // "用" is a single CJK char — must be filtered out
+        assert!(
+            !terms.iter().any(|t| t == "用"),
+            "single CJK char '用' should be excluded from affinity terms"
         );
     }
 }
