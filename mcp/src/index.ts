@@ -67,12 +67,12 @@ const server = new McpServer({
 
 server.tool(
   "engram_store",
-  "Store a memory. Importance controls initial layer: >=0.9 → Core (permanent), " +
-    ">=0.7 → Working (active), default → Buffer (transient, auto-promotes if accessed). " +
-    "Use supersedes to replace outdated memories by their ids.",
+  "Store a memory. All memories start in Buffer and promote to Working/Core through " +
+    "access frequency and LLM quality gating. Procedural memories and lessons (tag=lesson) " +
+    "auto-promote to Working after 2h. Use supersedes to replace outdated memories by their ids.",
   {
     content: z.string().describe("Memory content text"),
-    importance: z.number().min(0).max(1).optional().describe("Importance 0-1 (drives initial layer: >=0.9=core, >=0.7=working, else=buffer)"),
+    importance: z.number().min(0).max(1).optional().describe("Importance 0-1 (default 0.5, bumps +0.02 on each recall)"),
     kind: z.enum(["semantic", "episodic", "procedural"]).optional().describe("Memory type: semantic (facts, default), episodic (events), procedural (how-to, persists indefinitely)"),
     tags: z.array(z.string()).optional().describe("Tags for categorization"),
     source: z.string().optional().describe("Source identifier"),
@@ -152,14 +152,16 @@ server.tool(
     limit: z.number().int().min(1).max(100).optional().describe("Max results (default 20)"),
     layer: z.number().int().min(1).max(3).optional().describe("Filter by layer"),
     source: z.string().optional().describe("Filter by source (e.g. session)"),
+    min_importance: z.number().min(0).max(1).optional().describe("Minimum importance threshold"),
     namespace: z.string().optional().describe("Filter by namespace"),
   },
-  async ({ hours, limit, layer, source, namespace }) => {
+  async ({ hours, limit, layer, source, min_importance, namespace }) => {
     const params = new URLSearchParams();
     if (hours !== undefined) params.set("hours", String(hours));
     if (limit !== undefined) params.set("limit", String(limit));
     if (layer !== undefined) params.set("layer", String(layer));
     if (source !== undefined) params.set("source", source);
+    if (min_importance !== undefined) params.set("min_importance", String(min_importance));
     if (namespace !== undefined) params.set("ns", namespace);
     const qs = params.toString();
     const result = await engramFetch(`/recent${qs ? "?" + qs : ""}`);
