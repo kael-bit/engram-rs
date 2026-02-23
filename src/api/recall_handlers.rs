@@ -281,7 +281,12 @@ pub(super) async fn do_resume(
         if compact {
             mems.iter().map(|m| {
                 let content = crate::safety::sanitize_for_output(&m.content);
-                let mut obj = serde_json::json!({"content": content});
+                let mut obj = serde_json::json!({
+                    "content": content,
+                    "layer": m.layer as i32,
+                    "importance": m.importance,
+                    "created_at": m.created_at,
+                });
                 if !m.tags.is_empty() {
                     obj["tags"] = serde_json::json!(m.tags);
                 }
