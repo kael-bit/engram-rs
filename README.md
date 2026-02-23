@@ -14,7 +14,13 @@ engram uses a three-layer model based on [Atkinson-Shiffrin memory theory](https
 | **Working** (L2) | Active knowledge | Moderate (~5 day half-life) |
 | **Core** (L3) | Identity & principles | Near-zero |
 
-Memories promote upward through access frequency and importance, and decay naturally when neglected. Retrieval is budget-aware: you specify a token limit and get the optimal selection.
+Memories promote upward through access frequency (Ebbinghaus-style reinforcement), and decay naturally when neglected. You don't need to decide what layer to write to — store everything as buffer, and the system promotes what sticks:
+
+- **Buffer → Working**: recalled ≥2 times, or accessed at least once before TTL expires
+- **Working → Core**: recalled ≥3 times with sufficient importance, or survived 7+ days with any access
+- Each recall bumps importance by 0.05 (capped at 1.0)
+
+Retrieval is budget-aware: you specify a token limit and get the optimal selection.
 
 ## Features
 
@@ -29,6 +35,7 @@ Memories promote upward through access frequency and importance, and decay natur
 - Near-duplicate detection on insert
 - Supersede: replace outdated memories by id
 - Sync embedding: `sync_embed: true` blocks until embedding is ready (no async race window)
+- Trigger memories: tag with `trigger:action-name`, fetch via `GET /triggers/:action` before risky operations
 - Multi-agent namespace isolation
 - Query expansion: LLM bridges abstract queries to concrete terms
 - Connection pool (r2d2) for concurrent access
@@ -172,6 +179,7 @@ Promotes frequently-accessed important memories upward, drops decayed entries. W
 | `POST` | `/extract` | LLM extraction (requires AI) |
 | `POST` | `/repair` | Fix FTS index (idempotent) |
 | `GET` | `/health` | Detailed health (uptime, RSS, cache stats) |
+| `GET` | `/triggers/:action` | Pre-action recall (memories tagged `trigger:action`) |
 | `GET` | `/export` | Export all memories as JSON (`?embed=true` includes vectors) |
 | `POST` | `/import` | Import memories (skips existing ids) |
 | `POST` | `/memories/batch` | Batch create |
@@ -197,7 +205,7 @@ cd mcp && npm install && npm run build
 }
 ```
 
-Tools: `engram_store`, `engram_recall`, `engram_recent`, `engram_resume`, `engram_search`, `engram_stats`, `engram_extract`, `engram_consolidate`, `engram_repair`, `engram_health`.
+Tools: `engram_store`, `engram_recall`, `engram_recent`, `engram_resume`, `engram_search`, `engram_stats`, `engram_extract`, `engram_consolidate`, `engram_repair`, `engram_health`, `engram_triggers`.
 
 ## Configuration
 
