@@ -279,7 +279,9 @@ async fn delete_memory(
 
 #[derive(Deserialize)]
 struct BatchDeleteBody {
+    #[serde(default)]
     ids: Vec<String>,
+    namespace: Option<String>,
 }
 
 async fn batch_delete(
@@ -287,12 +289,14 @@ async fn batch_delete(
     Json(body): Json<BatchDeleteBody>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
-    let ids = body.ids;
     let deleted = tokio::task::spawn_blocking(move || {
-        let d = db;
         let mut count = 0usize;
-        for id in &ids {
-            if d.delete(id).unwrap_or(false) {
+        // namespace wipe takes priority
+        if let Some(ns) = &body.namespace {
+            count += db.delete_namespace(ns).unwrap_or(0);
+        }
+        for id in &body.ids {
+            if db.delete(id).unwrap_or(false) {
                 count += 1;
             }
         }
@@ -1020,5 +1024,28 @@ mod tests {
         let j = body_json(resp).await;
         assert_eq!(j["inserted"], 3);
         assert_eq!(j["requested"], 3);
+    }
+
+    #[tokio::test]
+    async fn delete_by_namespace() {
+        let app = router(test_state(None));
+        // store 2 in ns-a, 1 in ns-b
+        for ns in ["ns-a", "ns-a", "ns-b"] {
+            let body = serde_json::json!({"content": format!("mem in {ns}"), "namespace": ns, "skip_dedup": true});
+            let resp = app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::CREATED);
+        }
+        // delete ns-a
+        let resp = app.clone()
+            .oneshot(json_req("DELETE", "/memories", serde_json::json!({"namespace": "ns-a"})))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert_eq!(j["deleted"], 2);
+        // ns-b still has its memory
+        let resp = app.oneshot(Request::builder().uri("/memories?ns=ns-b").body(Body::empty()).unwrap()).await.unwrap();
+        let j = body_json(resp).await;
+        assert_eq!(j["count"], 1);
     }
 }
