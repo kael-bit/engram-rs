@@ -644,6 +644,15 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Set access_count directly (used when merging memories to preserve history).
+    pub fn set_access_count(&self, id: &str, count: i64) -> Result<(), EngramError> {
+        self.conn()?.execute(
+            "UPDATE memories SET access_count = ?1 WHERE id = ?2",
+            params![count, id],
+        )?;
+        Ok(())
+    }
+
     /// Full-text search using FTS5. Returns `(id, bm25_score)` pairs.
     pub fn search_fts(&self, query: &str, limit: usize) -> Vec<(String, f64)> {
         let sanitized: String = query

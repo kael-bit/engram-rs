@@ -1,5 +1,6 @@
 use crate::ai::{self, AiConfig, cosine_similarity};
 use crate::db::{Layer, Memory, MemoryDB};
+use crate::error::EngramError;
 use crate::SharedDB;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -261,6 +262,12 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
                 .map(|&i| ns_mems[i].0.importance)
                 .fold(0.0_f64, f64::max);
 
+            // sum access counts — merged memory inherits all usage history
+            let total_access: i64 = cluster
+                .iter()
+                .map(|&i| ns_mems[i].0.access_count)
+                .sum();
+
             // merge all tags (cap at 20)
             let mut all_tags: Vec<String> = Vec::new();
             for &idx in &cluster {
@@ -281,16 +288,15 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
                 let tags = all_tags;
                 let imp = max_importance;
                 let result = tokio::task::spawn_blocking(move || {
-                    db2.update_fields(&id, Some(&content), None, Some(imp), Some(&tags))
+                    db2.update_fields(&id, Some(&content), None, Some(imp), Some(&tags))?;
+                    // Carry over accumulated access history from all merged memories
+                    db2.set_access_count(&id, total_access)?;
+                    Ok::<_, EngramError>(())
                 })
                 .await;
 
                 match result {
-                    Ok(Ok(Some(_))) => {}
-                    Ok(Ok(None)) => {
-                        warn!(id = %best_id, "merge target not found");
-                        continue;
-                    }
+                    Ok(Ok(())) => {}
                     Ok(Err(e)) => {
                         warn!(id = %best_id, error = %e, "merge update failed");
                         continue;
