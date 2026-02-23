@@ -694,74 +694,64 @@ async fn do_resume(
             ns_filter.as_ref().is_none_or(|ns| m.namespace == *ns)
         };
 
-        // Core memories — filtered by workspace tags when provided.
-        // Untagged memories (empty tags) always pass — they're universal
-        // knowledge (identity, preferences) that apply everywhere.
-        let all_core: Vec<db::Memory> = d
-            .list_by_layer(db::Layer::Core, 10000, 0)
+        // Workspace tag matching: exact match or prefix (e.g. "engram" matches
+        // tag "engram" and "engram:proxy", but NOT "engram-rs")
+        let ws_match = |m: &db::Memory| -> bool {
+            if ws_tags.is_empty() { return true; }
+            if m.tags.is_empty() { return true; } // untagged = universal
+            m.tags.iter().any(|t| {
+                let tl = t.to_lowercase();
+                ws_tags.iter().any(|ws| tl == *ws || tl.starts_with(&format!("{ws}:")))
+            })
+        };
+
+        // Use list_by_layer_meta — skip embedding blobs, resume doesn't need them.
+        // DB already sorts by importance DESC.
+        let core: Vec<db::Memory> = d
+            .list_by_layer_meta(db::Layer::Core, core_limit * 2, 0)
             .into_iter()
-            .filter(|m| ns_ok(m))
+            .filter(|m| ns_ok(m) && ws_match(m))
+            .take(core_limit)
             .collect();
 
-        let mut core: Vec<db::Memory> = if ws_tags.is_empty() {
-            all_core
-        } else {
-            all_core.into_iter().filter(|m| {
-                // Always include untagged / universal memories
-                if m.tags.is_empty() { return true; }
-                // Include if any memory tag matches any workspace tag
-                m.tags.iter().any(|t| ws_tags.iter().any(|ws| t.to_lowercase().contains(ws.as_str())))
-            }).collect()
-        };
-        // Sort by importance desc, cap output
-        core.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
-        core.truncate(core_limit);
-
-        // Working memories — what you've been doing, decisions made,
-        // lessons learned. This is the "episodic context" that bridges
-        // permanent knowledge (Core) and immediate activity (recent).
-        // Also filtered by workspace tags.
-        let all_working: Vec<db::Memory> = d
-            .list_by_layer(db::Layer::Working, 10000, 0)
+        let working: Vec<db::Memory> = d
+            .list_by_layer_meta(db::Layer::Working, core_limit * 2, 0)
             .into_iter()
-            .filter(|m| ns_ok(m))
+            .filter(|m| ns_ok(m) && ws_match(m))
+            .take(core_limit)
             .collect();
 
-        let mut working: Vec<db::Memory> = if ws_tags.is_empty() {
-            all_working
-        } else {
-            all_working.into_iter().filter(|m| {
-                if m.tags.is_empty() { return true; }
-                m.tags.iter().any(|t| ws_tags.iter().any(|ws| t.to_lowercase().contains(ws.as_str())))
-            }).collect()
-        };
-        working.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
-        working.truncate(core_limit);
-
-        // Buffer — transient, unproven memories. Include them so the
-        // agent knows what's "in the air" but hasn't solidified yet.
         let mut buffer: Vec<db::Memory> = d
-            .list_by_layer(db::Layer::Buffer, 10000, 0)
+            .list_by_layer_meta(db::Layer::Buffer, 100, 0)
             .into_iter()
             .filter(|m| ns_ok(m))
             .collect();
         buffer.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        buffer.truncate(50); // lighter cap — these are transient
+        buffer.truncate(50);
 
-        // all recent memories in one query, then split by source
+        // Dedup: recent shouldn't repeat what's already in layer sections
+        let seen: std::collections::HashSet<String> = core.iter()
+            .chain(working.iter())
+            .chain(buffer.iter())
+            .map(|m| m.id.clone())
+            .collect();
+
         let all_recent: Vec<db::Memory> = d.list_since(since_ms, 100).unwrap_or_default()
             .into_iter()
             .filter(|m| ns_ok(m))
             .collect();
 
-        // recent activity (exclude session notes; they're shown separately)
+        // Recent activity: dedup against layer sections so we don't repeat
+        // the same memory in both "working" and "recent"
         let recent: Vec<db::Memory> = all_recent.iter()
-            .filter(|m| m.source != "session")
+            .filter(|m| m.source != "session" && !seen.contains(&m.id))
             .take(20)
             .cloned()
             .collect();
 
-        // session memories — what happened in recent sessions
+        // Session notes and next-actions: NOT deduped — they're episodic
+        // context that serves a different purpose than layer membership
+
         let mut next_actions = Vec::new();
         let mut sessions = Vec::new();
         for m in all_recent.into_iter().filter(|m| m.source == "session") {
