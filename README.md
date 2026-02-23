@@ -28,6 +28,7 @@ Memories promote upward through access frequency and importance, and decay natur
 - CJK tokenization support (bigram indexing for Chinese/Japanese/Korean)
 - Near-duplicate detection on insert
 - Supersede: replace outdated memories by id
+- Sync embedding: `sync_embed: true` blocks until embedding is ready (no async race window)
 - Multi-agent namespace isolation
 - Query expansion: LLM bridges abstract queries to concrete terms
 - Connection pool (r2d2) for concurrent access
