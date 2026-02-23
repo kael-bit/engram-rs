@@ -899,7 +899,7 @@ pub async fn quick_semantic_dup(
     let emb = embeddings.first().ok_or("no embedding returned")?;
     let candidates = db.search_semantic(emb, 3);
     for (_, score) in &candidates {
-        if *score > 0.85 {
+        if *score > 0.78 {
             return Ok(true);
         }
     }
