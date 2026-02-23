@@ -217,6 +217,48 @@ impl MemoryDB {
         Ok(rows.flatten().collect())
     }
 
+    /// Return Working/Core memories that have no linked facts yet.
+    pub fn memories_without_facts(&self, namespace: &str, limit: usize) -> Result<Vec<Memory>, EngramError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT m.id, m.content, m.layer, m.importance, m.created_at, m.last_accessed, \
+                    m.access_count, m.decay_rate, m.source, m.tags, m.namespace, \
+                    m.repetition_count, m.kind \
+             FROM memories m \
+             WHERE m.namespace = ?1 AND m.layer >= 2 \
+               AND NOT EXISTS (SELECT 1 FROM facts f WHERE f.memory_id = m.id) \
+             ORDER BY m.layer DESC, m.importance DESC \
+             LIMIT ?2"
+        )?;
+        let rows = stmt.query_map(params![namespace, limit as i64], |row| {
+            Ok(Memory {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                layer: match row.get::<_, i32>(2)? {
+                    1 => Layer::Buffer,
+                    3 => Layer::Core,
+                    _ => Layer::Working,
+                },
+                importance: row.get(3)?,
+                created_at: row.get(4)?,
+                last_accessed: row.get(5)?,
+                access_count: row.get(6)?,
+                decay_rate: row.get(7)?,
+                source: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                tags: {
+                    let raw: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
+                    if raw.is_empty() { vec![] } else { raw.split(',').map(|s| s.to_string()).collect() }
+                },
+                namespace: row.get::<_, Option<String>>(10)?.unwrap_or_else(|| "default".into()),
+                repetition_count: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
+                kind: row.get::<_, Option<String>>(12)?.unwrap_or_else(|| "semantic".into()),
+                embedding: None,
+                risk_score: 0.0,
+            })
+        })?;
+        Ok(rows.flatten().collect())
+    }
+
 }
 
 #[cfg(test)]

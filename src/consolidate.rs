@@ -41,6 +41,9 @@ pub struct ConsolidateResponse {
     /// IDs of memories that were superseded (deleted) during reconciliation.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub reconciled_ids: Vec<String>,
+    /// Number of facts extracted from existing memories.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub facts_extracted: usize,
     /// IDs that passed access/age thresholds but await LLM gate review.
     #[serde(skip)]
     pub(crate) promotion_candidates: Vec<(String, String)>, // (id, content)
@@ -111,6 +114,12 @@ pub async fn consolidate(
         let (count, ids) = reconcile_updates(&db, cfg).await;
         result.reconciled = count;
         result.reconciled_ids = ids;
+    }
+
+    // Extract fact triples from Working/Core memories that don't have any yet.
+    // Process a few per cycle to avoid hammering the LLM.
+    if let Some(ref cfg) = ai {
+        result.facts_extracted = extract_facts_batch(&db, cfg, 5).await;
     }
 
     if do_merge {
@@ -250,6 +259,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         merged_ids: vec![],
         reconciled: 0,
         reconciled_ids: vec![],
+        facts_extracted: 0,
         promotion_candidates,
     }
 }
@@ -940,6 +950,94 @@ fn parse_audit_ops(
     ops
 }
 
+const FACT_EXTRACT_PROMPT: &str = "Extract factual triples from this memory text. \
+    A triple is (subject, predicate, object) representing a concrete, stable relationship.\n\
+    Examples: (user, prefers, dark mode), (engram, uses, SQLite), (project, language, Rust)\n\n\
+    Rules:\n\
+    - Only extract concrete, stable facts — NOT transient states or opinions\n\
+    - Subject/object should be short noun phrases (1-3 words)\n\
+    - Predicate should be a verb or relationship label\n\
+    - Skip if the text is purely procedural/operational with no factual content\n\n\
+    Output a JSON array of objects: [{\"subject\": \"...\", \"predicate\": \"...\", \"object\": \"...\"}]\n\
+    Return [] if no facts can be extracted. Output ONLY the JSON array.";
+
+async fn extract_facts_batch(db: &SharedDB, cfg: &AiConfig, limit: usize) -> usize {
+    let db2 = db.clone();
+    let mems = match tokio::task::spawn_blocking(move || {
+        db2.memories_without_facts("default", limit)
+    }).await {
+        Ok(Ok(mems)) => mems,
+        _ => return 0,
+    };
+
+    if mems.is_empty() {
+        return 0;
+    }
+
+    let mut total = 0;
+    for mem in &mems {
+        let content = truncate_chars(&mem.content, 500);
+        let resp = match ai::llm_chat_as(cfg, "extract", FACT_EXTRACT_PROMPT, &content).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, id = %mem.id, "fact extraction LLM failed");
+                continue;
+            }
+        };
+
+        let json_str = crate::ai::unwrap_json(&resp);
+        let triples: Vec<serde_json::Value> = match serde_json::from_str(&json_str) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if triples.is_empty() {
+            // Insert a sentinel fact so we don't retry this memory every cycle
+            let sentinel = crate::db::FactInput {
+                subject: "_no_facts".into(),
+                predicate: "_scanned".into(),
+                object: mem.id[..8].to_string(),
+                memory_id: Some(mem.id.clone()),
+                valid_from: None,
+            };
+            let db2 = db.clone();
+            let ns = mem.namespace.clone();
+            let _ = tokio::task::spawn_blocking(move || db2.insert_fact(sentinel, &ns)).await;
+            continue;
+        }
+
+        let mut count = 0;
+        for t in &triples {
+            let (Some(subj), Some(pred), Some(obj)) = (
+                t.get("subject").and_then(|v| v.as_str()),
+                t.get("predicate").and_then(|v| v.as_str()),
+                t.get("object").and_then(|v| v.as_str()),
+            ) else { continue };
+
+            let input = crate::db::FactInput {
+                subject: subj.to_string(),
+                predicate: pred.to_string(),
+                object: obj.to_string(),
+                memory_id: Some(mem.id.clone()),
+                valid_from: None,
+            };
+            let db2 = db.clone();
+            let ns = mem.namespace.clone();
+            match tokio::task::spawn_blocking(move || db2.insert_fact(input, &ns)).await {
+                Ok(Ok(_)) => count += 1,
+                Ok(Err(e)) => warn!(error = %e, "fact insert failed"),
+                Err(e) => warn!(error = %e, "fact insert task panicked"),
+            }
+        }
+
+        if count > 0 {
+            info!(id = %mem.id, count, "extracted facts from memory");
+            total += count;
+        }
+    }
+
+    total
+}
 
 #[cfg(test)]
 mod tests {

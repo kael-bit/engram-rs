@@ -253,7 +253,7 @@ pub async fn extract_memories(
 }
 
 /// Extract a JSON array from LLM output that may be wrapped in markdown code blocks.
-fn unwrap_json(raw: &str) -> String {
+pub fn unwrap_json(raw: &str) -> String {
     let trimmed = raw.trim();
     if let Some(start) = trimmed.find('[') {
         if let Some(end) = trimmed.rfind(']') {
