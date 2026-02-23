@@ -16,9 +16,27 @@ pub struct AiConfig {
     pub embed_key: String,
     pub embed_model: String,
     pub client: reqwest::Client,
+    // Per-component model overrides (fall back to llm_model if None)
+    pub merge_model: Option<String>,
+    pub extract_model: Option<String>,
+    pub rerank_model: Option<String>,
+    pub expand_model: Option<String>,
+    pub proxy_model: Option<String>,
 }
 
 impl AiConfig {
+    pub fn model_for(&self, component: &str) -> &str {
+        let m = match component {
+            "merge" => self.merge_model.as_deref(),
+            "extract" => self.extract_model.as_deref(),
+            "rerank" => self.rerank_model.as_deref(),
+            "expand" => self.expand_model.as_deref(),
+            "proxy" => self.proxy_model.as_deref(),
+            _ => None,
+        };
+        m.unwrap_or(&self.llm_model)
+    }
+
     /// Returns `None` if `ENGRAM_LLM_URL` is not set.
     pub fn from_env() -> Option<Self> {
         let llm_url = std::env::var("ENGRAM_LLM_URL").ok()?;
@@ -45,6 +63,11 @@ impl AiConfig {
             embed_key,
             embed_model,
             client,
+            merge_model: std::env::var("ENGRAM_MERGE_MODEL").ok(),
+            extract_model: std::env::var("ENGRAM_EXTRACT_MODEL").ok(),
+            rerank_model: std::env::var("ENGRAM_RERANK_MODEL").ok(),
+            expand_model: std::env::var("ENGRAM_EXPAND_MODEL").ok(),
+            proxy_model: std::env::var("ENGRAM_PROXY_MODEL").ok(),
         })
     }
 
@@ -82,9 +105,16 @@ struct ChatChoice {
 }
 
 /// Send a chat completion request, return the response text.
+#[allow(dead_code)]
 pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String, String> {
+    llm_chat_as(cfg, "", system, user).await
+}
+
+/// Like llm_chat but uses a component-specific model if configured.
+pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &str) -> Result<String, String> {
+    let model = cfg.model_for(component).to_string();
     let req = ChatRequest {
-        model: cfg.llm_model.clone(),
+        model,
         messages: vec![
             ChatMessage { role: "system".into(), content: system.into() },
             ChatMessage { role: "user".into(), content: user.into() },
@@ -128,7 +158,7 @@ const EXPAND_PROMPT: &str = "Given a search query for a PERSONAL knowledge base 
 
 /// Generate alternative query phrasings for better recall coverage.
 pub async fn expand_query(cfg: &AiConfig, query: &str) -> Vec<String> {
-    match llm_chat(cfg, EXPAND_PROMPT, query).await {
+    match llm_chat_as(cfg, "expand", EXPAND_PROMPT, query).await {
         Ok(text) => text
             .lines()
             .map(|l| l.trim().to_string())
@@ -166,7 +196,7 @@ pub async fn extract_memories(
 ) -> Result<Vec<ExtractedMemory>, String> {
     debug!(model = %cfg.llm_model, "extracting memories");
 
-    let raw = llm_chat(cfg, EXTRACT_SYSTEM_PROMPT, text).await?;
+    let raw = llm_chat_as(cfg, "extract", EXTRACT_SYSTEM_PROMPT, text).await?;
     let json_str = unwrap_json(&raw);
     let memories: Vec<ExtractedMemory> = serde_json::from_str(&json_str)
         .map_err(|e| format!("failed to parse extracted memories: {e}\nraw: {raw}"))?;

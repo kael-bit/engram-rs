@@ -127,16 +127,10 @@ async fn main() {
 
     let proxy_cfg = std::env::var("ENGRAM_PROXY_UPSTREAM").ok().map(|upstream| {
         let upstream = upstream.trim_end_matches('/').to_string();
-        let extract_model = std::env::var("ENGRAM_PROXY_MODEL").ok();
-        if let Some(ref m) = extract_model {
-            info!(upstream = %upstream, model = %m, "proxy enabled");
-        } else {
-            info!(upstream = %upstream, "proxy enabled");
-        }
+        info!(upstream = %upstream, "proxy enabled");
         proxy::ProxyConfig {
             upstream,
             default_key: std::env::var("ENGRAM_PROXY_KEY").ok(),
-            extract_model,
         }
     });
 

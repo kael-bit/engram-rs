@@ -356,7 +356,7 @@ pub async fn rerank_results(
 
     let user = format!("Query: {query}\n\nMemories:\n{numbered}");
 
-    match ai::llm_chat(cfg, RERANK_SYSTEM, &user).await {
+    match ai::llm_chat_as(cfg, "rerank", RERANK_SYSTEM, &user).await {
         Ok(raw) => {
             let order = parse_rerank_response(&raw, response.memories.len());
             if order.is_empty() {

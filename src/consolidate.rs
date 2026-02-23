@@ -228,7 +228,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
                 let _ = writeln!(input, "{}. {}", i + 1, ns_mems[idx].0.content);
             }
 
-            let merged_content = match ai::llm_chat(cfg, MERGE_SYSTEM, &input).await {
+            let merged_content = match ai::llm_chat_as(cfg, "merge", MERGE_SYSTEM, &input).await {
                 Ok(text) => text.trim().to_string(),
                 Err(e) => {
                     warn!(error = %e, "LLM merge failed, skipping cluster");

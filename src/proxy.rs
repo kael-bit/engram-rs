@@ -13,7 +13,6 @@ use crate::{ai, db, AppState};
 pub struct ProxyConfig {
     pub upstream: String,
     pub default_key: Option<String>,
-    pub extract_model: Option<String>, // override LLM model for extraction
 }
 
 /// Transparent proxy: forward everything to upstream, capture req/res bodies,
@@ -191,16 +190,6 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
         return;
     };
 
-    // Use a separate model for extraction if configured
-    let extract_cfg = match state.proxy.as_ref().and_then(|p| p.extract_model.as_ref()) {
-        Some(model) => {
-            let mut cfg = ai_cfg.clone();
-            cfg.llm_model = model.clone();
-            cfg
-        }
-        None => ai_cfg.clone(),
-    };
-
     let req_text = String::from_utf8_lossy(&req_raw);
     let res_text = String::from_utf8_lossy(&res_raw);
 
@@ -233,7 +222,7 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
          === REQUEST ===\n{req_preview}\n\n=== RESPONSE ===\n{res_preview}"
     );
 
-    let extraction = match ai::llm_chat(&extract_cfg, system, &user).await {
+    let extraction = match ai::llm_chat_as(ai_cfg, "proxy", system, &user).await {
         Ok(text) => text,
         Err(e) => {
             warn!("proxy: extraction LLM call failed: {e}");
