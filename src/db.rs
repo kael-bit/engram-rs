@@ -551,57 +551,68 @@ impl MemoryDB {
         let conn = self.conn()?;
         conn.execute_batch("BEGIN")?;
         let mut results = Vec::with_capacity(inputs.len());
-        for input in inputs {
-            if let Err(e) = validate_input(&input) {
-                tracing::warn!(error = %e, "batch: skipping invalid input");
-                continue;
+        let result = (|| -> Result<(), EngramError> {
+            for input in inputs {
+                if let Err(e) = validate_input(&input) {
+                    tracing::warn!(error = %e, "batch: skipping invalid input");
+                    continue;
+                }
+                let now = now_ms();
+                let layer_val = input.layer.unwrap_or(1);
+                let layer: Layer = match layer_val.try_into() {
+                    Ok(l) => l,
+                    Err(_) => continue,
+                };
+                let id = Uuid::new_v4().to_string();
+                let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
+                let source = input.source.unwrap_or_else(|| "api".into());
+                let tags = input.tags.unwrap_or_default();
+                let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
+                let namespace = input.namespace.unwrap_or_else(|| "default".into());
+
+                conn.execute(
+                    "INSERT INTO memories \
+                     (id, content, layer, importance, created_at, last_accessed, \
+                      access_count, decay_rate, source, tags, namespace) \
+                     VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10)",
+                    params![
+                        id, input.content, layer_val, importance, now, now,
+                        layer.default_decay(), source, tags_json, namespace
+                    ],
+                )?;
+                let processed = append_cjk_bigrams(&input.content);
+                conn.execute(
+                    "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
+                    params![id, processed, tags_json],
+                )?;
+
+                results.push(Memory {
+                    id,
+                    content: input.content,
+                    layer,
+                    importance,
+                    created_at: now,
+                    last_accessed: now,
+                    access_count: 0,
+                    decay_rate: layer.default_decay(),
+                    source,
+                    tags,
+                    namespace,
+                    embedding: None,
+                });
             }
-            let now = now_ms();
-            let layer_val = input.layer.unwrap_or(1);
-            let layer: Layer = match layer_val.try_into() {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
-            let id = Uuid::new_v4().to_string();
-            let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
-            let source = input.source.unwrap_or_else(|| "api".into());
-            let tags = input.tags.unwrap_or_default();
-            let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
-            let namespace = input.namespace.unwrap_or_else(|| "default".into());
-
-            conn.execute(
-                "INSERT INTO memories \
-                 (id, content, layer, importance, created_at, last_accessed, \
-                  access_count, decay_rate, source, tags, namespace) \
-                 VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10)",
-                params![
-                    id, input.content, layer_val, importance, now, now,
-                    layer.default_decay(), source, tags_json, namespace
-                ],
-            )?;
-            let processed = append_cjk_bigrams(&input.content);
-            conn.execute(
-                "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
-                params![id, processed, tags_json],
-            )?;
-
-            results.push(Memory {
-                id,
-                content: input.content,
-                layer,
-                importance,
-                created_at: now,
-                last_accessed: now,
-                access_count: 0,
-                decay_rate: layer.default_decay(),
-                source,
-                tags,
-                namespace,
-                embedding: None,
-            });
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                conn.execute_batch("COMMIT")?;
+                Ok(results)
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
         }
-        conn.execute_batch("COMMIT")?;
-        Ok(results)
     }
 
     pub fn get(&self, id: &str) -> Result<Option<Memory>, EngramError> {
@@ -615,8 +626,10 @@ impl MemoryDB {
     }
 
     pub fn delete(&self, id: &str) -> Result<bool, EngramError> {
-        self.fts_delete(id)?;
         let n = self.conn()?.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
+        if n > 0 {
+            self.fts_delete(id)?;
+        }
         Ok(n > 0)
     }
 
@@ -1173,60 +1186,71 @@ impl MemoryDB {
         let conn = self.conn()?;
         conn.execute_batch("BEGIN")?;
         let mut imported = 0;
-        for m in memories {
-            // If same id exists, skip (idempotent re-import).
-            // Use INSERT OR IGNORE pattern.
-            let exists: bool = conn.query_row(
-                "SELECT COUNT(*) FROM memories WHERE id = ?1",
-                params![m.id],
-                |r| r.get::<_, i64>(0),
-            ).unwrap_or(0) > 0;
-
-            let actual_id = if exists {
-                // When importing into a different namespace and id collides,
-                // mint a fresh id so the memory still gets imported.
-                let same_ns: bool = conn.query_row(
-                    "SELECT COUNT(*) FROM memories WHERE id = ?1 AND namespace = ?2",
-                    params![m.id, m.namespace],
+        let result = (|| -> Result<(), EngramError> {
+            for m in memories {
+                // If same id exists, skip (idempotent re-import).
+                // Use INSERT OR IGNORE pattern.
+                let exists: bool = conn.query_row(
+                    "SELECT COUNT(*) FROM memories WHERE id = ?1",
+                    params![m.id],
                     |r| r.get::<_, i64>(0),
                 ).unwrap_or(0) > 0;
-                if same_ns {
-                    continue; // true duplicate — same id, same namespace
-                }
-                uuid::Uuid::new_v4().to_string()
-            } else {
-                m.id.clone()
-            };
-            let tags_json = serde_json::to_string(&m.tags).unwrap_or_else(|_| "[]".into());
-            conn.execute(
-                "INSERT INTO memories \
-                 (id, content, layer, importance, created_at, last_accessed, \
-                  access_count, decay_rate, source, tags, namespace, embedding) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
-                params![
-                    actual_id,
-                    m.content,
-                    m.layer as u8,
-                    m.importance,
-                    m.created_at,
-                    m.last_accessed,
-                    m.access_count,
-                    m.decay_rate,
-                    m.source,
-                    tags_json,
-                    m.namespace,
-                    m.embedding.as_ref().map(|e| crate::ai::embedding_to_bytes(e)),
-                ],
-            )?;
-            let processed = append_cjk_bigrams(&m.content);
-            conn.execute(
-                "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
-                params![actual_id, processed, tags_json],
-            )?;
-            imported += 1;
+
+                let actual_id = if exists {
+                    // When importing into a different namespace and id collides,
+                    // mint a fresh id so the memory still gets imported.
+                    let same_ns: bool = conn.query_row(
+                        "SELECT COUNT(*) FROM memories WHERE id = ?1 AND namespace = ?2",
+                        params![m.id, m.namespace],
+                        |r| r.get::<_, i64>(0),
+                    ).unwrap_or(0) > 0;
+                    if same_ns {
+                        continue; // true duplicate — same id, same namespace
+                    }
+                    uuid::Uuid::new_v4().to_string()
+                } else {
+                    m.id.clone()
+                };
+                let tags_json = serde_json::to_string(&m.tags).unwrap_or_else(|_| "[]".into());
+                conn.execute(
+                    "INSERT INTO memories \
+                     (id, content, layer, importance, created_at, last_accessed, \
+                      access_count, decay_rate, source, tags, namespace, embedding) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                    params![
+                        actual_id,
+                        m.content,
+                        m.layer as u8,
+                        m.importance,
+                        m.created_at,
+                        m.last_accessed,
+                        m.access_count,
+                        m.decay_rate,
+                        m.source,
+                        tags_json,
+                        m.namespace,
+                        m.embedding.as_ref().map(|e| crate::ai::embedding_to_bytes(e)),
+                    ],
+                )?;
+                let processed = append_cjk_bigrams(&m.content);
+                conn.execute(
+                    "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
+                    params![actual_id, processed, tags_json],
+                )?;
+                imported += 1;
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                conn.execute_batch("COMMIT")?;
+                Ok(imported)
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
         }
-        conn.execute_batch("COMMIT")?;
-        Ok(imported)
     }
 }
 
