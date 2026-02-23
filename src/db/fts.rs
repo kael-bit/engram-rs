@@ -112,7 +112,13 @@ impl MemoryDB {
         }
 
         let processed = append_segmented(sanitized);
-        let fts_query: String = processed.split_whitespace().collect::<Vec<_>>().join(" OR ");
+        let terms: Vec<&str> = processed.split_whitespace()
+            .filter(|w| !is_stopword(w))
+            .collect();
+        if terms.is_empty() {
+            return vec![];
+        }
+        let fts_query: String = terms.join(" OR ");
 
         let Ok(conn) = self.conn() else { return vec![]; };
 
@@ -229,6 +235,22 @@ impl MemoryDB {
 
 }
 
+/// Common CJK stop words that match nearly everything and add noise to FTS queries.
+/// Kept minimal — only the most ubiquitous function words.
+fn is_stopword(word: &str) -> bool {
+    matches!(word,
+        "的" | "了" | "是" | "在" | "有" | "和" | "就" | "都" | "而" | "及" |
+        "与" | "这" | "那" | "你" | "我" | "他" | "她" | "它" | "们" | "着" |
+        "过" | "到" | "对" | "也" | "不" | "会" | "被" | "把" | "让" | "给" |
+        "用" | "从" | "很" | "但" | "还" | "又" | "或" | "已" | "要" | "该" |
+        "为" | "其" | "所" | "只" | "之" | "中" | "上" | "下" | "个" | "么" |
+        "什么" | "怎么" | "如何" | "什" | "哪" | "谁" |
+        "the" | "a" | "an" | "is" | "are" | "was" | "were" | "be" | "been" |
+        "and" | "or" | "but" | "in" | "on" | "at" | "to" | "for" | "of" |
+        "it" | "as" | "if" | "no" | "not" | "so" | "this" | "that"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +289,28 @@ mod tests {
         assert!(!db.search_fts("天气", 10).is_empty(), "天气 should match");
         assert!(!db.search_fts("散步", 10).is_empty(), "散步 should match");
         assert!(!db.search_fts("出门散步", 10).is_empty(), "出门散步 should match");
+    }
+
+    #[test]
+    fn stopwords_filtered_from_fts_query() {
+        assert!(is_stopword("是"));
+        assert!(is_stopword("的"));
+        assert!(is_stopword("the"));
+        assert!(!is_stopword("alice"));
+        assert!(!is_stopword("engram"));
+        assert!(!is_stopword("部署"));
+    }
+
+    #[test]
+    fn fts_stopword_only_query_returns_empty() {
+        let db = test_db();
+        db.insert(MemoryInput {
+            content: "some test content for stop words".into(),
+            ..Default::default()
+        }).unwrap();
+
+        // Pure stop word query should return empty
+        let results = db.search_fts("是的了", 10);
+        assert!(results.is_empty(), "stop-word-only query should return empty");
     }
 }
