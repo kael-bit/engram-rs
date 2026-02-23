@@ -79,36 +79,25 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     let mut promoted_ids = Vec::new();
     let mut dropped_ids = Vec::new();
 
-    // Promote high-value Working → Core (access-based)
+    // Working → Core: access-based or age-based (single pass)
     for mem in db.list_by_layer(Layer::Working, 10000, 0) {
-        if mem.access_count >= promote_threshold && mem.importance >= promote_min_imp
-            && db.promote(&mem.id, Layer::Core).is_ok() {
-                promoted_ids.push(mem.id.clone());
-                promoted += 1;
-            }
+        let dominated_by_access = mem.access_count >= promote_threshold
+            && mem.importance >= promote_min_imp;
+        let aged_in = (now - mem.created_at) > working_age && mem.access_count > 0;
+
+        if (dominated_by_access || aged_in)
+            && db.promote(&mem.id, Layer::Core).is_ok()
+        {
+            promoted_ids.push(mem.id.clone());
+            promoted += 1;
+        }
     }
 
-    // Promote Buffer → Working when accessed enough (reinforcement-based)
-    // Like spaced repetition: if you keep recalling something, it sticks.
+    // Buffer → Working when accessed enough (reinforcement-based)
     let buffer_promote_count = promote_threshold.max(2);
     for mem in db.list_by_layer(Layer::Buffer, 10000, 0) {
         if mem.access_count >= buffer_promote_count
             && db.promote(&mem.id, Layer::Working).is_ok() {
-                promoted_ids.push(mem.id.clone());
-                promoted += 1;
-            }
-    }
-
-    // Age-based Working → Core promotion
-    // Memories that survive in Working long enough with any access earn Core status,
-    // regardless of initial importance (importance grows via access now)
-    for mem in db.list_by_layer(Layer::Working, 10000, 0) {
-        if promoted_ids.contains(&mem.id) {
-            continue;
-        }
-        let age = now - mem.created_at;
-        if age > working_age && mem.access_count > 0
-            && db.promote(&mem.id, Layer::Core).is_ok() {
                 promoted_ids.push(mem.id.clone());
                 promoted += 1;
             }

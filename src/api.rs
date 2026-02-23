@@ -25,11 +25,20 @@ where
 
 /// Extract namespace from X-Namespace header, defaulting to None (= all namespaces).
 fn read_rss_kb() -> u64 {
-    std::fs::read_to_string("/proc/self/statm")
-        .ok()
-        .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
-        .map(|pages| pages * 4) // page size = 4KB on x86_64
-        .unwrap_or(0)
+    // Linux: read from /proc
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/self/statm")
+            .ok()
+            .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
+            .map(|pages| pages * 4)
+            .unwrap_or(0)
+    }
+    // macOS: use mach task_info (would need mach crate, not worth the dep)
+    #[cfg(not(target_os = "linux"))]
+    {
+        0
+    }
 }
 
 fn get_namespace(headers: &axum::http::HeaderMap) -> Option<String> {
@@ -71,6 +80,7 @@ async fn require_auth(
 pub fn router(state: AppState) -> Router {
     let public = Router::new()
         .route("/", get(health))
+        .route("/health", get(health))
         .route("/stats", get(stats));
 
     let protected = Router::new()

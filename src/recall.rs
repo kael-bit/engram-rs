@@ -183,7 +183,7 @@ pub fn recall(
 
     // Semantic search (if embedding available)
     if let Some(qemb) = query_emb {
-        let semantic_results = db.search_semantic(qemb, limit * 3);
+        let semantic_results = db.search_semantic_ns(qemb, limit * 3, req.namespace.as_deref());
         if !semantic_results.is_empty() {
             search_mode = "semantic+fts".to_string();
             let max_sim = semantic_results

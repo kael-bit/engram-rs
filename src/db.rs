@@ -1032,10 +1032,19 @@ impl MemoryDB {
     ///
     /// Uses brute-force cosine similarity. Suitable for collections up to ~10k memories.
     /// For larger datasets, consider an external vector index.
+    /// Brute-force cosine similarity search. O(n) over all embeddings.
+    /// Fine for <10k memories; for larger scales, consider IVF or HNSW indexing.
     pub fn search_semantic(&self, query_emb: &[f64], limit: usize) -> Vec<(String, f64)> {
+        self.search_semantic_ns(query_emb, limit, None)
+    }
+
+    pub fn search_semantic_ns(
+        &self, query_emb: &[f64], limit: usize, ns: Option<&str>,
+    ) -> Vec<(String, f64)> {
         let all = self.get_all_with_embeddings();
         let mut scored: Vec<(String, f64)> = all
             .into_iter()
+            .filter(|(mem, _)| ns.is_none_or(|n| mem.namespace == n))
             .map(|(mem, emb)| {
                 let sim = crate::ai::cosine_similarity(query_emb, &emb);
                 (mem.id, sim)
