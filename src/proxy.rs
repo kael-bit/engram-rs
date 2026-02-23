@@ -420,7 +420,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         if let Some(ref existing_id) = dup_id {
             // Repetition = reinforcement, even from proxy extraction
             if !existing_id.is_empty() {
-                let _ = state.db.touch(existing_id);
+                let _ = state.db.reinforce(existing_id);
             }
             debug!(
                 "proxy: skipping duplicate (reinforced): {}",

@@ -147,27 +147,37 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     }
 
     // Working → Core: collect candidates for LLM gate review.
+    // Two paths: recall-driven (access_count) or repetition-driven (repetition_count).
+    // Repetition has a lower threshold — restating something is a stronger
+    // signal than it happening to match a search query.
     // Session notes and ephemeral tags are always blocked.
+    let rep_threshold = (promote_threshold / 2).max(2);
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0) {
         if mem.source == "session" || mem.tags.iter().any(|t| t == "ephemeral") {
             continue;
         }
-        let dominated_by_access = mem.access_count >= promote_threshold
+        let by_recall = mem.access_count >= promote_threshold
             && mem.importance >= promote_min_imp;
-        let aged_in = (now - mem.created_at) > working_age
-            && mem.access_count > 0
+        let by_repetition = mem.repetition_count >= rep_threshold
+            && mem.importance >= promote_min_imp;
+        let by_age = (now - mem.created_at) > working_age
+            && (mem.access_count > 0 || mem.repetition_count > 0)
             && mem.importance >= promote_min_imp;
 
-        if dominated_by_access || aged_in {
+        if by_recall || by_repetition || by_age {
             promotion_candidates.push((mem.id.clone(), mem.content.clone()));
         }
     }
 
-    // Buffer → Working when accessed enough (reinforcement-based).
-    // Threshold is higher than Working→Core to keep Buffer as a real staging area.
+    // Buffer → Working: recall-based OR repetition-based.
+    // Repetition threshold is lower (3 vs 5) — if you keep writing
+    // the same thing, it clearly matters to you.
     let buffer_promote_count = promote_threshold.max(5);
+    let buffer_rep_threshold = 3_i64;
     for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0) {
-        if mem.access_count >= buffer_promote_count
+        let by_recall = mem.access_count >= buffer_promote_count;
+        let by_rep = mem.repetition_count >= buffer_rep_threshold;
+        if (by_recall || by_rep)
             && db.promote(&mem.id, Layer::Working).is_ok() {
                 promoted_ids.push(mem.id.clone());
                 promoted += 1;
@@ -184,8 +194,8 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         let age = now - mem.created_at;
         if age > buffer_ttl {
             let rescue_threshold = (buffer_promote_count / 2).max(2);
-            if mem.access_count >= rescue_threshold {
-                // Accessed enough to deserve a second life in Working
+            if mem.access_count >= rescue_threshold || mem.repetition_count >= 2 {
+                // Used or repeated enough to deserve a second life in Working
                 if db.promote(&mem.id, Layer::Working).is_ok() {
                     promoted_ids.push(mem.id.clone());
                     promoted += 1;
@@ -526,6 +536,7 @@ mod tests {
                 created_at: 0,
                 last_accessed: 0,
                 access_count: 0,
+                repetition_count: 0,
                 decay_rate: 1.0,
                 source: "test".into(),
                 tags: vec![],
@@ -609,6 +620,7 @@ mod tests {
             created_at: created_ms,
             last_accessed: accessed_ms,
             access_count,
+            repetition_count: 0,
             decay_rate: layer.default_decay(),
             source: "test".into(),
             tags: vec![],

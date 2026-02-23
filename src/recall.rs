@@ -568,6 +568,7 @@ mod tests {
             created_at: now - 86_400_000, // yesterday
             last_accessed: now - 86_400_000,
             access_count: 5,
+            repetition_count: 0,
             decay_rate: 0.05,
             source: "test".into(),
             tags: vec![],
@@ -582,6 +583,7 @@ mod tests {
             created_at: now - 1000,
             last_accessed: now,
             access_count: 1,
+            repetition_count: 0,
             decay_rate: 0.05,
             source: "test".into(),
             tags: vec![],

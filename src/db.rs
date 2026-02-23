@@ -76,6 +76,7 @@ pub struct Memory {
     pub created_at: i64,
     pub last_accessed: i64,
     pub access_count: i64,
+    pub repetition_count: i64,
     pub decay_rate: f64,
     pub source: String,
     pub tags: Vec<String>,
@@ -268,6 +269,7 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at INTEGER NOT NULL,
     last_accessed INTEGER NOT NULL,
     access_count INTEGER NOT NULL DEFAULT 0,
+    repetition_count INTEGER NOT NULL DEFAULT 0,
     decay_rate REAL NOT NULL DEFAULT 1.0,
     source TEXT NOT NULL DEFAULT 'manual',
     tags TEXT NOT NULL DEFAULT '[]',
@@ -342,6 +344,12 @@ impl MemoryDB {
             )?;
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_namespace ON memories(namespace)",
+                [],
+            )?;
+        }
+        if conn.prepare("SELECT repetition_count FROM memories LIMIT 0").is_err() {
+            conn.execute(
+                "ALTER TABLE memories ADD COLUMN repetition_count INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
@@ -495,7 +503,7 @@ impl MemoryDB {
             tracing::debug!(existing_id = %existing.id, "near-duplicate found, reinforcing");
             // Repetition = reinforcement. This is the core insight:
             // if someone keeps writing similar content, they clearly care about it.
-            let _ = self.touch(&existing.id);
+            let _ = self.reinforce(&existing.id);
             let tags = input.tags.unwrap_or_default();
             // Merge tags from both
             let mut merged_tags: Vec<String> = existing.tags.clone();
@@ -504,12 +512,12 @@ impl MemoryDB {
                     merged_tags.push(t.clone());
                 }
             }
-            // touch() already bumped importance by 0.02; use the post-touch value as baseline
-            let touched_imp = (existing.importance + 0.02).min(1.0);
+            // reinforce() already bumped importance by 0.05; use post-reinforce value
+            let reinforced_imp = (existing.importance + 0.05).min(1.0);
             let imp = input
                 .importance
-                .map(|new_imp| new_imp.max(touched_imp))
-                .unwrap_or(touched_imp);
+                .map(|new_imp| new_imp.max(reinforced_imp))
+                .unwrap_or(reinforced_imp);
             // Keep the higher layer
             let layer = input
                 .layer
@@ -589,6 +597,7 @@ impl MemoryDB {
             created_at: now,
             last_accessed: now,
             access_count: 0,
+            repetition_count: 0,
             decay_rate: layer.default_decay(),
             source,
             tags,
@@ -646,6 +655,7 @@ impl MemoryDB {
                     created_at: now,
                     last_accessed: now,
                     access_count: 0,
+                    repetition_count: 0,
                     decay_rate: layer.default_decay(),
                     source,
                     tags,
@@ -712,11 +722,24 @@ impl MemoryDB {
     }
 
     pub fn touch(&self, id: &str) -> Result<(), EngramError> {
-        // Reinforce on access — slower increment to prevent runaway inflation.
-        // Memories that keep getting recalled will still climb, just steadier.
+        // Recall-based reinforcement — mild bump. Getting found in search
+        // is a weaker signal than being explicitly restated.
         self.conn()?.execute(
             "UPDATE memories SET last_accessed = ?1, access_count = access_count + 1, \
              importance = MIN(1.0, importance + 0.02) WHERE id = ?2",
+            params![now_ms(), id],
+        )?;
+        Ok(())
+    }
+
+    /// Repetition-based reinforcement — stronger than recall touch.
+    /// Called when near-duplicate content is written again, indicating
+    /// the author considers this information worth restating.
+    pub fn reinforce(&self, id: &str) -> Result<(), EngramError> {
+        self.conn()?.execute(
+            "UPDATE memories SET last_accessed = ?1, \
+             repetition_count = repetition_count + 1, \
+             importance = MIN(1.0, importance + 0.05) WHERE id = ?2",
             params![now_ms(), id],
         )?;
         Ok(())
@@ -1400,8 +1423,8 @@ impl MemoryDB {
                 conn.execute(
                     "INSERT INTO memories \
                      (id, content, layer, importance, created_at, last_accessed, \
-                      access_count, decay_rate, source, tags, namespace, embedding) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                      access_count, repetition_count, decay_rate, source, tags, namespace, embedding) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                     params![
                         actual_id,
                         m.content,
@@ -1410,6 +1433,7 @@ impl MemoryDB {
                         m.created_at,
                         m.last_accessed,
                         m.access_count,
+                        m.repetition_count,
                         m.decay_rate,
                         m.source,
                         tags_json,
@@ -1484,6 +1508,7 @@ fn row_to_memory_meta(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
         created_at: row.get("created_at")?,
         last_accessed: row.get("last_accessed")?,
         access_count: row.get("access_count")?,
+        repetition_count: row.get::<_, i64>("repetition_count").unwrap_or(0),
         decay_rate: row.get("decay_rate")?,
         source: row.get("source")?,
         tags: serde_json::from_str(&tags_str).unwrap_or_default(),
@@ -1509,6 +1534,7 @@ fn row_to_memory_impl(row: &rusqlite::Row, include_embedding: bool) -> rusqlite:
         created_at: row.get("created_at")?,
         last_accessed: row.get("last_accessed")?,
         access_count: row.get("access_count")?,
+        repetition_count: row.get::<_, i64>("repetition_count").unwrap_or(0),
         decay_rate: row.get("decay_rate")?,
         source: row.get("source")?,
         tags: serde_json::from_str(&tags_str).unwrap_or_default(),
@@ -2180,21 +2206,24 @@ mod tests {
             "user prefers dark mode for all user interface applications and code editors"
         )).unwrap();
         assert_eq!(original.access_count, 0);
+        assert_eq!(original.repetition_count, 0);
         let orig_imp = original.importance;
 
-        // Write near-duplicate — should reinforce, not create new
+        // Write near-duplicate — should reinforce via repetition, not create new
         let updated = db.insert(MemoryInput::new(
             "user prefers dark mode for all user interface applications and text editors"
         )).unwrap();
         assert_eq!(updated.id, original.id, "should update existing, not create new");
-        assert_eq!(updated.access_count, 1, "dedup should touch = increment access");
-        assert!(updated.importance > orig_imp, "dedup should bump importance via touch");
+        assert_eq!(updated.access_count, 0, "recall counter should stay at 0");
+        assert_eq!(updated.repetition_count, 1, "repetition counter should increment");
+        assert!(updated.importance > orig_imp, "dedup should bump importance via reinforce");
 
-        // Third repetition — same idea, minor wording change
+        // Third repetition — repetition_count keeps climbing
         let again = db.insert(MemoryInput::new(
             "user prefers dark mode for all user interface applications and code editors"
         )).unwrap();
         assert_eq!(again.id, original.id, "third repetition should still match");
-        assert_eq!(again.access_count, 2, "third rep should increment access again");
+        assert_eq!(again.repetition_count, 2, "third rep should increment again");
+        assert_eq!(again.access_count, 0, "recall counter still untouched");
     }
 }
