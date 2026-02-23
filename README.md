@@ -82,10 +82,10 @@ core: [
   {"content": "Lesson: deployment must be atomic — stop && cp && start in one command"}
 ]
 working: [
-  {"content": "Currently building engram v0.6 — fact triples + contradiction resolution"}
+  {"content": "Currently iterating on engram proxy + recall quality"}
 ]
 next_actions: [
-  {"content": "Next: write integration tests for facts API"}
+  {"content": "Next: test proxy extraction with real conversations"}
 ]
 
 # Agent knows who it is, what it was doing, and what to do next.

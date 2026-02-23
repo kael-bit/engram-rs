@@ -15,6 +15,9 @@
 - **Lesson/procedural auto-promote**: Memories tagged `lesson` or kind `procedural` auto-promote to Working after 2h in Buffer, bypassing normal `promote_threshold`.
 - **Resume touches Core/Working**: `/resume` increments `access_count` and bumps importance +0.02 for Core/Working memories, preventing Working decay.
 - **X-Engram-Extract header**: `X-Engram-Extract: false` disables proxy memory extraction per-request. Content heuristic fallback for sub-agent detection.
+- **Keyword affinity penalty**: Semantic-only results (no FTS match) that lack query terms get 0.7× relevance penalty. Mitigates text-embedding-3-small CJK weakness where unrelated content scores high cosine.
+- **Namespace query param alias**: `GET /memories?namespace=X` works alongside `?ns=X`.
+- **Namespace SQL-layer filter**: `GET /memories` namespace filter pushed from Rust `retain()` to SQL `WHERE` clause for efficiency.
 - **Audit prompt softened**: No longer "aggressive about merges"; protects memories updated within 24h.
 - **User message truncation**: Increased from 2000→6000 chars for proxy extraction context.
 - **Kind alignment**: `kind` field consistent across all surfaces (prompt, schema, README, AGENTS.md, MCP).
