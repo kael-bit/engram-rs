@@ -394,8 +394,17 @@ async fn extract_from_context(state: AppState, context: &str) {
 
     let count = entries.len();
     let mut stored: u64 = 0;
+    let mut batch_contents: Vec<String> = Vec::new();
     for entry in entries {
         if entry.content.is_empty() || entry.content.len() > 300 {
+            continue;
+        }
+
+        // intra-batch dedup: skip if too similar to something we already stored this round
+        if batch_contents.iter().any(|prev| {
+            state.db.is_near_duplicate_pair(prev, &entry.content, 0.5)
+        }) {
+            debug!("proxy: skipping intra-batch duplicate: {}", &entry.content[..entry.content.len().min(60)]);
             continue;
         }
 
@@ -415,6 +424,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         let mut tags = entry.tags;
         tags.push("auto-extract".into());
 
+        let content_copy = entry.content.clone();
         let input = db::MemoryInput {
             content: entry.content,
             source: Some("proxy".into()),
@@ -425,6 +435,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         if let Err(e) = state.db.insert(input) {
             warn!("proxy: failed to store: {e}");
         } else {
+            batch_contents.push(content_copy);
             stored += 1;
         }
     }

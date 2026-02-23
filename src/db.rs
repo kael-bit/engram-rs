@@ -1201,6 +1201,18 @@ impl MemoryDB {
         self.find_near_duplicate_threshold(content, "", threshold).is_some()
     }
 
+    /// Compare two strings directly using Jaccard similarity (no DB lookup).
+    pub fn is_near_duplicate_pair(&self, a: &str, b: &str, threshold: f64) -> bool {
+        let tokens_a = tokenize_for_dedup(a);
+        let tokens_b = tokenize_for_dedup(b);
+        if tokens_a.len() < 3 || tokens_b.len() < 3 {
+            return false;
+        }
+        let intersection = tokens_a.intersection(&tokens_b).count();
+        let union = tokens_a.union(&tokens_b).count();
+        union > 0 && (intersection as f64 / union as f64) > threshold
+    }
+
     fn find_near_duplicate(&self, content: &str, ns: &str) -> Option<Memory> {
         self.find_near_duplicate_threshold(content, ns, 0.8)
     }
@@ -2017,5 +2029,53 @@ mod tests {
         // FTS search should work again
         let results = db.search_fts("missing fts", 5);
         assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn list_by_tag_returns_matching() {
+        let db = test_db();
+        let m = db
+            .insert(MemoryInput::new("trigger memory").tags(vec!["trigger:git".into()]))
+            .unwrap();
+        db.insert(MemoryInput::new("untagged memory")).unwrap();
+
+        let results = db.list_by_tag("trigger:git", None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, m.id);
+    }
+
+    #[test]
+    fn list_by_tag_empty_when_no_match() {
+        let db = test_db();
+        db.insert(MemoryInput::new("some memory").tags(vec!["other:tag".into()])).unwrap();
+
+        let results = db.list_by_tag("trigger:git", None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn list_by_tag_respects_namespace() {
+        let db = test_db();
+        let tag = vec!["trigger:deploy".into()];
+        let a = db
+            .insert(MemoryInput::new("ns-a memory").tags(tag.clone()).namespace("ns-a"))
+            .unwrap();
+        db.insert(MemoryInput::new("ns-b memory").tags(tag).namespace("ns-b"))
+            .unwrap();
+
+        let results = db.list_by_tag("trigger:deploy", Some("ns-a")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, a.id);
+    }
+
+    #[test]
+    fn list_by_tag_no_prefix_substring_match() {
+        let db = test_db();
+        db.insert(MemoryInput::new("push memory").tags(vec!["trigger:git-push".into()])).unwrap();
+        db.insert(MemoryInput::new("commit memory").tags(vec!["trigger:git-commit".into()])).unwrap();
+
+        // Searching for "trigger:git" must not match "trigger:git-push" or "trigger:git-commit"
+        let results = db.list_by_tag("trigger:git", None).unwrap();
+        assert!(results.is_empty());
     }
 }
