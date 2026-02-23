@@ -180,6 +180,7 @@ async fn create_memory(
     if input.namespace.is_none() {
         input.namespace = get_namespace(&headers);
     }
+    let sync = input.sync_embed.unwrap_or(false);
     let db = state.db.clone();
     let mem = tokio::task::spawn_blocking(move || db.insert(input))
         .await
@@ -187,7 +188,25 @@ async fn create_memory(
 
     if let Some(ref cfg) = state.ai {
         if cfg.has_embed() {
-            spawn_embed(state.db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
+            if sync {
+                let db = state.db.clone();
+                let cfg = cfg.clone();
+                let id = mem.id.clone();
+                let content = mem.content.clone();
+                match ai::get_embeddings(&cfg, &[content]).await {
+                    Ok(embs) if !embs.is_empty() => {
+                        if let Some(emb) = embs.into_iter().next() {
+                            let _ = tokio::task::spawn_blocking(move || {
+                                db.set_embedding(&id, &emb)
+                            }).await;
+                        }
+                    }
+                    Err(e) => warn!(error = %e, "sync embedding failed"),
+                    _ => {}
+                }
+            } else {
+                spawn_embed(state.db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
+            }
         }
     }
 
@@ -715,6 +734,7 @@ async fn do_extract(
         supersedes: None,
         skip_dedup: None,
         namespace: None,
+        sync_embed: None,
         };
 
         let db = state.db.clone();
@@ -1057,5 +1077,20 @@ mod tests {
         let resp = app.oneshot(Request::builder().uri("/memories?ns=ns-b").body(Body::empty()).unwrap()).await.unwrap();
         let j = body_json(resp).await;
         assert_eq!(j["count"], 1);
+    }
+
+    #[tokio::test]
+    async fn sync_embed_field_accepted() {
+        // Just verifies the API accepts sync_embed without error
+        // (actual embedding generation requires AI config)
+        let app = router(test_state(None));
+        let body = serde_json::json!({
+            "content": "sync embed test",
+            "sync_embed": true
+        });
+        let resp = app.oneshot(json_req("POST", "/memories", body)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let j = body_json(resp).await;
+        assert!(!j["id"].as_str().unwrap().is_empty());
     }
 }

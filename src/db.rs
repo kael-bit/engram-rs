@@ -86,8 +86,9 @@ fn is_default_ns(ns: &str) -> bool {
     ns == "default"
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct MemoryInput {
+    #[serde(default)]
     pub content: String,
     pub layer: Option<u8>,
     pub importance: Option<f64>,
@@ -102,19 +103,16 @@ pub struct MemoryInput {
     /// Namespace for multi-agent isolation.
     #[serde(default)]
     pub namespace: Option<String>,
+    /// Wait for embedding to be generated before returning (default: false/async).
+    #[serde(default)]
+    pub sync_embed: Option<bool>,
 }
 
 impl MemoryInput {
     pub fn new(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
-            layer: None,
-            importance: None,
-            source: None,
-            tags: None,
-            supersedes: None,
-            skip_dedup: None,
-            namespace: None,
+            ..Default::default()
         }
     }
 
@@ -1129,6 +1127,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
 
@@ -1159,6 +1158,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
 
@@ -1179,6 +1179,7 @@ mod tests {
         supersedes: None,
         skip_dedup: None,
         namespace: None,
+        sync_embed: None,
         });
         assert!(result.is_err());
     }
@@ -1195,6 +1196,7 @@ mod tests {
         supersedes: None,
         skip_dedup: None,
         namespace: None,
+        sync_embed: None,
         });
         assert!(result.is_err());
     }
@@ -1212,6 +1214,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
         assert!((mem.importance - 1.0).abs() < f64::EPSILON);
@@ -1230,6 +1233,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
 
@@ -1249,6 +1253,7 @@ mod tests {
         supersedes: None,
         skip_dedup: None,
         namespace: None,
+        sync_embed: None,
         })
         .unwrap();
 
@@ -1268,6 +1273,7 @@ mod tests {
         supersedes: None,
         skip_dedup: None,
         namespace: None,
+        sync_embed: None,
         })
         .unwrap();
 
@@ -1296,6 +1302,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
         }
@@ -1320,6 +1327,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
 
@@ -1345,6 +1353,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
         }
@@ -1369,6 +1378,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
 
@@ -1383,6 +1393,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
 
@@ -1412,6 +1423,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
 
@@ -1426,6 +1438,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
 
@@ -1457,6 +1470,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
 
@@ -1485,6 +1499,7 @@ mod tests {
             supersedes: None,
             skip_dedup: None,
             namespace: None,
+            sync_embed: None,
             })
             .unwrap();
 

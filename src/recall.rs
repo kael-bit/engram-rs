@@ -424,6 +424,7 @@ mod tests {
             source: None,
             tags: None,
             namespace: None,
+            sync_embed: None,
         supersedes: None,
         skip_dedup: None,
         }).unwrap();
@@ -434,6 +435,7 @@ mod tests {
             source: None,
             tags: None,
             namespace: None,
+            sync_embed: None,
         supersedes: None,
         skip_dedup: None,
         }).unwrap();
@@ -444,6 +446,7 @@ mod tests {
             source: None,
             tags: None,
             namespace: None,
+            sync_embed: None,
         supersedes: None,
         skip_dedup: None,
         }).unwrap();
@@ -577,6 +580,7 @@ mod tests {
             layer: Some(3), importance: Some(0.9),
             source: Some("api".into()), tags: None,
             namespace: None,
+            sync_embed: None,
         supersedes: None,
         skip_dedup: None,
         }).unwrap();
@@ -585,6 +589,7 @@ mod tests {
             layer: Some(2), importance: Some(0.7),
             source: Some("session".into()), tags: None,
             namespace: None,
+            sync_embed: None,
         supersedes: None,
         skip_dedup: None,
         }).unwrap();
@@ -613,6 +618,7 @@ mod tests {
         supersedes: None,
         skip_dedup: None,
         namespace: None,
+        sync_embed: None,
         }).unwrap();
         db.insert(MemoryInput {
             content: "python script notes".into(),
@@ -621,6 +627,7 @@ mod tests {
         supersedes: None,
         skip_dedup: None,
         namespace: None,
+        sync_embed: None,
         }).unwrap();
 
         let req = RecallRequest {
