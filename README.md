@@ -63,7 +63,7 @@ curl -X POST http://localhost:3917/recall \
 open http://localhost:3917/ui
 ```
 
-Single binary, ~9 MB, <10 MB RSS. No Docker, no Python, no external database.
+Single binary, ~9 MB, ~65 MB RSS (includes jieba dictionary for CJK segmentation). No Docker, no Python, no external database.
 
 ## Real-World Example
 
