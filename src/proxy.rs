@@ -435,6 +435,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         let content_copy = entry.content.clone();
         let input = db::MemoryInput {
             content: entry.content,
+            importance: entry.importance,
             source: Some("proxy".into()),
             tags: Some(tags),
             ..Default::default()
@@ -604,4 +605,5 @@ struct ExtractionEntry {
     content: String,
     #[serde(default)]
     tags: Vec<String>,
+    importance: Option<f64>,
 }

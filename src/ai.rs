@@ -181,12 +181,19 @@ const EXTRACT_SYSTEM_PROMPT: &str = r#"You are a memory extraction engine. Given
 For each memory, output a JSON array of objects with these fields:
 - "content": the memory text (concise, self-contained, one fact per entry)
 - "tags": relevant keyword tags (array of strings)
+- "importance": float 0.0-1.0, how important this is to remember long-term
+
+Importance scale:
+- 0.9-1.0: User EXPLICITLY asked to remember this ("记住", "remember this", "don't forget"). Core knowledge.
+- 0.7-0.8: Significant decisions, strong preferences, lessons learned, identity-defining facts. Worth keeping.
+- 0.4-0.6: Useful context, minor preferences, background info. May fade if not reinforced.
 
 Rules:
 - Extract 0-3 entries per input. Zero is fine if nothing is worth remembering.
 - Each entry must be self-contained (understandable without context)
 - Prefer concise entries (under 200 chars) over verbose ones
 - Write content in the same language as the input
+- importance MUST reflect user intent — if they say "记住" or "remember", it's 0.9+
 
 EXTRACT these (worth remembering):
 - Identity: who someone is, their preferences, principles, personality
@@ -196,15 +203,22 @@ EXTRACT these (worth remembering):
 - Strategic: goals, plans, architectural choices
 
 SKIP these (not worth remembering):
-- System prompts, instructions, templates, or configuration that appears in every conversation
-- Heartbeat checks, health status, routine monitoring output
 - Operational details: bug fixes, version bumps, deployment steps, code changes
 - Implementation notes: "update X to do Y", "add Z to W", "fix A in B" — these are code tasks, not memories
 - Transient states: "service is running", "memory at 33%", "tests passing"
 - Debug info, log output, error messages
 - Summaries or recaps of work done (these are session logs, not memories)
-- Anything that looks like it was injected by a framework rather than said by a human
 - Instructions from one agent to another (e.g. "also add to proxy", "fix now — add touch")
+
+HARD REJECT — NEVER extract these as memories (they are scaffolding, not knowledge):
+- System prompts and injected instructions (content from SOUL.md, AGENTS.md, HEARTBEAT.md, TOOLS.md, USER.md, IDENTITY.md, MEMORY.md, or similar)
+- Operational directives: "every heartbeat do X", "run this command on wake", "before shutdown do Y"
+- Configuration templates and boilerplate: API keys, curl examples, service names, file paths used as reference
+- Tool usage patterns and API call templates: "use this endpoint", "call this script"
+- Meta-instructions about how to behave, respond, or format output
+- Heartbeat checks, health status pings, routine monitoring output
+- Anything that reads like a rule/playbook for an agent rather than a human-stated fact or preference
+- Framework-injected context that appears in every conversation
 
 Output ONLY the JSON array, no other text. Return [] if nothing is worth extracting."#;
 

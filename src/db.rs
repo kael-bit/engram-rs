@@ -549,10 +549,22 @@ impl MemoryDB {
         } // do_dedup
 
         let now = now_ms();
-        let layer_val = input.layer.unwrap_or(1);
+        let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
+
+        // Importance-driven initial layer placement:
+        // - >= 0.9: explicit "remember this" → straight to Core
+        // - >= 0.7: significant fact → Working
+        // - default: transient → Buffer
+        // Caller can still override with explicit layer, but importance
+        // takes precedence when no layer is specified.
+        let layer_val = match input.layer {
+            Some(l) => l,
+            None if importance >= 0.9 => 3,
+            None if importance >= 0.7 => 2,
+            None => 1,
+        };
         let layer: Layer = layer_val.try_into()?;
         let id = Uuid::new_v4().to_string();
-        let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
         let source = input.source.unwrap_or_else(|| "api".into());
         let tags = input.tags.unwrap_or_default();
         let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
@@ -2225,5 +2237,26 @@ mod tests {
         assert_eq!(again.id, original.id, "third repetition should still match");
         assert_eq!(again.repetition_count, 2, "third rep should increment again");
         assert_eq!(again.access_count, 0, "recall counter still untouched");
+    }
+
+    #[test]
+    fn importance_drives_initial_layer() {
+        let db = test_db();
+
+        // Low importance → Buffer
+        let buf = db.insert(MemoryInput::new("some random fact").importance(0.4)).unwrap();
+        assert_eq!(buf.layer, Layer::Buffer);
+
+        // Medium importance → Working
+        let work = db.insert(MemoryInput::new("important decision about architecture").importance(0.7)).unwrap();
+        assert_eq!(work.layer, Layer::Working);
+
+        // High importance → Core
+        let core = db.insert(MemoryInput::new("user explicitly said remember this").importance(0.9)).unwrap();
+        assert_eq!(core.layer, Layer::Core);
+
+        // Default (no importance) → Buffer
+        let def = db.insert(MemoryInput::new("default importance test")).unwrap();
+        assert_eq!(def.layer, Layer::Buffer);
     }
 }
