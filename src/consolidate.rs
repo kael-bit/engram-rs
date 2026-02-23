@@ -225,16 +225,25 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                 let content = merged_content.clone();
                 let tags = all_tags;
                 let imp = max_importance;
-                let ok = tokio::task::spawn_blocking(move || {
+                let result = tokio::task::spawn_blocking(move || {
                     db2.update_fields(&id, Some(&content), None, Some(imp), Some(&tags))
                 })
-                .await
-                .ok()
-                .and_then(|r| r.ok());
+                .await;
 
-                if ok.is_none() {
-                    warn!(id = %best_id, "failed to update merged memory");
-                    continue;
+                match result {
+                    Ok(Ok(Some(_))) => {}
+                    Ok(Ok(None)) => {
+                        warn!(id = %best_id, "merge target not found");
+                        continue;
+                    }
+                    Ok(Err(e)) => {
+                        warn!(id = %best_id, error = %e, "merge update failed");
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!(id = %best_id, error = %e, "merge task panicked");
+                        continue;
+                    }
                 }
             }
 
