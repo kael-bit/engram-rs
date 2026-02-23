@@ -482,9 +482,13 @@ struct ResumeQuery {
 
 async fn do_resume(
     State(state): State<AppState>,
-    Query(q): Query<ResumeQuery>,
+    headers: axum::http::HeaderMap,
+    Query(mut q): Query<ResumeQuery>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let hours = q.hours.unwrap_or(4.0);
+    if q.ns.is_none() {
+        q.ns = get_namespace(&headers);
+    }
     let ns_filter = q.ns;
     let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
 
