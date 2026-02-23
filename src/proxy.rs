@@ -199,9 +199,18 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
         return;
     }
 
-    // Truncate to avoid blowing up the extraction LLM
-    let max_chars = 12000;
-    let req_preview: String = req_text.chars().take(max_chars).collect();
+    // Truncate to only the tail of the exchange — the interesting part is at the end.
+    // System prompts, compaction summaries, and prior context are at the start and
+    // just produce garbage extractions (repeated stale info).
+    let max_chars = 4000;
+    let req_tail: String = {
+        let chars: Vec<char> = req_text.chars().collect();
+        if chars.len() > max_chars {
+            chars[chars.len() - max_chars..].iter().collect()
+        } else {
+            req_text.to_string()
+        }
+    };
     let res_preview: String = res_text.chars().take(max_chars).collect();
 
     let system = "You extract long-term memories from LLM conversations. Be EXTREMELY selective.\n\
@@ -223,7 +232,7 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
 
     let user = format!(
         "Extract 0-2 genuinely important long-term memories. Default to [].\n\n\
-         === REQUEST ===\n{req_preview}\n\n=== RESPONSE ===\n{res_preview}"
+         === REQUEST (tail) ===\n{req_tail}\n\n=== RESPONSE ===\n{res_preview}"
     );
 
     let extraction = match ai::llm_chat_as(ai_cfg, "proxy", system, &user).await {
