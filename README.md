@@ -16,228 +16,192 @@ engram uses a three-layer model based on [Atkinson-Shiffrin memory theory](https
 
 Memories promote upward through access frequency (Ebbinghaus-style reinforcement), and decay naturally when neglected. You don't manage layers — store everything as buffer, and the system promotes what sticks:
 
-- **Buffer → Working**: recalled ≥2 times, or accessed before TTL expires
-- **Working → Core**: recalled ≥3 times with sufficient importance, or survived 7+ days with any access
-- Each recall bumps importance by 0.05 (capped at 1.0)
+- **Buffer → Working**: reinforcement score ≥ 5.0 (access + repetition × 2.5)
+- **Working → Core**: reinforcement score ≥ threshold + LLM quality gate
+- Each recall bumps importance by 0.02 (capped at 1.0)
+- Near-duplicate insertions count as repetition (2.5× weight)
 
 ## Quick Start
 
-```bash
-# 1. Build
-cargo build --release
+### Install
 
-# 2. Run (works without AI — keyword search out of the box)
+```bash
+# From source
+git clone https://github.com/kael-bit/engram && cd engram
+cargo build --release
+# Binary at ./target/release/engram (~4 MB)
+```
+
+### Run
+
+```bash
+# Minimal — keyword search works out of the box, no AI needed
 ./target/release/engram
 
-# 3. Store and recall
+# With semantic search + LLM features
+ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions \
+ENGRAM_LLM_KEY=sk-xxx \
+ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings \
+ENGRAM_EMBED_KEY=sk-xxx \
+./target/release/engram
+```
+
+### Try it
+
+```bash
+# Store
 curl -X POST http://localhost:3917/memories \
   -H 'Content-Type: application/json' \
   -d '{"content": "prefers dark mode and vim keybindings"}'
 
+# Recall
 curl -X POST http://localhost:3917/recall \
   -H 'Content-Type: application/json' \
-  -d '{"query": "editor preferences", "budget_tokens": 500}'
+  -d '{"query": "editor preferences"}'
+
+# Dashboard
+open http://localhost:3917/ui
 ```
 
-To enable semantic search and LLM features, add AI backends:
+Single binary, ~4 MB, <10 MB RSS. No Docker, no Python, no external database.
+
+## Setup Guides
+
+### Claude Code
+
+Claude Code can use engram in two ways — pick one or combine both.
+
+#### Option A: MCP Tools (recommended)
+
+Claude Code calls engram through MCP tools — explicit store/recall under your control.
 
 ```bash
-ENGRAM_LLM_URL=http://localhost:4000/v1/chat/completions \
+# 1. Build the MCP server
+cd mcp && npm install && npm run build && cd ..
+
+# 2. Add to Claude Code settings (~/.claude/claude_desktop_config.json)
+```
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "node",
+      "args": ["/path/to/engram/mcp/dist/index.js"],
+      "env": {
+        "ENGRAM_URL": "http://localhost:3917",
+        "ENGRAM_API_KEY": "your-key-here"
+      }
+    }
+  }
+}
+```
+
+Then add to your project's `CLAUDE.md` (or system prompt):
+
+```markdown
+## Memory
+
+You have access to engram, a persistent memory system.
+
+On session start:
+- Call `engram_resume` to restore context from previous sessions.
+
+During conversation:
+- Use `engram_store` for important facts, decisions, and preferences.
+- Use `engram_recall` when you need to remember something.
+
+On session end:
+- Store a summary of what was done and next steps via `engram_store`.
+
+Use `engram_extract` to bulk-process conversation logs into memories.
+```
+
+#### Option B: LLM Proxy (zero-config)
+
+Route Claude Code's API calls through engram — memories are extracted automatically from every conversation. No prompt changes needed.
+
+```bash
+# 1. Start engram with proxy pointing at your real API
+ENGRAM_PROXY_UPSTREAM=https://api.anthropic.com \
+ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions \
+ENGRAM_LLM_KEY=sk-xxx \
+./target/release/engram
+
+# 2. Point Claude Code at engram instead of Anthropic
+export ANTHROPIC_BASE_URL=http://localhost:3917/proxy
+```
+
+Now every conversation flows through engram. It forwards requests transparently (no latency), then asynchronously extracts key facts, decisions, and preferences into memory.
+
+#### Option A + B Combined
+
+Best of both worlds — automatic extraction from all conversations, plus explicit tools for precise control:
+
+```bash
+# Start with proxy
+ENGRAM_PROXY_UPSTREAM=https://api.anthropic.com \
+ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions \
 ENGRAM_LLM_KEY=sk-xxx \
 ./target/release/engram
 ```
 
-Requires Rust 1.75+. Single binary, ~4 MB, <10 MB RSS.
-
-## Features
-
-- Three-layer memory with configurable decay and automatic promotion
-- Hybrid search: semantic (embeddings) + BM25 keyword matching
-- LLM-powered memory merge: consolidation detects similar memories and merges them via LLM
-- LLM re-ranking: optionally re-rank recall results using an LLM for better relevance
-- LLM extraction: feed raw text, get structured memories
-- Query expansion: LLM bridges abstract queries to concrete terms
-- Time-windowed recall: `since`/`until` filters, `/recent` endpoint
-- Budget-aware recall with composite scoring
-- Transparent LLM proxy: auto-extract memories from any LLM conversation
-- Trigger memories: tag with `trigger:action-name`, fetch before risky operations
-- Session recovery: one-call agent wake-up (`/resume`)
-- CJK tokenization support (bigram indexing)
-- Near-duplicate detection on insert
-- Multi-agent namespace isolation
-- Optional Bearer token auth
-- Web dashboard (`/ui`)
-- AI-optional: works without AI (pure FTS), gains semantic search + LLM features with it
-
-## API
-
-### Store
-
 ```bash
-curl -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
-  -d '{"content": "prefers dark mode and vim keybindings", "importance": 0.8}'
-
-# Replace outdated memories
-curl -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
-  -d '{"content": "now uses v0.5.0", "supersedes": ["<old-memory-id>"]}'
-
-# Batch create
-curl -X POST http://localhost:3917/memories/batch \
-  -H 'Content-Type: application/json' \
-  -d '[{"content": "fact one"}, {"content": "fact two"}]'
+# Claude Code uses proxy for conversations
+export ANTHROPIC_BASE_URL=http://localhost:3917/proxy
 ```
 
-### Recall
+MCP config as above. Now Claude Code can explicitly recall/store via tools while all conversations are also passively captured.
 
-```bash
-# Basic recall (budget-aware)
-curl -X POST http://localhost:3917/recall \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "user preferences", "budget_tokens": 500}'
+### OpenClaw
 
-# With LLM re-ranking for better relevance
-curl -X POST http://localhost:3917/recall \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "user preferences", "budget_tokens": 500, "rerank": true}'
+OpenClaw routes all LLM requests through a configurable provider. Point it at engram's proxy:
 
-# With query expansion (bridges abstract → concrete terms)
-curl -X POST http://localhost:3917/recall \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "observability stack", "expand": true}'
+```jsonc
+// ~/.openclaw/openclaw.json — provider config
+{
+  "providers": [
+    {
+      "name": "anthropic",
+      "baseUrl": "http://127.0.0.1:3917/proxy",
+      "apiKey": "your-engram-api-key",
+      "api": "anthropic-messages",
+      "models": [
+        { "id": "claude-opus-4-6", "name": "Claude Opus", "reasoning": true },
+        { "id": "claude-sonnet-4-20250514", "name": "Claude Sonnet" }
+      ]
+    }
+  ]
+}
 ```
 
-Scoring formula: `(0.6 * relevance + 0.2 * importance + 0.2 * recency) * layer_bonus`. Core memories get a slight scoring bonus. If the top result scores below 0.4 and an LLM is configured, query expansion kicks in automatically.
+All conversations between OpenClaw agents and Anthropic models now flow through engram. Memories are extracted automatically.
 
-### Session Recovery
+For explicit memory operations, add instructions to your workspace files:
 
-One call to restore agent context on wake-up:
+```markdown
+<!-- AGENTS.md or SOUL.md -->
+## Memory
 
-```bash
-curl http://localhost:3917/resume?hours=4
+You have access to engram at http://localhost:3917.
+
+On session start:
+  curl -s http://localhost:3917/resume?hours=6&compact=true
+
+Store important findings:
+  curl -X POST http://localhost:3917/memories \
+    -H 'Content-Type: application/json' \
+    -d '{"content": "...", "tags": ["topic"]}'
+
+Recall context:
+  curl -X POST http://localhost:3917/recall \
+    -H 'Content-Type: application/json' \
+    -d '{"query": "..."}'
 ```
 
-Returns `identity` (high-importance core memories), `recent` (time-windowed), `sessions` (source=session), and `next_actions` (tagged `next-action`).
+### Cursor / Windsurf / Other Editors
 
-### Extract from Text
-
-```bash
-curl -X POST http://localhost:3917/extract \
-  -H 'Content-Type: application/json' \
-  -d '{"text": "Moved to Tokyo, timezone JST, always reply in Japanese."}'
-```
-
-Requires AI. Parses unstructured text into structured memories automatically.
-
-### Consolidate
-
-```bash
-# Promote/decay only
-curl -X POST http://localhost:3917/consolidate
-
-# With LLM merge: detect and merge semantically similar memories
-curl -X POST http://localhost:3917/consolidate \
-  -H 'Content-Type: application/json' \
-  -d '{"merge": true}'
-```
-
-### Namespace Isolation
-
-Each agent can store and query memories in its own namespace via the `X-Namespace` header or `namespace` field:
-
-```bash
-curl -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
-  -H 'X-Namespace: agent-a' \
-  -d '{"content": "agent-a private context"}'
-
-curl -X POST http://localhost:3917/recall \
-  -H 'Content-Type: application/json' \
-  -H 'X-Namespace: agent-a' \
-  -d '{"query": "what am I working on?"}'
-```
-
-### Triggers
-
-Pre-action safety recall. Tag memories with `trigger:action-name`, then query before risky operations:
-
-```bash
-# Store a lesson
-curl -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
-  -d '{"content": "never commit .env files", "tags": ["trigger:git-push"]}'
-
-# Before pushing, check lessons
-curl http://localhost:3917/triggers/git-push
-```
-
-### Full Endpoint List
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/` | Health + stats |
-| `GET` | `/health` | Detailed health (uptime, RSS, cache stats) |
-| `GET` | `/stats` | Layer counts |
-| `POST` | `/memories` | Create memory |
-| `POST` | `/memories/batch` | Batch create |
-| `GET` | `/memories` | List (`?layer=N&tag=X&ns=X&limit=50&offset=0`) |
-| `GET` | `/memories/:id` | Get by id |
-| `PATCH` | `/memories/:id` | Update |
-| `DELETE` | `/memories/:id` | Delete |
-| `DELETE` | `/memories` | Batch delete (`{"ids": [...]}` or `{"namespace": "x"}`) |
-| `POST` | `/recall` | Hybrid search (semantic + keyword, budget-aware) |
-| `GET` | `/search` | Quick keyword search (`?q=term&limit=10`) |
-| `GET` | `/recent` | Recent memories (`?hours=2&limit=20&layer=N&source=X`) |
-| `GET` | `/resume` | Session recovery (`?hours=4`) |
-| `GET` | `/triggers/:action` | Pre-action recall |
-| `POST` | `/consolidate` | Maintenance cycle (optional `{"merge": true}`) |
-| `POST` | `/extract` | LLM extraction (requires AI) |
-| `POST` | `/repair` | Fix FTS index + backfill embeddings |
-| `POST` | `/vacuum` | Reclaim disk space (`?full=true` for full vacuum) |
-| `GET` | `/export` | Export all memories as JSON (`?embed=true` includes vectors) |
-| `POST` | `/import` | Import memories (skips existing ids) |
-| `ANY` | `/proxy/*` | Transparent LLM proxy |
-| `GET` | `/ui` | Web dashboard |
-
-## LLM Proxy
-
-engram can sit between your tools and any LLM API, automatically extracting memories from conversations. Works with OpenAI, Anthropic, Gemini, Ollama, or any provider.
-
-```bash
-# Enable the proxy
-export ENGRAM_PROXY_UPSTREAM=https://api.openai.com
-
-# Point your tools at engram instead of the provider:
-# Before: https://api.openai.com/v1/chat/completions
-# After:  http://localhost:3917/proxy/v1/chat/completions
-
-curl http://localhost:3917/proxy/v1/chat/completions \
-  -H "Authorization: Bearer sk-your-key" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}'
-```
-
-How it works:
-1. Forwards request and headers to upstream verbatim
-2. Streams the response back with no added latency
-3. After the exchange completes, asynchronously extracts key facts/decisions/preferences via LLM
-4. Stores extracted memories in the buffer layer (source: `proxy`, tagged `auto-extract`)
-
-The proxy is selective — it only extracts user preferences, concrete decisions, hard-won lessons, and critical facts. Routine task details are ignored. You can use a cheaper model for proxy extraction via `ENGRAM_PROXY_MODEL`.
-
-Three ways to build memory — use any combination:
-- **Proxy**: automatic, no agent changes needed
-- **API**: `POST /memories` for explicit storage
-- **MCP**: `engram_store` tool for Claude Desktop, Cursor, etc.
-
-## MCP
-
-Included MCP server for Claude Desktop, Cursor, etc:
-
-```bash
-cd mcp && npm install && npm run build
-```
+Any editor that supports MCP can use engram:
 
 ```json
 {
@@ -251,33 +215,263 @@ cd mcp && npm install && npm run build
 }
 ```
 
-Tools: `engram_store`, `engram_recall`, `engram_recent`, `engram_resume`, `engram_search`, `engram_stats`, `engram_extract`, `engram_consolidate`, `engram_repair`, `engram_health`, `engram_triggers`.
+For editors without MCP, use the proxy approach — set the editor's LLM API endpoint to `http://localhost:3917/proxy/...`.
+
+### systemd (Production)
+
+```ini
+# /etc/systemd/system/engram.service
+[Unit]
+Description=engram memory engine
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/engram
+Environment=ENGRAM_DB=/var/lib/engram/engram.db
+Environment=ENGRAM_API_KEY=your-secret-key
+Environment=ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions
+Environment=ENGRAM_LLM_KEY=sk-xxx
+Environment=ENGRAM_PROXY_UPSTREAM=https://api.anthropic.com
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now engram
+```
+
+## Features
+
+### Memory Types
+
+Three kinds of memory with different decay behavior:
+
+| Kind | Decay | Use Case |
+|------|-------|----------|
+| `semantic` | Normal | Facts, preferences, knowledge (default) |
+| `episodic` | Normal | Events, experiences, time-bound context |
+| `procedural` | Near-zero | Workflows, instructions, how-to — persists indefinitely |
+
+```bash
+curl -X POST http://localhost:3917/memories \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "deploy with: cargo build --release && scp ...", "kind": "procedural"}'
+```
+
+### Fact Triples & Contradiction Resolution
+
+engram extracts structured facts as (subject, predicate, object) triples from memories, enabling relationship queries and automatic contradiction detection:
+
+```bash
+# Store facts explicitly
+curl -X POST http://localhost:3917/facts \
+  -H 'Content-Type: application/json' \
+  -d '{"facts": [{"subject": "alice", "predicate": "role", "object": "engineer"}]}'
+
+# Query by entity
+curl 'http://localhost:3917/facts?entity=alice'
+
+# When a contradicting fact is inserted, the old one is auto-superseded
+curl -X POST http://localhost:3917/facts \
+  -H 'Content-Type: application/json' \
+  -d '{"facts": [{"subject": "alice", "predicate": "role", "object": "manager"}]}'
+# Response includes {"resolved": 1} — the old "engineer" fact is now timestamped as superseded
+
+# View fact history
+curl 'http://localhost:3917/facts/history?subject=alice&predicate=role'
+```
+
+Facts are also extracted automatically when using `/extract` or the LLM proxy.
+
+### Injection Protection
+
+Memories get injected into LLM context windows. Malicious content stored as a memory could act as a prompt injection. engram protects against this:
+
+- **On insert**: content is scored for injection risk. High-risk memories (score ≥ 0.7) are tagged `suspicious`.
+- **On recall**: suspicious memories are automatically downranked in scoring.
+- **On output**: special tokens (`<|im_start|>`, `[INST]`, `<<SYS>>`, etc.) are stripped from recall/resume responses.
+
+Detection covers instruction overrides, role-play injection, model-specific control tokens, and XML/tag escaping attempts.
+
+### Hybrid Search
+
+Recall combines multiple signals:
+
+- **Semantic search**: cosine similarity on embeddings (requires AI)
+- **FTS5 keyword search**: BM25 with CJK bigram tokenization
+- **Fact lookup**: exact entity matching via the facts table
+- **Composite scoring**: `(0.6 × relevance + 0.2 × importance + 0.2 × recency) × layer_bonus`
+
+Results are deduplicated across all search modes. When both semantic and keyword search find the same memory, relevance gets a boost.
+
+### LLM Proxy
+
+Sit between your tools and any LLM API. Memories are extracted automatically — no code changes needed.
+
+```bash
+ENGRAM_PROXY_UPSTREAM=https://api.openai.com \
+./target/release/engram
+
+# Point your tools at engram:
+# Before: https://api.openai.com/v1/chat/completions
+# After:  http://localhost:3917/proxy/v1/chat/completions
+```
+
+How it works:
+1. Forwards requests and headers to upstream verbatim
+2. Streams the response back with zero added latency
+3. After the exchange completes, asynchronously extracts key facts/decisions/preferences
+4. Stores extracted memories in the buffer layer (source: `proxy`, tagged `auto-extract`)
+
+The proxy is selective — routine task details are skipped. Only user preferences, concrete decisions, lessons learned, and identity-defining facts are extracted.
+
+### Session Recovery
+
+One call to restore agent context on wake-up:
+
+```bash
+# Full resume
+curl http://localhost:3917/resume?hours=4
+
+# Token-efficient (recommended for agents)
+curl 'http://localhost:3917/resume?hours=4&compact=true&budget=8000'
+```
+
+Returns structured sections: `core` (identity/permanent), `working` (active context), `recent` (time-windowed), `sessions` (session notes), `next_actions` (tagged next-action).
+
+`compact=true` strips metadata, `budget=N` caps total output characters with priority-based truncation (core first, buffer last).
+
+### Namespace Isolation
+
+Multi-agent support — each agent gets its own memory space:
+
+```bash
+curl -X POST http://localhost:3917/memories \
+  -H 'X-Namespace: agent-alpha' \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "agent-alpha private context"}'
+```
+
+### Triggers
+
+Pre-action safety recall. Tag memories with `trigger:action-name`, then query before risky operations:
+
+```bash
+# Store a lesson
+curl -X POST http://localhost:3917/memories \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "never force-push to main", "tags": ["trigger:git-push"]}'
+
+# Before pushing, check
+curl http://localhost:3917/triggers/git-push
+```
+
+### Background Maintenance
+
+engram runs autonomously — no cron or external scheduler needed:
+
+- **Auto-consolidation** every 30 minutes: promotes active memories, decays neglected ones
+- **Proxy flush** every 2 minutes: extracts memories from buffered conversations
+- **Graceful shutdown**: flushes all pending proxy windows before exit
+
+## API Reference
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Health + endpoint list |
+| `GET` | `/health` | Detailed health (uptime, RSS, cache stats) |
+| `GET` | `/stats` | Layer counts |
+| `POST` | `/memories` | Create memory |
+| `POST` | `/memories/batch` | Batch create |
+| `GET` | `/memories` | List (`?layer=N&tag=X&ns=X&limit=50&offset=0`) |
+| `GET` | `/memories/:id` | Get by id (prefix match supported) |
+| `PATCH` | `/memories/:id` | Update content/tags/importance |
+| `DELETE` | `/memories/:id` | Delete |
+| `DELETE` | `/memories` | Batch delete (`{"ids": [...]}` or `{"namespace": "x"}`) |
+| `POST` | `/recall` | Hybrid search (semantic + keyword + facts) |
+| `GET` | `/search` | Quick keyword search (`?q=term&limit=10`) |
+| `GET` | `/recent` | Recent memories (`?hours=2&limit=20`) |
+| `GET` | `/resume` | Session recovery (`?hours=4&compact=true&budget=8000`) |
+| `GET` | `/triggers/:action` | Pre-action recall |
+| `POST` | `/consolidate` | Maintenance cycle (`{"merge": true}` for LLM merge) |
+| `POST` | `/extract` | LLM text → structured memories |
+| `POST` | `/repair` | Fix FTS index + backfill embeddings |
+| `POST` | `/vacuum` | Reclaim disk space |
+| `GET` | `/export` | Export as JSON (`?embed=true` includes vectors) |
+| `POST` | `/import` | Import memories (skips existing ids) |
+| `POST` | `/facts` | Insert fact triples |
+| `GET` | `/facts` | Query facts by entity (`?entity=alice`) |
+| `GET` | `/facts/all` | List all facts |
+| `GET` | `/facts/conflicts` | Check conflicts (`?subject=X&predicate=Y`) |
+| `GET` | `/facts/history` | Fact history (`?subject=X&predicate=Y`) |
+| `DELETE` | `/facts/:id` | Delete fact |
+| `ANY` | `/proxy/*` | Transparent LLM proxy |
+| `GET` | `/ui` | Web dashboard |
+
+## MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `engram_store` | Store a memory with optional importance, tags, kind |
+| `engram_recall` | Hybrid search with budget, time filters, reranking |
+| `engram_recent` | List recent memories by time |
+| `engram_resume` | Full session recovery bootstrap |
+| `engram_search` | Quick keyword search |
+| `engram_extract` | LLM-powered text → memories |
+| `engram_consolidate` | Run promotion/decay/merge cycle |
+| `engram_stats` | Layer counts and status |
+| `engram_health` | Detailed health check |
+| `engram_triggers` | Pre-action safety recall |
+| `engram_repair` | Fix indexes and backfill embeddings |
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENGRAM_PORT` | `3917` | Server port |
-| `ENGRAM_DB` | `engram.db` | Database path |
+| `ENGRAM_DB` | `engram.db` | SQLite database path |
 | `ENGRAM_API_KEY` | — | Bearer token auth (optional) |
 | `ENGRAM_LLM_URL` | — | Chat completions endpoint (enables AI features) |
 | `ENGRAM_LLM_KEY` | — | LLM API key |
-| `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | Default LLM model for all components |
-| `ENGRAM_MERGE_MODEL` | *(LLM_MODEL)* | Model for memory merge during consolidation |
-| `ENGRAM_EXTRACT_MODEL` | *(LLM_MODEL)* | Model for `/extract` endpoint |
+| `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | Default LLM model |
+| `ENGRAM_MERGE_MODEL` | *(LLM_MODEL)* | Model for consolidation merge |
+| `ENGRAM_EXTRACT_MODEL` | *(LLM_MODEL)* | Model for `/extract` |
 | `ENGRAM_RERANK_MODEL` | *(LLM_MODEL)* | Model for recall re-ranking |
 | `ENGRAM_EXPAND_MODEL` | *(LLM_MODEL)* | Model for query expansion |
-| `ENGRAM_PROXY_MODEL` | *(LLM_MODEL)* | Model for proxy auto-extraction |
-| `ENGRAM_EMBED_URL` | *(derived from LLM_URL)* | Embeddings endpoint |
+| `ENGRAM_PROXY_MODEL` | *(LLM_MODEL)* | Model for proxy extraction |
+| `ENGRAM_GATE_MODEL` | *(LLM_MODEL)* | Model for Core promotion gate + audit |
+| `ENGRAM_EMBED_URL` | *(from LLM_URL)* | Embeddings endpoint |
 | `ENGRAM_EMBED_KEY` | *(LLM_KEY)* | Embeddings API key |
 | `ENGRAM_EMBED_MODEL` | `text-embedding-3-small` | Embedding model |
-| `ENGRAM_CONSOLIDATE_MINS` | `30` | Auto-consolidation interval (0 to disable) |
+| `ENGRAM_CONSOLIDATE_MINS` | `30` | Auto-consolidation interval (0 = off) |
 | `ENGRAM_AUTO_MERGE` | `false` | Enable LLM merge in auto-consolidation |
-| `ENGRAM_PROXY_UPSTREAM` | — | LLM proxy upstream URL (enables `/proxy/*`) |
-| `ENGRAM_PROXY_KEY` | — | Fallback API key for proxy (if client omits auth) |
-| `RUST_LOG` | `info` | Log level |
+| `ENGRAM_PROXY_UPSTREAM` | — | Upstream LLM URL (enables proxy) |
+| `ENGRAM_PROXY_KEY` | — | Fallback API key for proxy |
+| `ENGRAM_WORKSPACE` | — | Default workspace tag for `/resume` |
+| `ENGRAM_AUDIT_HOURS` | `24` | Background audit interval (0 = off) |
+| `RUST_LOG` | `info` | Log level (`debug` for verbose) |
 
-Per-component model overrides let you use a cheaper model for high-volume operations (proxy extraction, query expansion) while keeping a stronger model for consolidation merges or re-ranking.
+Per-component model overrides let you use cheap models for high-volume operations (proxy extraction, query expansion) while keeping stronger models for consolidation and audit.
+
+## How It Compares
+
+| | engram | Mem0 | Zep | Letta |
+|---|---|---|---|---|
+| **Architecture** | Single binary, SQLite | Python + vector DB | Python + PostgreSQL | Python + PostgreSQL |
+| **Memory Model** | 3-layer cognitive (Buffer → Working → Core) | Flat with graph overlay | Flat with temporal | Flat blocks in system prompt |
+| **Decay** | Ebbinghaus-style natural decay | None | None | None |
+| **Promotion** | Automatic (access frequency + LLM gate) | Manual | Manual | Agent tool calls |
+| **Search** | Hybrid (semantic + FTS + facts) | Semantic + graph | Semantic + temporal | Semantic only |
+| **Contradiction Resolution** | Automatic (temporal supersede) | Graph-based | — | — |
+| **Injection Protection** | Built-in (detect + downrank + sanitize) | — | — | — |
+| **CJK Support** | Native bigram tokenization | Via embedding only | Via embedding only | Via embedding only |
+| **Binary Size** | ~4 MB | — | — | — |
+| **Runtime Memory** | <10 MB RSS | 100+ MB | 200+ MB | 200+ MB |
+| **Dependencies** | None (statically linked) | Python, Redis, vector DB | Python, PostgreSQL | Python, PostgreSQL |
+| **AI Required?** | Optional (FTS works without) | Yes | Yes | Yes |
 
 ## License
 
