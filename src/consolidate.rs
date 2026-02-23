@@ -524,6 +524,96 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
         }
     }
 
+    // Pass 2: Buffer → Working/Core reconciliation.
+    // When a buffer item updates an existing higher-layer memory, promote and supersede.
+    let buffers: Vec<&(Memory, Vec<f64>)> = all
+        .iter()
+        .filter(|(m, e)| !e.is_empty() && m.layer == Layer::Buffer && !removed_ids.contains(&m.id))
+        .collect();
+
+    for buf in &buffers {
+        if removed_ids.contains(&buf.0.id) {
+            continue;
+        }
+        for wc in &candidates {
+            if removed_ids.contains(&wc.0.id) {
+                continue;
+            }
+            let sim = cosine_similarity(&buf.1, &wc.1);
+            if !(0.55..=0.78).contains(&sim) {
+                continue;
+            }
+            // Buffer is always newer than the Working/Core item it might update
+            if buf.0.created_at <= wc.0.created_at {
+                continue;
+            }
+            if (buf.0.created_at - wc.0.created_at) < one_hour_ms {
+                continue;
+            }
+            if buf.0.namespace != wc.0.namespace {
+                continue;
+            }
+
+            let user_msg = format!(
+                "OLDER (created {}, layer={}):\n{}\n\nNEWER (created {}, layer=buffer):\n{}",
+                format_ts(wc.0.created_at),
+                match wc.0.layer { Layer::Core => "core", Layer::Working => "working", _ => "buffer" },
+                truncate_chars(&wc.0.content, 400),
+                format_ts(buf.0.created_at),
+                truncate_chars(&buf.0.content, 400),
+            );
+
+            match ai::llm_chat_as(cfg, "gate", RECONCILE_PROMPT, &user_msg).await {
+                Ok(resp) => {
+                    let decision = resp.trim().to_uppercase();
+                    if decision.starts_with("UPDATE") || decision.starts_with("ABSORB") {
+                        let target_layer = wc.0.layer; // promote buffer to the old item's layer
+                        let mut new_tags: Vec<String> = buf.0.tags.clone();
+                        for tag in &wc.0.tags {
+                            if !new_tags.contains(tag) {
+                                new_tags.push(tag.clone());
+                            }
+                        }
+                        new_tags.truncate(20);
+                        let imp = buf.0.importance.max(wc.0.importance);
+                        let access = buf.0.access_count + wc.0.access_count;
+
+                        let buf_id = buf.0.id.clone();
+                        let wc_id = wc.0.id.clone();
+                        let db2 = db.clone();
+                        let update_result = tokio::task::spawn_blocking(move || {
+                            db2.promote(&buf_id, target_layer)?;
+                            db2.update_fields(&buf_id, None, None, Some(imp), Some(&new_tags))?;
+                            db2.set_access_count(&buf_id, access)?;
+                            db2.delete(&wc_id)?;
+                            Ok::<_, EngramError>(())
+                        }).await;
+
+                        match update_result {
+                            Ok(Ok(())) => {
+                                info!(
+                                    buffer = %buf.0.id,
+                                    replaced = %wc.0.id,
+                                    target_layer = ?target_layer,
+                                    sim = format!("{:.3}", sim),
+                                    "reconciled: buffer supersedes higher-layer"
+                                );
+                                removed_ids.push(wc.0.id.clone());
+                                reconciled += 1;
+                            }
+                            Ok(Err(e)) => warn!(error = %e, "buffer reconcile update failed"),
+                            Err(e) => warn!(error = %e, "buffer reconcile task panicked"),
+                        }
+                        break; // one buffer can only replace one WC item
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "buffer reconcile LLM call failed, skipping");
+                }
+            }
+        }
+    }
+
     if reconciled > 0 {
         info!(reconciled, "reconciliation complete");
     }
