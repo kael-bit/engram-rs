@@ -1,7 +1,12 @@
 //! SQLite-backed memory storage with FTS5 full-text search.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
+
+fn jieba() -> &'static jieba_rs::Jieba {
+    static INSTANCE: OnceLock<jieba_rs::Jieba> = OnceLock::new();
+    INSTANCE.get_or_init(jieba_rs::Jieba::new)
+}
 
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
@@ -299,9 +304,9 @@ pub fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-// FTS5 unicode61 tokenizer splits on word boundaries which works for Latin
-// scripts but butchers CJK since there are no spaces. We bigram CJK chars
-// to get usable index terms.
+// FTS5 unicode61 tokenizer handles Latin scripts fine but can't segment CJK.
+// We use jieba for proper Chinese word segmentation and fall back to bigrams
+// for Japanese/Korean which jieba doesn't cover.
 pub fn is_cjk(c: char) -> bool {
     matches!(c,
         '\u{4E00}'..='\u{9FFF}'   // CJK Unified Basic
@@ -312,23 +317,54 @@ pub fn is_cjk(c: char) -> bool {
     )
 }
 
-/// Append CJK bigrams to text so FTS5 unicode61 can actually index Chinese/Japanese/Korean.
-/// Original text is preserved intact; bigrams are appended after a space.
-fn append_cjk_bigrams(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut bigrams = Vec::new();
-    for i in 0..chars.len().saturating_sub(1) {
-        if is_cjk(chars[i]) && is_cjk(chars[i + 1]) {
-            let mut s = String::with_capacity(8);
-            s.push(chars[i]);
-            s.push(chars[i + 1]);
-            bigrams.push(s);
+fn is_cjk_ideograph(c: char) -> bool {
+    matches!(c,
+        '\u{4E00}'..='\u{9FFF}'
+        | '\u{3400}'..='\u{4DBF}'
+        | '\u{F900}'..='\u{FAFF}'
+    )
+}
+
+/// Segment CJK text properly and append tokens for FTS5 indexing.
+/// Chinese goes through jieba; Japanese/Korean falls back to bigrams.
+fn append_segmented(text: &str) -> String {
+    let has_cjk = text.chars().any(is_cjk);
+    if !has_cjk {
+        return text.to_string();
+    }
+
+    // jieba handles Chinese (CJK ideographs)
+    let has_chinese = text.chars().any(is_cjk_ideograph);
+    let mut extra_tokens = Vec::new();
+
+    if has_chinese {
+        let words = jieba().cut_for_search(text, false);
+        for w in words {
+            let trimmed = w.trim();
+            if trimmed.len() > 1 && trimmed.chars().any(is_cjk) {
+                extra_tokens.push(trimmed.to_string());
+            }
         }
     }
-    if bigrams.is_empty() {
+
+    // Bigrams for kana/hangul (jieba doesn't segment these)
+    let chars: Vec<char> = text.chars().collect();
+    for i in 0..chars.len().saturating_sub(1) {
+        let a = chars[i];
+        let b = chars[i + 1];
+        let non_ideo = |c: char| is_cjk(c) && !is_cjk_ideograph(c);
+        if non_ideo(a) && non_ideo(b) {
+            let mut s = String::with_capacity(8);
+            s.push(a);
+            s.push(b);
+            extra_tokens.push(s);
+        }
+    }
+
+    if extra_tokens.is_empty() {
         text.to_string()
     } else {
-        format!("{} {}", text, bigrams.join(" "))
+        format!("{} {}", text, extra_tokens.join(" "))
     }
 }
 
@@ -502,9 +538,9 @@ impl MemoryDB {
         }
     }
 
-    /// Insert a row into FTS with CJK bigram preprocessing.
+    /// Insert a row into FTS with CJK segmentation.
     fn fts_insert(&self, id: &str, content: &str, tags_json: &str) -> Result<(), EngramError> {
-        let processed = append_cjk_bigrams(content);
+        let processed = append_segmented(content);
         self.conn()?.execute(
             "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
             params![id, processed, tags_json],
@@ -531,7 +567,7 @@ impl MemoryDB {
             return Ok(());
         }
 
-        // Check if we need to rebuild: count mismatch or missing CJK bigrams
+        // Check if we need to rebuild: count mismatch or missing CJK segments
         let needs_rebuild = fts_count != mem_count || {
             // Sample a CJK-containing memory from the FTS table
             let has_cjk_content: bool = self
@@ -588,7 +624,7 @@ impl MemoryDB {
         for (id, content, tags) in &rows {
             self.fts_insert(id, content, tags)?;
         }
-        tracing::info!(count = rows.len(), "rebuilt FTS index with CJK bigrams");
+        tracing::info!(count = rows.len(), "rebuilt FTS index with CJK segmentation");
         Ok(())
     }
 
@@ -782,7 +818,7 @@ impl MemoryDB {
                         decay, source, tags_json, namespace, risk_score, kind
                     ],
                 )?;
-                let processed = append_cjk_bigrams(&input.content);
+                let processed = append_segmented(&input.content);
                 conn.execute(
                     "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
                     params![id, processed, tags_json],
@@ -1161,8 +1197,8 @@ impl MemoryDB {
             return vec![];
         }
 
-        // Pre-process query: add CJK bigrams so "天气" matches bigram-indexed content
-        let processed = append_cjk_bigrams(sanitized);
+        // Pre-process query: segment CJK so "天气" matches bigram-indexed content
+        let processed = append_segmented(sanitized);
         let fts_query: String = processed.split_whitespace().collect::<Vec<_>>().join(" OR ");
 
         let Ok(conn) = self.conn() else { return vec![]; };
@@ -1519,7 +1555,7 @@ impl MemoryDB {
 
         let rebuilt = missing.len();
         for (id, content, tags_json) in &missing {
-            let processed = append_cjk_bigrams(content);
+            let processed = append_segmented(content);
             conn.execute(
                 "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
                 params![id, processed, tags_json],
@@ -1862,7 +1898,7 @@ impl MemoryDB {
                         m.kind,
                     ],
                 )?;
-                let processed = append_cjk_bigrams(&m.content);
+                let processed = append_segmented(&m.content);
                 conn.execute(
                     "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
                     params![actual_id, processed, tags_json],
@@ -1884,27 +1920,33 @@ impl MemoryDB {
     }
 }
 
-/// Tokenize text for dedup comparison. Whitespace-splits for Latin text,
-/// and also generates CJK bigrams so Chinese/Japanese/Korean content gets
-/// meaningful tokens instead of nothing.
+/// Tokenize text for dedup. Uses jieba for Chinese, whitespace for Latin,
+/// bigrams for kana/hangul.
 fn tokenize_for_dedup(text: &str) -> std::collections::HashSet<String> {
-    let mut tokens: std::collections::HashSet<String> = text
-        .split_whitespace()
-        .filter(|w| !w.chars().all(is_cjk)) // pure CJK chunks are handled by bigrams below
-        .map(|w| w.to_lowercase())
-        .collect();
-
-    let chars: Vec<char> = text.chars().collect();
-    for i in 0..chars.len().saturating_sub(1) {
-        if is_cjk(chars[i]) && is_cjk(chars[i + 1]) {
-            let mut bigram = String::with_capacity(8);
-            bigram.push(chars[i]);
-            bigram.push(chars[i + 1]);
-            tokens.insert(bigram);
+    let has_chinese = text.chars().any(is_cjk_ideograph);
+    if has_chinese {
+        jieba().cut_for_search(text, false)
+            .into_iter()
+            .map(|w| w.trim().to_lowercase())
+            .filter(|w| w.len() > 1)
+            .collect()
+    } else {
+        // Latin + kana/hangul bigrams
+        let mut tokens: std::collections::HashSet<String> = text
+            .split_whitespace()
+            .map(|w| w.to_lowercase())
+            .collect();
+        let chars: Vec<char> = text.chars().collect();
+        for i in 0..chars.len().saturating_sub(1) {
+            if is_cjk(chars[i]) && is_cjk(chars[i + 1]) {
+                let mut bigram = String::with_capacity(8);
+                bigram.push(chars[i]);
+                bigram.push(chars[i + 1]);
+                tokens.insert(bigram);
+            }
         }
+        tokens
     }
-
-    tokens
 }
 
 fn row_to_memory(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
@@ -2272,10 +2314,9 @@ mod tests {
         let tokens = tokenize_for_dedup("hello 世界你好 world");
         assert!(tokens.contains("hello"));
         assert!(tokens.contains("world"));
-        // CJK bigrams
-        assert!(tokens.contains("世界"));
-        assert!(tokens.contains("界你"));
-        assert!(tokens.contains("你好"));
+        // jieba segments Chinese properly
+        assert!(tokens.contains("世界"), "should contain 世界: {:?}", tokens);
+        assert!(tokens.contains("你好"), "should contain 你好: {:?}", tokens);
     }
 
     #[test]
