@@ -29,7 +29,7 @@ Memories promote upward through access frequency (Ebbinghaus-style reinforcement
 # From source
 git clone https://github.com/kael-bit/engram && cd engram
 cargo build --release
-# Binary at ./target/release/engram (~6 MB)
+# Binary at ./target/release/engram (~9 MB)
 ```
 
 ### Run
@@ -63,7 +63,7 @@ curl -X POST http://localhost:3917/recall \
 open http://localhost:3917/ui
 ```
 
-Single binary, ~6 MB, <10 MB RSS. No Docker, no Python, no external database.
+Single binary, ~9 MB, <10 MB RSS. No Docker, no Python, no external database.
 
 ## Real-World Example
 
