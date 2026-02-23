@@ -276,9 +276,21 @@ async fn main() {
 
     let state_for_shutdown = state.clone();
     let addr = format!("0.0.0.0:{}", args.port);
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .expect("failed to bind address");
+
+    // Try to inherit a socket from systemd socket activation or systemfd.
+    // Falls back to binding a new socket if none is passed.
+    let listener = {
+        let mut lfd = listenfd::ListenFd::from_env();
+        if let Ok(Some(std_listener)) = lfd.take_tcp_listener(0) {
+            std_listener.set_nonblocking(true).expect("set_nonblocking");
+            info!("inherited socket from systemd/systemfd");
+            tokio::net::TcpListener::from_std(std_listener).expect("from_std listener")
+        } else {
+            tokio::net::TcpListener::bind(&addr)
+                .await
+                .expect("failed to bind address")
+        }
+    };
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
