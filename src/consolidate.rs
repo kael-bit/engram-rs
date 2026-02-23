@@ -124,7 +124,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     let promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
     let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
     let decay_threshold = req.and_then(|r| r.decay_drop_threshold).unwrap_or(0.01);
-    let buffer_ttl = req.and_then(|r| r.buffer_ttl_secs).unwrap_or(3600)
+    let buffer_ttl = req.and_then(|r| r.buffer_ttl_secs).unwrap_or(86400)
         .saturating_mul(1000);
     let working_age = req.and_then(|r| r.working_age_promote_secs).unwrap_or(7 * 86400)
         .saturating_mul(1000);
@@ -163,8 +163,9 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         }
     }
 
-    // Buffer → Working when accessed enough (reinforcement-based)
-    let buffer_promote_count = promote_threshold.max(2);
+    // Buffer → Working when accessed enough (reinforcement-based).
+    // Threshold is higher than Working→Core to keep Buffer as a real staging area.
+    let buffer_promote_count = promote_threshold.max(5);
     for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0) {
         if mem.access_count >= buffer_promote_count
             && db.promote(&mem.id, Layer::Working).is_ok() {
@@ -174,19 +175,17 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     }
 
     // Buffer TTL — old L1 entries that weren't accessed enough get dropped.
-    // Accessed ones were already promoted above; stragglers with any access
-    // get one more chance via Working, the rest expire.
-    // Must run BEFORE the decay pass so TTL-rescued entries are in promoted_ids
-    // and won't be deleted by the decay loop.
+    // Only rescue to Working if accessed at least half the promote threshold,
+    // otherwise it wasn't important enough to keep.
     for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0) {
         if promoted_ids.contains(&mem.id) {
             continue;
         }
         let age = now - mem.created_at;
         if age > buffer_ttl {
-            if mem.access_count > 0 {
-                // Accessed at least once but not enough to auto-promote;
-                // give it a second life in Working layer
+            let rescue_threshold = (buffer_promote_count / 2).max(2);
+            if mem.access_count >= rescue_threshold {
+                // Accessed enough to deserve a second life in Working
                 if db.promote(&mem.id, Layer::Working).is_ok() {
                     promoted_ids.push(mem.id.clone());
                     promoted += 1;
@@ -664,17 +663,20 @@ mod tests {
     fn drop_expired_low_importance_buffer() {
         let db = test_db();
         let now = crate::db::now_ms();
-        let two_hours_ago = now - 7_200_000;
-        // old buffer, never accessed → should be dropped
-        let expendable = mem_with_ts("bye", Layer::Buffer, 0.2, 0, two_hours_ago, two_hours_ago);
-        // old buffer, accessed once → should be rescued to working
-        let valuable = mem_with_ts("save-me", Layer::Buffer, 0.5, 1, two_hours_ago, two_hours_ago);
-        db.import(&[expendable, valuable]).unwrap();
+        let two_days_ago = now - 2 * 86_400_000;
+        // old buffer, never accessed → should be dropped after 24h TTL
+        let expendable = mem_with_ts("bye", Layer::Buffer, 0.2, 0, two_days_ago, two_days_ago);
+        // old buffer, accessed enough (≥ rescue threshold of 2) → rescued to working
+        let valuable = mem_with_ts("save-me", Layer::Buffer, 0.5, 3, two_days_ago, two_days_ago);
+        // old buffer, accessed once → below rescue threshold, dropped
+        let barely = mem_with_ts("not-enough", Layer::Buffer, 0.5, 1, two_days_ago, two_days_ago);
+        db.import(&[expendable, valuable, barely]).unwrap();
 
         let _result = consolidate_sync(&db, None);
         assert!(db.get("bye").unwrap().is_none(), "never-accessed buffer should be gone");
+        assert!(db.get("not-enough").unwrap().is_none(), "barely-accessed buffer should be gone after TTL");
         let saved = db.get("save-me").unwrap();
-        assert!(saved.is_some(), "accessed buffer should survive");
+        assert!(saved.is_some(), "well-accessed buffer should survive");
     }
 
     #[test]
@@ -694,37 +696,43 @@ mod tests {
     fn buffer_promoted_by_access() {
         let db = test_db();
         let now = crate::db::now_ms();
-        // Buffer memory with enough accesses should promote to Working
-        let accessed = mem_with_ts("recalled", Layer::Buffer, 0.1, 3, now - 1000, now);
-        db.import(&[accessed]).unwrap();
+        // Buffer memory with enough accesses (≥5) should promote to Working
+        let accessed = mem_with_ts("recalled", Layer::Buffer, 0.1, 6, now - 1000, now);
+        // Buffer with only 3 accesses — not enough, stays in Buffer
+        let not_enough = mem_with_ts("still-young", Layer::Buffer, 0.1, 3, now - 1000, now);
+        db.import(&[accessed, not_enough]).unwrap();
 
         let r = consolidate_sync(&db, None);
         assert_eq!(r.promoted, 1);
         let got = db.get("recalled").unwrap().unwrap();
         assert_eq!(got.layer, Layer::Working);
+        let stayed = db.get("still-young").unwrap().unwrap();
+        assert_eq!(stayed.layer, Layer::Buffer);
     }
 
     #[test]
-    fn buffer_ttl_accessed_once_promotes() {
+    fn buffer_ttl_accessed_enough_promotes() {
         let db = test_db();
-        let two_hours_ago = crate::db::now_ms() - 7200 * 1000;
-        // Old buffer with 1 access but not enough for auto-promote;
-        // TTL logic should still rescue it to Working
-        let accessed = mem_with_ts("rescued", Layer::Buffer, 0.1, 1, two_hours_ago, two_hours_ago);
-        db.import(&[accessed]).unwrap();
+        let two_days_ago = crate::db::now_ms() - 2 * 86_400_000;
+        // Old buffer with 3 accesses (≥ rescue threshold of 2) — should rescue to Working
+        let accessed = mem_with_ts("rescued", Layer::Buffer, 0.1, 3, two_days_ago, two_days_ago);
+        // Old buffer with 1 access — below rescue threshold, should be dropped
+        let barely = mem_with_ts("barely", Layer::Buffer, 0.1, 1, two_days_ago, two_days_ago);
+        db.import(&[accessed, barely]).unwrap();
 
         let r = consolidate_sync(&db, None);
         assert!(r.promoted >= 1);
         let got = db.get("rescued").unwrap().unwrap();
         assert_eq!(got.layer, Layer::Working);
+        assert!(db.get("barely").unwrap().is_none(), "barely-accessed buffer should be dropped after TTL");
     }
 
     #[test]
     fn buffer_ttl_never_accessed_drops() {
         let db = test_db();
-        let two_hours_ago = crate::db::now_ms() - 7200 * 1000;
-        // Old buffer with 0 accesses — should be dropped
-        let unused = mem_with_ts("forgotten", Layer::Buffer, 0.1, 0, two_hours_ago, two_hours_ago);
+        let two_days_ago = crate::db::now_ms() - 2 * 86_400_000;
+        // Old buffer with 0 accesses — should be dropped after TTL (24h)
+        let unused = mem_with_ts("forgotten", Layer::Buffer, 0.1, 0, two_days_ago, two_days_ago);
         db.import(&[unused]).unwrap();
 
         let r = consolidate_sync(&db, None);
