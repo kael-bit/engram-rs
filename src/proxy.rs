@@ -291,31 +291,28 @@ async fn extract_from_context(state: AppState, context: &str) {
         format!("\n\n=== ALREADY IN MEMORY (do NOT extract anything that overlaps with these) ===\n{}\n", lines.join("\n"))
     };
 
-    let system = "You extract long-term memories from a multi-turn LLM conversation. Be EXTREMELY selective.\n\
-        Most conversations have NOTHING worth extracting.\n\n\
-        You're seeing several turns of conversation. Use the full context to understand what's important.\n\n\
-        Only extract if you find:\n\
-        - A USER's stated preference, rule, or boundary (not the assistant's)\n\
-        - A concrete decision that changes how something works going forward\n\
-        - A hard-won lesson from a mistake or failure\n\
-        - A critical fact that would be painful to rediscover\n\n\
-        NEVER extract:\n\
-        - Task descriptions, instructions, or assignments\n\
-        - Technical implementation details (code, config, API calls)\n\
-        - Code changes, refactors, or what was modified in source files\n\
-        - Summaries or recaps of what was done\n\
-        - The assistant's suggestions or explanations\n\
-        - Anything about UI, styling, or frontend requirements\n\
-        - System prompts, framework instructions, or injected context (e.g. \"Read X.md\", \"Follow strictly\")\n\
-        - Operational rules, protocols, or recurring template text\n\
-        - Bug reports or code review findings (those belong in issue trackers, not memory)\n\
-        - Facts that are already well-known or obvious from context\n\
-        - Descriptions of how a system works (architecture, features, mechanisms)\n\
-        - Anything you'd extract identically from the NEXT conversation too (it's template, not content)\n\
-        - Anything that overlaps with the ALREADY IN MEMORY section below";
+    let system = "You extract long-term memories from a multi-turn LLM conversation.\n\
+        Your bar is EXTREMELY high. Most windows produce 0 extractions. That's correct.\n\n\
+        ASK YOURSELF: Would a human write this in their personal notebook? If not, skip it.\n\n\
+        ONLY extract:\n\
+        - A USER's stated preference, rule, or boundary (their words, not the assistant's interpretation)\n\
+        - A hard-won lesson from a real mistake (not 'we should do X' — only 'we did X and it broke because Y')\n\
+        - A workflow rule the USER explicitly established (not the assistant proposing one)\n\n\
+        NEVER extract (automatic reject):\n\
+        - What was built, fixed, changed, deployed, or refactored\n\
+        - Bug descriptions, root causes, or fixes\n\
+        - Code review findings or refactoring suggestions\n\
+        - System health, metrics, or status observations\n\
+        - The assistant's analysis, proposals, or explanations\n\
+        - Anything the assistant concluded on its own (only USER-stated facts matter)\n\
+        - Descriptions of how something works or was designed\n\
+        - Anything that overlaps with ALREADY IN MEMORY below\n\
+        - Meta-observations about the extraction process itself\n\n\
+        LANGUAGE: Write in the same language the USER uses. If the user speaks Chinese, output Chinese.\n\n\
+        DEDUP: If your extraction is essentially the same point as something in ALREADY IN MEMORY, skip it entirely.";
 
     let user = format!(
-        "Extract 0-3 genuinely important long-term memories from this conversation. If nothing is worth remembering, call with an empty items array.{existing_knowledge}\n\n\
+        "Extract 0-1 memories from this conversation. Zero is the expected default — only extract if something truly important was said by the USER. Call with empty items if nothing qualifies.{existing_knowledge}\n\n\
          === CONVERSATION ({} turns) ===\n{preview}",
         context.matches("User: ").count()
     );
@@ -345,7 +342,7 @@ async fn extract_from_context(state: AppState, context: &str) {
                     },
                     "required": ["content", "tags", "kind"]
                 },
-                "maxItems": 3
+                "maxItems": 1
             }
         },
         "required": ["items"]
