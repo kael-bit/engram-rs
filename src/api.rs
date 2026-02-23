@@ -709,6 +709,37 @@ async fn do_resume(
         core.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
         core.truncate(core_limit);
 
+        // Working memories — what you've been doing, decisions made,
+        // lessons learned. This is the "episodic context" that bridges
+        // permanent knowledge (Core) and immediate activity (recent).
+        // Also filtered by workspace tags.
+        let all_working: Vec<db::Memory> = d
+            .list_by_layer(db::Layer::Working, 10000, 0)
+            .into_iter()
+            .filter(|m| ns_ok(m))
+            .collect();
+
+        let mut working: Vec<db::Memory> = if ws_tags.is_empty() {
+            all_working
+        } else {
+            all_working.into_iter().filter(|m| {
+                if m.tags.is_empty() { return true; }
+                m.tags.iter().any(|t| ws_tags.iter().any(|ws| t.to_lowercase().contains(ws.as_str())))
+            }).collect()
+        };
+        working.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
+        working.truncate(core_limit);
+
+        // Buffer — transient, unproven memories. Include them so the
+        // agent knows what's "in the air" but hasn't solidified yet.
+        let mut buffer: Vec<db::Memory> = d
+            .list_by_layer(db::Layer::Buffer, 10000, 0)
+            .into_iter()
+            .filter(|m| ns_ok(m))
+            .collect();
+        buffer.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        buffer.truncate(50); // lighter cap — these are transient
+
         // all recent memories in one query, then split by source
         let all_recent: Vec<db::Memory> = d.list_since(since_ms, 100).unwrap_or_default()
             .into_iter()
@@ -736,18 +767,22 @@ async fn do_resume(
         next_actions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         next_actions.truncate(3);
 
-        (core, recent, sessions, next_actions)
+        (core, working, buffer, recent, sessions, next_actions)
     })
     .await?;
 
-    let (core, recent, sessions, next_actions) = sections;
+    let (core, working, buffer, recent, sessions, next_actions) = sections;
     Ok(Json(serde_json::json!({
         "core": core,
+        "working": working,
+        "buffer": buffer,
         "recent": recent,
         "sessions": sessions,
         "next_actions": next_actions,
         "hours": hours,
         "core_count": core.len(),
+        "working_count": working.len(),
+        "buffer_count": buffer.len(),
         "recent_count": recent.len(),
         "session_count": sessions.len(),
         "next_action_count": next_actions.len(),
@@ -1482,6 +1517,8 @@ mod tests {
 
         // Structure checks
         assert!(j["core"].is_array());
+        assert!(j["working"].is_array());
+        assert!(j["buffer"].is_array());
         assert!(j["recent"].is_array());
         assert!(j["sessions"].is_array());
         assert!(j["next_actions"].is_array());
