@@ -257,13 +257,12 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, se
 
     // Check if we've accumulated enough to extract.
     // Debounce: only flush if the window is full AND the last turn is old enough.
-    // If conversation is still active, let it accumulate more context.
-    if state.db.proxy_session_should_flush(&session_key, WINDOW_MAX_TURNS, WINDOW_MAX_CHARS) {
-        if state.db.proxy_session_quiet_for(&session_key, FLUSH_QUIET_SECS) {
-            if let Ok(ctx) = state.db.drain_proxy_session(&session_key) {
-                if !ctx.is_empty() {
-                    extract_from_context(state, &ctx).await;
-                }
+    if state.db.proxy_session_should_flush(&session_key, WINDOW_MAX_TURNS, WINDOW_MAX_CHARS)
+        && state.db.proxy_session_quiet_for(&session_key, FLUSH_QUIET_SECS)
+    {
+        if let Ok(ctx) = state.db.drain_proxy_session(&session_key) {
+            if !ctx.is_empty() {
+                extract_from_context(state, &ctx).await;
             }
         }
     }

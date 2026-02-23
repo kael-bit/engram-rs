@@ -334,7 +334,8 @@ impl MemoryDB {
         let mut stmt = conn.prepare(
             "SELECT id, content, layer, importance, created_at, tags, namespace, source, kind FROM trash WHERE id = ?1"
         )?;
-        let entry: Option<(String, String, i64, f64, i64, String, String, String, String)> =
+        type TrashRow = (String, String, i64, f64, i64, String, String, String, String);
+        let entry: Option<TrashRow> =
             stmt.query_row(params![id], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
                     row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?))

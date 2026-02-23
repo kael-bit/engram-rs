@@ -4,6 +4,9 @@ use rusqlite::params;
 
 use super::*;
 
+/// `[(session_key, [(content, created_at)])]`
+pub type ProxyTurnPeek = Vec<(String, Vec<(String, i64)>)>;
+
 impl MemoryDB {
     pub fn save_proxy_turn(&self, session_key: &str, content: &str) -> Result<(), EngramError> {
         let conn = self.conn()?;
@@ -108,7 +111,8 @@ impl MemoryDB {
     }
 
     /// Read-only peek at buffered turns without draining.
-    pub fn peek_proxy_turns(&self) -> Result<Vec<(String, Vec<(String, i64)>)>, EngramError> {
+    /// Returns `[(session_key, [(content, created_at)])]`.
+    pub fn peek_proxy_turns(&self) -> Result<ProxyTurnPeek, EngramError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT session_key, content, created_at FROM proxy_turns ORDER BY id ASC"
