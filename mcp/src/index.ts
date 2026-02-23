@@ -264,6 +264,18 @@ server.tool(
   }
 );
 
+server.tool(
+  "engram_triggers",
+  "Fetch trigger memories for a specific action. Call before performing an action (e.g. git-push, deploy) to recall relevant lessons and rules.",
+  { action: { type: "string", description: "Action name (e.g. git-push, deploy, send-message)" } },
+  async ({ action }: { action: string }) => {
+    const result = await engramFetch(`/triggers/${encodeURIComponent(action)}`);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
 
 async function main() {
   const transport = new StdioServerTransport();
