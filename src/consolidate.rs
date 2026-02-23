@@ -125,10 +125,12 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     }
 }
 
-const MERGE_SYSTEM: &str = "Merge these memories into one concise entry (max 500 chars). \
-    Distill to key facts only — drop details that can be re-derived. \
-    If they describe the same thing at different times, keep only the latest state. \
-    Use the same language as the originals. Output only the merged text.";
+const MERGE_SYSTEM: &str = "Merge these related memory entries into one. Rules:\n\
+    - Keep only facts that appear in BOTH entries or are updates of the same topic.\n\
+    - If one entry updates or supersedes the other, keep only the latest state.\n\
+    - Drop tangential details that don't overlap between entries.\n\
+    - Be specific: names, numbers, versions, dates > vague summaries.\n\
+    - Max 400 chars. Same language as originals. Output only the merged text.";
 
 async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
     let db2 = db.clone();
