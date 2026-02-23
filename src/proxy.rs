@@ -14,10 +14,11 @@ use crate::{ai, db, AppState};
 static PROXY_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static PROXY_EXTRACTED: AtomicU64 = AtomicU64::new(0);
 
-pub fn proxy_stats() -> (u64, u64) {
+pub fn proxy_stats() -> (u64, u64, usize) {
     (
         PROXY_REQUESTS.load(Ordering::Relaxed),
         PROXY_EXTRACTED.load(Ordering::Relaxed),
+        with_window(|w| w.turns.len()),
     )
 }
 

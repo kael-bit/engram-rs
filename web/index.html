@@ -461,6 +461,7 @@ async function renderProxyView() {
     </div>
     <div class="proxy-stat-bar">
       <div class="stat-card"><div class="value">${proxyInfo.requests}</div><div class="label">Requests</div></div>
+      <div class="stat-card"><div class="value">${proxyInfo.buffered_turns || 0}/${5}</div><div class="label">Window</div></div>
       <div class="stat-card"><div class="value">${proxyInfo.extracted}</div><div class="label">Stored</div></div>
       <div class="stat-card"><div class="value">${proxyMems.length}</div><div class="label">Total Memories</div></div>
     </div>

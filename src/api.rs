@@ -143,7 +143,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         .map(|c| (c.len(), c.capacity()))
         .unwrap_or((0, 0));
 
-    let (proxy_reqs, proxy_extracted) = crate::proxy::proxy_stats();
+    let (proxy_reqs, proxy_extracted, proxy_buffered) = crate::proxy::proxy_stats();
 
     Json(serde_json::json!({
         "name": "engram",
@@ -156,6 +156,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "enabled": state.proxy.is_some(),
             "requests": proxy_reqs,
             "extracted": proxy_extracted,
+            "buffered_turns": proxy_buffered,
         },
         "integrity": integrity,
         "stats": s,
