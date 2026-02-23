@@ -38,6 +38,27 @@ async function engramFetch(path: string, body?: unknown): Promise<unknown> {
   return data;
 }
 
+async function engramMethod(method: string, path: string, body?: unknown): Promise<unknown> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (ENGRAM_API_KEY) {
+    headers["Authorization"] = `Bearer ${ENGRAM_API_KEY}`;
+  }
+  const resp = await fetch(`${ENGRAM_URL}${path}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await resp.text();
+  let data: unknown;
+  try { data = JSON.parse(text); } catch { data = text; }
+  if (!resp.ok) {
+    const msg = typeof data === "object" && data && "error" in data
+      ? (data as { error: string }).error : text;
+    throw new Error(`engram ${method} ${path} failed (${resp.status}): ${msg}`);
+  }
+  return data;
+}
+
 
 const server = new McpServer({
   name: "engram",
@@ -267,11 +288,44 @@ server.tool(
 server.tool(
   "engram_triggers",
   "Fetch trigger memories for a specific action. Call before performing an action (e.g. git-push, deploy) to recall relevant lessons and rules.",
-  { action: { type: "string", description: "Action name (e.g. git-push, deploy, send-message)" } },
+  { action: z.string().describe("Action name (e.g. git-push, deploy, send-message)") },
   async ({ action }: { action: string }) => {
     const result = await engramFetch(`/triggers/${encodeURIComponent(action)}`);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "engram_delete",
+  "Delete a memory by ID. Use when a memory is outdated, incorrect, or redundant.",
+  { id: z.string().describe("Memory ID to delete") },
+  async ({ id }: { id: string }) => {
+    const result = await engramMethod("DELETE", `/memories/${encodeURIComponent(id)}`);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result) }],
+    };
+  }
+);
+
+server.tool(
+  "engram_update",
+  "Update a memory's metadata (importance, tags, layer). Content is immutable — use supersedes to replace.",
+  {
+    id: z.string().describe("Memory ID to update"),
+    importance: z.number().min(0).max(1).optional().describe("New importance value"),
+    tags: z.array(z.string()).optional().describe("Replace tags"),
+    layer: z.number().int().min(1).max(3).optional().describe("Move to layer: 1=buffer, 2=working, 3=core"),
+  },
+  async ({ id, importance, tags, layer }: { id: string; importance?: number; tags?: string[]; layer?: number }) => {
+    const body: Record<string, unknown> = {};
+    if (importance !== undefined) body.importance = importance;
+    if (tags !== undefined) body.tags = tags;
+    if (layer !== undefined) body.layer = layer;
+    const result = await engramMethod("PATCH", `/memories/${encodeURIComponent(id)}`, body);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result) }],
     };
   }
 );
