@@ -283,7 +283,10 @@ async fn extract_from_context(state: AppState, context: &str) {
         String::new()
     } else {
         let lines: Vec<String> = recent_mems.iter()
-            .map(|m| format!("- {}", &m.content[..m.content.len().min(120)]))
+            .map(|m| {
+                let truncated: String = m.content.chars().take(120).collect();
+                format!("- {}", truncated)
+            })
             .collect();
         format!("\n\n=== ALREADY IN MEMORY (do NOT extract anything that overlaps with these) ===\n{}\n", lines.join("\n"))
     };
