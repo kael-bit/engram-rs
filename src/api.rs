@@ -99,6 +99,7 @@ pub fn router(state: AppState) -> Router {
         .route("/consolidate", post(do_consolidate))
         .route("/audit", post(do_audit))
         .route("/repair", post(do_repair))
+        .route("/sanitize", post(do_sanitize))
         .route("/vacuum", post(do_vacuum))
         .route("/extract", post(do_extract))
         .route("/export", get(do_export))
@@ -185,6 +186,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "POST /consolidate": "run maintenance cycle",
             "POST /audit": "LLM-powered memory reorganization (uses ENGRAM_GATE_MODEL)",
             "POST /repair": "auto-repair FTS index; ?force=true for full rebuild",
+            "POST /sanitize": "check text for prompt injection risk, returns risk_score and cleaned content",
             "POST /vacuum": "reclaim disk space (?full=true for full vacuum)",
             "POST /extract": "LLM-extract memories from text",
             "GET /export": "export all memories (?embed=true to include vectors)",
@@ -1067,6 +1069,23 @@ async fn do_repair(
         "fts_rebuilt": rebuilt,
         "embed_backfill_queued": embed_backfilled,
     })))
+}
+
+#[derive(Deserialize)]
+struct SanitizeInput {
+    content: String,
+}
+
+async fn do_sanitize(
+    Json(input): Json<SanitizeInput>,
+) -> Json<serde_json::Value> {
+    let risk_score = crate::safety::assess_injection_risk(&input.content);
+    let cleaned = crate::safety::sanitize_for_output(&input.content);
+    Json(serde_json::json!({
+        "risk_score": risk_score,
+        "suspicious": risk_score >= 0.7,
+        "cleaned": cleaned,
+    }))
 }
 
 #[derive(Deserialize)]
