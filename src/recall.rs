@@ -207,12 +207,20 @@ pub fn recall(
     let fts = db.search_fts(&req.query, limit * 3);
     let max_bm25 = fts.iter().map(|r| r.1).fold(0.001_f64, f64::max);
 
+    // O(1) lookup: memory id → index in scored
+    let scored_idx: HashMap<String, usize> = scored
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.memory.id.clone(), i))
+        .collect();
+
     for (id, bm25) in &fts {
         let fts_rel = bm25 / max_bm25;
         if seen.contains(id) {
             // Boost: found by both semantic AND keyword — strong relevance signal.
             // Use multiplicative boost so it still helps even when relevance is already high.
-            if let Some(sm) = scored.iter_mut().find(|s| s.memory.id == *id) {
+            if let Some(&idx) = scored_idx.get(id) {
+                let sm = &mut scored[idx];
                 let boost = 1.0 + fts_rel * 0.3;  // 1.0 to 1.3x multiplier
                 sm.relevance = (sm.relevance * boost).min(1.5);
                 // rescore using the full scoring formula (decay_rate + layer bonus)
@@ -295,8 +303,11 @@ pub fn recall(
         let tokens = estimate_tokens(&sm.memory.content);
         if total_tokens + tokens > budget {
             // always return at least one result, unless budget is explicitly 0
-            if !selected.is_empty() || budget == 0 {
+            if budget == 0 {
                 break;
+            }
+            if !selected.is_empty() {
+                continue;
             }
         }
         if selected.len() >= limit {
