@@ -242,16 +242,19 @@ const GATE_SYSTEM: &str = "You are a memory curator for an AI agent's long-term 
     A memory is being considered for promotion to Core (permanent). Decide if it belongs there.\n\
     \n\
     APPROVE for Core if it is:\n\
-    - Identity: who the agent/user is, preferences, principles\n\
-    - Strategic: long-term goals, key decisions, important lessons learned\n\
-    - Relational: important facts about people, relationships, constraints\n\
+    - Identity: who the agent/user is, preferences, principles, personal constraints\n\
+    - Strategic: long-term goals, key decisions\n\
+    - Lessons learned: hard-won insights, mistakes to never repeat, behavioral patterns to change\n\
+    - Relational: important facts about people, relationships\n\
+    - Constraints: financial limits, payment rules, security policies, behavioral boundaries\n\
     - Architectural: fundamental design decisions that shape the project\n\
     \n\
     REJECT (keep in Working) if it is:\n\
     - Operational: bug fixes, code changes, version bumps, deployment logs\n\
     - Ephemeral: session summaries, daily progress, temporary status\n\
-    - Technical detail: specific code patterns, API signatures, config values\n\
+    - Technical detail: specific code patterns, API signatures, config values, tech stack specs\n\
     - Duplicate: restates something that's obviously already known\n\
+    - Research notes: survey results, market analysis, feature lists\n\
     \n\
     Reply with ONLY one word: APPROVE or REJECT";
 
@@ -265,6 +268,12 @@ async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<bool, Strin
     let response = ai::llm_chat_as(cfg, "gate", GATE_SYSTEM, truncated).await?;
     let decision = response.trim().to_uppercase();
     Ok(decision.starts_with("APPROVE"))
+}
+
+/// Public wrapper for auditing existing Core memories.
+/// Returns Ok(true) if the memory should stay in Core, Ok(false) to demote.
+pub async fn audit_core_memory(cfg: &AiConfig, content: &str) -> Result<bool, String> {
+    llm_promotion_gate(cfg, content).await
 }
 
 const MERGE_SYSTEM: &str = "Merge these related memory entries into a single concise note. Rules:\n\

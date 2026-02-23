@@ -97,6 +97,7 @@ pub fn router(state: AppState) -> Router {
         .route("/resume", get(do_resume))
         .route("/triggers/{action}", get(get_triggers))
         .route("/consolidate", post(do_consolidate))
+        .route("/audit", post(do_audit))
         .route("/repair", post(do_repair))
         .route("/vacuum", post(do_vacuum))
         .route("/extract", post(do_extract))
@@ -177,6 +178,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /resume?hours=4&workspace=tags&limit=100": "full memory bootstrap (core + working + buffer + recent + sessions)",
             "GET /triggers/:action": "pre-action recall (e.g. /triggers/git-push)",
             "POST /consolidate": "run maintenance cycle",
+            "POST /audit": "LLM-review Core memories, demote unworthy ones",
             "POST /repair": "auto-repair FTS index (remove orphans, rebuild missing)",
             "POST /vacuum": "reclaim disk space (?full=true for full vacuum)",
             "POST /extract": "LLM-extract memories from text",
@@ -980,6 +982,46 @@ async fn do_consolidate(
         consolidate::consolidate(state.db.clone(), parsed, state.ai.clone()).await;
 
     Ok(Json(result))
+}
+
+/// Audit Core memories using LLM gate. Demotes anything that shouldn't be Core.
+async fn do_audit(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let ai = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
+
+    let db = state.db.clone();
+    let core_memories = blocking(move || {
+        db.list_by_layer_meta(crate::db::Layer::Core, 500, 0)
+    }).await?;
+
+    let total = core_memories.len();
+    let mut demoted = Vec::new();
+    let mut kept = 0usize;
+    let mut errors = 0usize;
+
+    for m in &core_memories {
+        match crate::consolidate::audit_core_memory(ai, &m.content).await {
+            Ok(true) => { kept += 1; }
+            Ok(false) => {
+                let _ = state.db.update_fields(&m.id, None, Some(2), Some(0.5), None);
+                let preview: String = m.content.chars().take(60).collect();
+                demoted.push(serde_json::json!({
+                    "id": m.id,
+                    "content": preview,
+                }));
+            }
+            Err(_) => { errors += 1; }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "total_reviewed": total,
+        "kept": kept,
+        "demoted": demoted.len(),
+        "demoted_memories": demoted,
+        "errors": errors,
+    })))
 }
 
 async fn do_repair(
