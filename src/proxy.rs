@@ -6,89 +6,24 @@ use axum::{
 };
 use futures::StreamExt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::{ai, db, AppState};
 
+// Sliding window thresholds: flush when enough context accumulates.
+const WINDOW_MAX_TURNS: usize = 5;
+const WINDOW_MAX_CHARS: usize = 8000;
+
 static PROXY_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static PROXY_EXTRACTED: AtomicU64 = AtomicU64::new(0);
 
-pub fn proxy_stats() -> (u64, u64, usize) {
-    let buffered = {
-        let guard = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
-        guard.as_ref().map(|m| m.values().map(|w| w.turns.len()).sum()).unwrap_or(0)
-    };
+pub fn proxy_stats(db: Option<&db::MemoryDB>) -> (u64, u64, usize) {
+    let buffered = db.map(|d| d.proxy_turn_count()).unwrap_or(0);
     (
         PROXY_REQUESTS.load(Ordering::Relaxed),
         PROXY_EXTRACTED.load(Ordering::Relaxed),
         buffered,
     )
-}
-
-use std::collections::HashMap;
-
-// Sliding window: buffer recent exchanges per conversation, extract when
-// enough context accumulates. Keyed by auth token to separate different callers.
-const WINDOW_MAX_TURNS: usize = 5;
-const WINDOW_MAX_CHARS: usize = 8000;
-
-struct ConversationWindow {
-    turns: Vec<String>,
-    total_chars: usize,
-}
-
-impl ConversationWindow {
-    fn new() -> Self {
-        Self { turns: Vec::new(), total_chars: 0 }
-    }
-
-    fn push(&mut self, turn: String) {
-        self.total_chars += turn.len();
-        self.turns.push(turn);
-    }
-
-    fn should_flush(&self) -> bool {
-        self.turns.len() >= WINDOW_MAX_TURNS || self.total_chars >= WINDOW_MAX_CHARS
-    }
-
-    fn drain(&mut self) -> String {
-        let text = self.turns.join("\n---\n");
-        self.turns.clear();
-        self.total_chars = 0;
-        text
-    }
-
-    fn is_empty(&self) -> bool {
-        self.turns.is_empty()
-    }
-}
-
-static WINDOWS: Mutex<Option<HashMap<String, ConversationWindow>>> = Mutex::new(None);
-
-fn with_window<F, R>(key: &str, f: F) -> R
-where
-    F: FnOnce(&mut ConversationWindow) -> R,
-{
-    let mut guard = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
-    let map = guard.get_or_insert_with(HashMap::new);
-    let w = map.entry(key.to_string()).or_insert_with(ConversationWindow::new);
-    f(w)
-}
-
-fn drain_all_windows() -> Vec<(String, String)> {
-    let mut guard = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(map) = guard.as_mut() else { return vec![] };
-    let mut results = Vec::new();
-    let keys: Vec<String> = map.keys().cloned().collect();
-    for key in keys {
-        if let Some(w) = map.get_mut(&key) {
-            if !w.is_empty() {
-                results.push((key.clone(), w.drain()));
-            }
-        }
-    }
-    results
 }
 
 #[derive(Clone)]
@@ -290,23 +225,30 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, se
 
     let turn = format!("User: {}\nAssistant: {}", user_msg, assistant_msg);
 
-    let context = with_window(&session_key, |w| {
-        w.push(turn);
-        if w.should_flush() {
-            Some(w.drain())
-        } else {
-            None
-        }
-    });
+    // Persist turn to SQLite so it survives restarts
+    if let Err(e) = state.db.save_proxy_turn(&session_key, &turn) {
+        warn!("proxy: failed to persist turn: {e}");
+    }
 
-    if let Some(ctx) = context {
-        extract_from_context(state, &ctx).await;
+    // Check if we've accumulated enough to extract
+    if state.db.proxy_session_should_flush(&session_key, WINDOW_MAX_TURNS, WINDOW_MAX_CHARS) {
+        if let Ok(ctx) = state.db.drain_proxy_session(&session_key) {
+            if !ctx.is_empty() {
+                extract_from_context(state, &ctx).await;
+            }
+        }
     }
 }
 
-/// Flush all remaining buffered turns. Called from background timer.
+/// Flush all remaining buffered turns. Called from background timer and shutdown.
 pub async fn flush_window(state: &AppState) {
-    let pending = drain_all_windows();
+    let pending = match state.db.drain_all_proxy_turns() {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("proxy: failed to drain turns: {e}");
+            return;
+        }
+    };
     for (_key, context) in pending {
         if !context.is_empty() {
             extract_from_context(state.clone(), &context).await;
