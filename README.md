@@ -170,7 +170,7 @@ Tags: "session". This is how you maintain continuity across sessions.
 - Transient operational status
 ```
 
-#### Option B: LLM Proxy (zero-config)
+#### Option B: LLM Proxy (automatic capture)
 
 Route Claude Code's API calls through engram — memories are extracted automatically from every conversation. No prompt changes needed.
 
@@ -188,9 +188,11 @@ ANTHROPIC_BASE_URL=http://localhost:3917/proxy claude
 
 Now every conversation flows through engram. It forwards requests transparently (no latency), then asynchronously extracts key facts, decisions, and preferences into memory.
 
-#### Option A + B Combined
+> **Note:** The proxy only handles **writing** — it captures memories from conversations automatically. For the agent to **read** memories back (resume, recall, search), you need either MCP tools (Option A) or prompt instructions that call the HTTP API directly (e.g., `curl` in CLAUDE.md). **The proxy alone does not give the agent memory recall.**
 
-Best of both worlds — automatic extraction from all conversations, plus explicit tools for precise control:
+#### Option A + B Combined (recommended)
+
+Automatic extraction from all conversations, plus explicit tools for recall and precise control:
 
 ```bash
 # Start with proxy
@@ -205,7 +207,7 @@ ENGRAM_LLM_KEY=sk-xxx \
 export ANTHROPIC_BASE_URL=http://localhost:3917/proxy
 ```
 
-MCP config as above. Now Claude Code can explicitly recall/store via tools while all conversations are also passively captured.
+MCP config as above. Now Claude Code can explicitly recall/store via MCP tools while all conversations are also passively captured by the proxy.
 
 ### OpenClaw
 
@@ -541,23 +543,6 @@ engram runs autonomously — no cron or external scheduler needed:
 | `RUST_LOG` | `info` | Log level (`debug` for verbose) |
 
 Per-component model overrides let you use cheap models for high-volume operations (proxy extraction, query expansion) while keeping stronger models for consolidation and audit.
-
-## How It Compares
-
-| | engram | Mem0 | Zep | Letta |
-|---|---|---|---|---|
-| **Architecture** | Single binary, SQLite | Python + vector DB | Python + PostgreSQL | Python + PostgreSQL |
-| **Memory Model** | 3-layer cognitive (Buffer → Working → Core) | Flat with graph overlay | Flat with temporal | Flat blocks in system prompt |
-| **Decay** | Ebbinghaus-style natural decay | None | None | None |
-| **Promotion** | Automatic (access frequency + LLM gate) | Manual | Manual | Agent tool calls |
-| **Search** | Hybrid (semantic + FTS + facts) | Semantic + graph | Semantic + temporal | Semantic only |
-| **Contradiction Resolution** | Automatic (temporal supersede) | Graph-based | — | — |
-| **Injection Protection** | Built-in (detect + downrank + sanitize) | — | — | — |
-| **CJK Support** | Native bigram tokenization | Via embedding only | Via embedding only | Via embedding only |
-| **Binary Size** | ~6 MB | — | — | — |
-| **Runtime Memory** | <10 MB RSS | 100+ MB | 200+ MB | 200+ MB |
-| **Dependencies** | None (statically linked) | Python, Redis, vector DB | Python, PostgreSQL | Python, PostgreSQL |
-| **AI Required?** | Optional (FTS works without) | Yes | Yes | Yes |
 
 ## License
 
