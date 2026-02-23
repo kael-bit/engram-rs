@@ -590,6 +590,8 @@ async fn do_resume(
             }
         }
         sessions.truncate(10);
+        next_actions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        next_actions.truncate(3);
 
         (identity, recent, sessions, next_actions)
     })

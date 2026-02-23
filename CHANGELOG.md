@@ -2,6 +2,15 @@
 
 ## 0.6.0
 
+### Post-release fixes
+
+- **conn() returns Result**: database pool exhaustion returns errors instead of panicking. Non-Result methods (search_fts, search_semantic, etc.) gracefully degrade with empty results.
+- **Merge hard cap 800 chars**: prevents information-dense mega-memories that hurt recall precision. Bloat detection rejects merges that expand beyond the longest input.
+- **Recall quality test suite**: regression tests covering Top-1/Top-3 accuracy, time-windowed recall, and min_score filtering.
+- **Test coverage**: error.rs status codes, builder chain, namespace delete, import roundtrip. 73 tests total.
+
+### Release
+
 - **Sync embedding**: `sync_embed: true` on store blocks until embedding is generated. Eliminates 1.2s async race window for critical memories.
 - **Export with embeddings**: `GET /export?embed=true` includes 1536-dim vectors. Import preserves them — full migration without re-embedding.
 - **Recall min_score**: `min_score: 0.3` drops results below a relevance threshold.
