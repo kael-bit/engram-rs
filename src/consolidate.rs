@@ -254,6 +254,7 @@ const GATE_SYSTEM: &str = "You are a memory curator for an AI agent's long-term 
     REJECT (keep in Working) if it is:\n\
     - Operational: bug fixes, code changes, version bumps, deployment logs\n\
     - Ephemeral: session summaries, daily progress, temporary status\n\
+    - Temporal snapshot: contains specific numbers, version strings, counts, percentages, or describes 'current state' — these go stale and don't belong in permanent memory\n\
     - Technical detail: specific code patterns, API signatures, config values, tech stack specs\n\
     - Duplicate: restates something that's obviously already known\n\
     - Research notes: survey results, market analysis, feature lists\n\
