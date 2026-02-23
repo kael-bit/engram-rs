@@ -67,12 +67,13 @@ const server = new McpServer({
 
 server.tool(
   "engram_store",
-  "Store a memory. Layer 1=buffer (transient), 2=working (active), 3=core (permanent). " +
+  "Store a memory. Importance controls initial layer: >=0.9 → Core (permanent), " +
+    ">=0.7 → Working (active), default → Buffer (transient, auto-promotes if accessed). " +
     "Use supersedes to replace outdated memories by their ids.",
   {
     content: z.string().describe("Memory content text"),
-    importance: z.number().min(0).max(1).optional().describe("Importance 0-1"),
-    layer: z.number().int().min(1).max(3).optional().describe("1=buffer, 2=working, 3=core"),
+    importance: z.number().min(0).max(1).optional().describe("Importance 0-1 (drives initial layer: >=0.9=core, >=0.7=working, else=buffer)"),
+    kind: z.enum(["semantic", "episodic", "procedural"]).optional().describe("Memory type: semantic (facts, default), episodic (events), procedural (how-to, persists indefinitely)"),
     tags: z.array(z.string()).optional().describe("Tags for categorization"),
     source: z.string().optional().describe("Source identifier"),
     supersedes: z.array(z.string()).optional().describe("IDs of old memories this one replaces"),
@@ -80,10 +81,10 @@ server.tool(
     namespace: z.string().optional().describe("Namespace for multi-agent isolation"),
     sync_embed: z.boolean().optional().describe("Wait for embedding generation before returning (default: false)"),
   },
-  async ({ content, importance, layer, tags, source, supersedes, skip_dedup, namespace, sync_embed }) => {
+  async ({ content, importance, kind, tags, source, supersedes, skip_dedup, namespace, sync_embed }) => {
     const body: Record<string, unknown> = { content };
     if (importance !== undefined) body.importance = importance;
-    if (layer !== undefined) body.layer = layer;
+    if (kind !== undefined) body.kind = kind;
     if (tags !== undefined) body.tags = tags;
     if (source !== undefined) body.source = source;
     if (supersedes !== undefined) body.supersedes = supersedes;

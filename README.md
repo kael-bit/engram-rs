@@ -120,7 +120,10 @@ Claude Code calls engram through MCP tools — explicit store/recall under your 
 # 1. Build the MCP server
 cd mcp && npm install && npm run build && cd ..
 
-# 2. Add to Claude Code settings (~/.claude/claude_desktop_config.json)
+# 2. Add to Claude Code
+claude mcp add engram -- node /path/to/engram/mcp/dist/index.js
+
+# Or manually create .mcp.json in your project root:
 ```
 
 ```json
@@ -178,8 +181,9 @@ ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions \
 ENGRAM_LLM_KEY=sk-xxx \
 ./target/release/engram
 
-# 2. Point Claude Code at engram instead of Anthropic
-export ANTHROPIC_BASE_URL=http://localhost:3917/proxy
+# 2. Tell Claude Code to use engram as its API endpoint
+ANTHROPIC_BASE_URL=http://localhost:3917/proxy claude
+# Or set it in your shell profile for all sessions
 ```
 
 Now every conversation flows through engram. It forwards requests transparently (no latency), then asynchronously extracts key facts, decisions, and preferences into memory.
@@ -205,25 +209,28 @@ MCP config as above. Now Claude Code can explicitly recall/store via tools while
 
 ### OpenClaw
 
-OpenClaw routes all LLM requests through a configurable provider. Point it at engram's proxy:
+OpenClaw routes LLM requests through configurable providers. Point the Anthropic provider at engram's proxy:
 
 ```jsonc
-// ~/.openclaw/openclaw.json — provider config
+// ~/.openclaw/openclaw.json
 {
-  "providers": [
-    {
-      "name": "anthropic",
-      "baseUrl": "http://127.0.0.1:3917/proxy",
-      "apiKey": "your-engram-api-key",
-      "api": "anthropic-messages",
-      "models": [
-        { "id": "claude-opus-4-6", "name": "Claude Opus", "reasoning": true },
-        { "id": "claude-sonnet-4-20250514", "name": "Claude Sonnet" }
-      ]
+  "models": {
+    "providers": {
+      "anthropic": {
+        "baseUrl": "http://127.0.0.1:3917/proxy",
+        "apiKey": "your-engram-api-key",
+        "api": "anthropic-messages",
+        "models": [
+          { "id": "claude-opus-4-6", "name": "Claude Opus" },
+          { "id": "claude-sonnet-4-20250514", "name": "Claude Sonnet" }
+        ]
+      }
     }
-  ]
+  }
 }
 ```
+
+Restart the gateway after editing: `openclaw gateway restart`
 
 All conversations between OpenClaw agents and Anthropic models now flow through engram. Memories are extracted automatically.
 
@@ -503,6 +510,8 @@ engram runs autonomously — no cron or external scheduler needed:
 | `engram_health` | Detailed health check |
 | `engram_triggers` | Pre-action safety recall |
 | `engram_repair` | Fix indexes and backfill embeddings |
+| `engram_delete` | Delete a memory by ID |
+| `engram_update` | Update importance, tags, or layer |
 
 ## Configuration
 
