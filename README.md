@@ -28,6 +28,8 @@ Memories promote upward through access frequency and importance, and decay natur
 - CJK tokenization support (bigram indexing for Chinese/Japanese/Korean)
 - Near-duplicate detection on insert
 - Supersede: replace outdated memories by id
+- Multi-agent namespace isolation
+- Connection pool (r2d2) for concurrent access
 - Optional Bearer token auth
 - AI-optional: works without AI (pure FTS), gains semantic search + LLM features with it
 - Single binary, ~4 MB, <10 MB RSS
@@ -62,7 +64,28 @@ curl -X POST http://localhost:3917/memories \
 # Replace old memories with updated info
 curl -X POST http://localhost:3917/memories \
   -H 'Content-Type: application/json' \
-  -d '{"content": "now uses v0.4.0", "supersedes": ["<old-memory-id>"]}'
+  -d '{"content": "now uses v0.5.0", "supersedes": ["<old-memory-id>"]}'
+
+# Store in a namespace (multi-agent isolation)
+curl -X POST http://localhost:3917/memories \
+  -H 'Content-Type: application/json' \
+  -H 'X-Namespace: agent-a' \
+  -d '{"content": "agent-a private context"}'
+```
+
+### Namespace isolation
+
+Each agent can store and query memories in its own namespace. Set via `X-Namespace` header or `namespace` field in the request body. Queries only return memories from the specified namespace.
+
+```bash
+# List only agent-a's memories
+curl 'http://localhost:3917/memories?ns=agent-a'
+
+# Recall within a namespace
+curl -X POST http://localhost:3917/recall \
+  -H 'Content-Type: application/json' \
+  -H 'X-Namespace: agent-a' \
+  -d '{"query": "what am I working on?"}'
 ```
 
 ### Recall
@@ -163,7 +186,7 @@ cd mcp && npm install && npm run build
 }
 ```
 
-Tools: `engram_store`, `engram_recall`, `engram_search`, `engram_extract`, `engram_consolidate`.
+Tools: `engram_store`, `engram_recall`, `engram_recent`, `engram_search`, `engram_stats`, `engram_extract`, `engram_consolidate`.
 
 ## Configuration
 
@@ -178,6 +201,7 @@ Tools: `engram_store`, `engram_recall`, `engram_search`, `engram_extract`, `engr
 | `ENGRAM_EMBED_URL` | *(derived from LLM)* | Embeddings endpoint |
 | `ENGRAM_EMBED_KEY` | *(same as LLM)* | Embeddings API key |
 | `ENGRAM_EMBED_MODEL` | `text-embedding-3-small` | Embedding model |
+| `ENGRAM_CONSOLIDATE_MINS` | `30` | Auto-consolidation interval (0 to disable) |
 | `RUST_LOG` | `info` | Log level |
 
 ## License
