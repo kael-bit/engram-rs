@@ -113,6 +113,7 @@ pub fn router(state: AppState) -> Router {
     // 10MB body limit covers large prompts.
     let proxy_route = Router::new()
         .route("/proxy/{*path}", axum::routing::any(crate::proxy::handle))
+        .route("/proxy/flush", axum::routing::post(proxy_flush))
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024));
 
     // 64KB for normal operations, 32MB for import, 10MB for proxy
@@ -925,6 +926,13 @@ async fn do_vacuum(
         "freed_bytes": freed,
         "mode": if full { "full" } else { "incremental" },
     })))
+}
+
+async fn proxy_flush(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    crate::proxy::flush_window(&state).await;
+    Json(serde_json::json!({"status": "ok"}))
 }
 
 #[derive(Deserialize)]
