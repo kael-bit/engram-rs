@@ -143,7 +143,7 @@ label { font-size:11px; color:#888; }
 const A=location.origin;
 let allMem=[],stats={},health={},curView='all',page=0;
 const PP=50;
-let sortBy='created_at',sortDir=-1;
+let sortBy='created_at',sortDir=1;
 
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function ln(l){return['','Buffer','Working','Core'][l]||'?';}
@@ -482,7 +482,7 @@ function renderHealth(){
     <div class="stats">
       <div class="sc"><div class="v">${h.version||'?'}</div><div class="l">Version</div></div>
       <div class="sc"><div class="v">${Math.floor(up/3600)}h${Math.floor(up%3600/60)}m</div><div class="l">Uptime</div></div>
-      <div class="sc"><div class="v">${h.rss_mb||'?'}</div><div class="l">RSS MB</div></div>
+      <div class="sc"><div class="v">${h.rss_kb?Math.round(h.rss_kb/1024):'?'}</div><div class="l">RSS MB</div></div>
       <div class="sc"><div class="v">${h.db_size_mb||'?'}</div><div class="l">DB MB</div></div>
     </div>
     <div class="card"><b style="font-size:12px">Cache</b>

@@ -47,6 +47,8 @@ pub struct EmbedCacheInner {
     map: std::collections::HashMap<String, Vec<f64>>,
     order: std::collections::VecDeque<String>,
     cap: usize,
+    hits: u64,
+    misses: u64,
 }
 
 impl EmbedCacheInner {
@@ -55,18 +57,24 @@ impl EmbedCacheInner {
             map: std::collections::HashMap::with_capacity(cap),
             order: std::collections::VecDeque::with_capacity(cap),
             cap,
+            hits: 0,
+            misses: 0,
         }
     }
 
     pub fn get(&mut self, key: &str) -> Option<&Vec<f64>> {
         if self.map.contains_key(key) {
+            self.hits += 1;
             // promote to back (most recently used)
             if let Some(pos) = self.order.iter().position(|k| k == key) {
                 self.order.remove(pos);
                 self.order.push_back(key.to_string());
             }
+            self.map.get(key)
+        } else {
+            self.misses += 1;
+            None
         }
-        self.map.get(key)
     }
 
     pub fn put(&mut self, key: String, val: Vec<f64>) {

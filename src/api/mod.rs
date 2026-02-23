@@ -147,18 +147,25 @@ async fn serve_ui() -> impl axum::response::IntoResponse {
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let db = state.db.clone();
-    let (s, integrity) = blocking(move || (db.stats(), db.integrity()))
+    let (s, integrity, db_size_mb) = blocking(move || {
+        let s = db.stats();
+        let i = db.integrity();
+        let bytes = db.db_size_bytes();
+        let mb = (bytes as f64 / 1048576.0 * 10.0).round() / 10.0;
+        (s, i, mb)
+    })
         .await
         .unwrap_or((
             db::Stats { total: 0, buffer: 0, working: 0, core: 0, by_kind: db::KindStats::default() },
             db::IntegrityReport::default(),
+            0.0,
         ));
 
     let uptime_secs = state.started_at.elapsed().as_secs();
     let rss_kb = read_rss_kb();
-    let (cache_len, cache_cap) = state.embed_cache.lock()
-        .map(|c| (c.len(), c.capacity()))
-        .unwrap_or((0, 0));
+    let (cache_len, cache_cap, cache_hits, cache_misses) = state.embed_cache.lock()
+        .map(|c| (c.len(), c.capacity(), c.hits, c.misses))
+        .unwrap_or((0, 0, 0, 0));
 
     let (proxy_reqs, proxy_extracted, proxy_buffered) = crate::proxy::proxy_stats(Some(&state.db));
 
@@ -167,8 +174,9 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_secs": uptime_secs,
         "rss_kb": rss_kb,
+        "db_size_mb": db_size_mb,
         "ai_enabled": state.ai.is_some(),
-        "embed_cache": { "size": cache_len, "capacity": cache_cap },
+        "embed_cache": { "size": cache_len, "capacity": cache_cap, "hits": cache_hits, "misses": cache_misses },
         "proxy": {
             "enabled": state.proxy.is_some(),
             "requests": proxy_reqs,

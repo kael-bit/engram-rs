@@ -447,6 +447,16 @@ impl MemoryDB {
         self.pool.get().map_err(|e| EngramError::Internal(format!("pool: {e}")))
     }
 
+    /// Database file size in bytes (via SQLite pragma).
+    pub fn db_size_bytes(&self) -> i64 {
+        self.conn()
+            .and_then(|c| c.query_row(
+                "SELECT page_count * page_size FROM pragma_page_count, pragma_page_size",
+                [], |r| r.get(0),
+            ).map_err(|e| EngramError::Internal(e.to_string())))
+            .unwrap_or(0)
+    }
+
     /// Open (or create) a database at the given path.
     /// Pool size defaults to 8 (1 writer + 7 readers in WAL mode).
     pub fn open(path: &str) -> Result<Self, EngramError> {
