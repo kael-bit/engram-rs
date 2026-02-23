@@ -114,7 +114,7 @@ curl -X POST http://localhost:3917/recall \
   -d '{"query": "observability stack", "expand": true}'
 ```
 
-Scoring: `(0.45 × relevance + 0.3 × importance + 0.25 × recency) × layer_bonus`. Core memories always included.
+Scoring: `(0.6 × relevance + 0.2 × importance + 0.2 × recency) × layer_bonus`. Core memories get a slight scoring bonus.
 
 ### Session recovery
 
@@ -170,8 +170,12 @@ Promotes frequently-accessed important memories upward, drops decayed entries. W
 | `GET` | `/resume` | Session recovery (`?hours=4`) |
 | `POST` | `/consolidate` | Maintenance cycle (optional `{"merge": true}`) |
 | `POST` | `/extract` | LLM extraction (requires AI) |
-| `GET` | `/export` | Export all memories as JSON |
+| `POST` | `/repair` | Fix FTS index (idempotent) |
+| `GET` | `/health` | Detailed health (uptime, RSS, cache stats) |
+| `GET` | `/export` | Export all memories as JSON (`?embed=true` includes vectors) |
 | `POST` | `/import` | Import memories (skips existing ids) |
+| `POST` | `/memories/batch` | Batch create |
+| `DELETE` | `/memories/batch` | Batch delete (`{"ids": [...]}`) |
 
 ## MCP
 
@@ -193,7 +197,7 @@ cd mcp && npm install && npm run build
 }
 ```
 
-Tools: `engram_store`, `engram_recall`, `engram_recent`, `engram_search`, `engram_stats`, `engram_extract`, `engram_consolidate`.
+Tools: `engram_store`, `engram_recall`, `engram_recent`, `engram_resume`, `engram_search`, `engram_stats`, `engram_extract`, `engram_consolidate`, `engram_repair`, `engram_health`.
 
 ## Configuration
 
