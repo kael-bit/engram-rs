@@ -688,8 +688,9 @@ async fn do_recall(
         None
     };
 
+    let explicit_expand = req.expand;
     let do_expand =
-        req.expand.unwrap_or(false) && state.ai.as_ref().is_some_and(|c| c.has_llm());
+        explicit_expand.unwrap_or(false) && state.ai.as_ref().is_some_and(|c| c.has_llm());
     let expanded = if do_expand {
         if let Some(ref cfg) = state.ai {
             let q = ai::expand_query(cfg, &query_text).await;
@@ -706,11 +707,47 @@ async fn do_recall(
     let expanded_for_response = expanded.clone();
 
     let db = state.db.clone();
+    let req_clone = req.clone();
+    let qe_clone = query_emb.clone();
     let mut result = blocking(move || {
         let eq = if expanded.is_empty() { None } else { Some(expanded.as_slice()) };
-        recall::recall(&db, &req, query_emb.as_deref(), eq)
+        recall::recall(&db, &req_clone, qe_clone.as_deref(), eq)
     })
     .await?;
+
+    // auto-expand: if expand wasn't explicitly set and top result is weak, retry with expansion
+    let auto_expanded;
+    if explicit_expand.is_none()
+        && state.ai.as_ref().is_some_and(|c| c.has_llm())
+        && result.memories.first().is_none_or(|m| m.relevance < 0.4)
+    {
+        if let Some(ref cfg) = state.ai {
+            let eq = ai::expand_query(cfg, &query_text).await;
+            if !eq.is_empty() {
+                debug!(expanded = ?eq, "auto-expand (weak initial results)");
+                let db = state.db.clone();
+                let eq2 = eq.clone();
+                let retry = blocking(move || {
+                    recall::recall(&db, &req, query_emb.as_deref(), Some(&eq2))
+                }).await?;
+                // use expanded result only if it's actually better
+                if retry.memories.first().map_or(0.0, |m| m.relevance)
+                    > result.memories.first().map_or(0.0, |m| m.relevance)
+                {
+                    result = retry;
+                    auto_expanded = Some(eq);
+                } else {
+                    auto_expanded = None;
+                }
+            } else {
+                auto_expanded = None;
+            }
+        } else {
+            auto_expanded = None;
+        }
+    } else {
+        auto_expanded = None;
+    }
 
     if do_rerank {
         if let Some(cfg) = state.ai.as_ref() {
@@ -718,9 +755,14 @@ async fn do_recall(
         }
     }
 
-    // attach expanded queries to response if any
-    if !expanded_for_response.is_empty() {
-        result.expanded_queries = Some(expanded_for_response);
+    // attach expanded queries to response
+    let final_expanded = if !expanded_for_response.is_empty() {
+        Some(expanded_for_response)
+    } else {
+        auto_expanded
+    };
+    if let Some(eq) = final_expanded {
+        result.expanded_queries = Some(eq);
     }
 
     Ok(Json(result))

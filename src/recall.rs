@@ -14,7 +14,7 @@ const WEIGHT_IMPORTANCE: f64 = 0.2;
 const WEIGHT_RECENCY: f64 = 0.2;
 
 /// Recall request parameters.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct RecallRequest {
     #[serde(default)]
     pub query: String,
