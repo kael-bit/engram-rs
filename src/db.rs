@@ -622,20 +622,13 @@ impl MemoryDB {
 
     /// Delete all memories in a namespace. Returns how many were removed.
     pub fn delete_namespace(&self, ns: &str) -> Result<usize, EngramError> {
-        // collect IDs first so we can clean FTS
         let conn = self.conn()?;
-        let mut stmt = conn.prepare("SELECT id FROM memories WHERE namespace = ?1")?;
-        let ids: Vec<String> = stmt
-            .query_map(params![ns], |row| row.get(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        drop(stmt);
-        drop(conn);
-
-        for id in &ids {
-            self.fts_delete(id)?;
-        }
-        let n = self.conn()?.execute("DELETE FROM memories WHERE namespace = ?1", params![ns])?;
+        // batch-delete FTS entries for this namespace
+        conn.execute(
+            "DELETE FROM memories_fts WHERE id IN (SELECT id FROM memories WHERE namespace = ?1)",
+            params![ns],
+        )?;
+        let n = conn.execute("DELETE FROM memories WHERE namespace = ?1", params![ns])?;
         Ok(n)
     }
 
