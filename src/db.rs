@@ -1,6 +1,6 @@
 //! SQLite-backed memory storage with FTS5 full-text search.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};
 
 fn jieba() -> &'static jieba_rs::Jieba {
@@ -1781,6 +1781,30 @@ impl MemoryDB {
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(limit);
         scored
+    }
+
+    /// Semantic search restricted to a set of candidate IDs.
+    /// Only computes cosine similarity for the given IDs, skipping everything else.
+    /// Used when FTS/facts already produced enough candidates to avoid a full scan.
+    pub fn search_semantic_by_ids(
+        &self, query_emb: &[f64], ids: &HashSet<String>, limit: usize,
+    ) -> Vec<(String, f64)> {
+        if let Ok(idx) = self.vec_index.read() {
+            let mut scored: Vec<(String, f64)> = ids
+                .iter()
+                .filter_map(|id| {
+                    idx.get(id).map(|emb| {
+                        let sim = crate::ai::cosine_similarity(query_emb, emb);
+                        (id.clone(), sim)
+                    })
+                })
+                .filter(|(_, sim)| *sim > 0.0)
+                .collect();
+            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            scored.truncate(limit);
+            return scored;
+        }
+        vec![]
     }
 
     /// Check if content is a near-duplicate of an existing memory.

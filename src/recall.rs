@@ -4,7 +4,7 @@ use crate::ai::{self, AiConfig};
 use crate::db::{is_cjk, Layer, Memory, MemoryDB, ScoredMemory};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use tracing::warn;
+use tracing::{debug, warn};
 
 // scoring weights — should add up to 1.0
 // relevance is king: a perfectly relevant low-importance memory
@@ -187,13 +187,59 @@ pub fn recall(
     let mut seen = HashSet::new();
     let mut search_mode = "fts".to_string();
 
-    // Semantic search (if embedding available)
+    // Collect FTS + fact candidates up front. When there are enough candidates,
+    // we can skip the expensive full-corpus cosine similarity scan and only
+    // score the memories that FTS/facts already surfaced.
+
+    let fts = db.search_fts(&req.query, limit * 3);
+
+    let mut extra_fts_results: Vec<Vec<(String, f64)>> = Vec::new();
+    if let Some(queries) = extra_queries {
+        for eq in queries {
+            extra_fts_results.push(db.search_fts(eq, limit));
+        }
+    }
+
+    let mut candidate_ids: HashSet<String> = HashSet::new();
+    for (id, _) in &fts {
+        candidate_ids.insert(id.clone());
+    }
+    for results in &extra_fts_results {
+        for (id, _) in results {
+            candidate_ids.insert(id.clone());
+        }
+    }
+
+    // Collect fact candidates
+    let fact_results = if !req.query.is_empty() {
+        let fact_ns = req.namespace.as_deref().unwrap_or("default");
+        db.query_facts(&req.query, fact_ns, false).unwrap_or_default()
+    } else {
+        vec![]
+    };
+    for fact in &fact_results {
+        candidate_ids.insert(fact.memory_id.clone());
+    }
+
+    // Semantic search — restrict to candidates when we have enough,
+    // otherwise fall back to full scan so we don't miss anything.
     if let Some(qemb) = query_emb {
-        let semantic_results = db.search_semantic_ns(qemb, limit * 3, req.namespace.as_deref());
+        let enough_candidates = candidate_ids.len() >= limit * 2;
+        let semantic_results = if enough_candidates {
+            debug!(
+                candidates = candidate_ids.len(),
+                limit, "prefiltering semantic search to FTS+fact candidates"
+            );
+            db.search_semantic_by_ids(qemb, &candidate_ids, limit * 3)
+        } else {
+            db.search_semantic_ns(qemb, limit * 3, req.namespace.as_deref())
+        };
         if !semantic_results.is_empty() {
-            search_mode = "semantic+fts".to_string();
-            // Apply min_score as cosine similarity floor.
-            // Default 0.3 filters noise from short/vague queries.
+            search_mode = if enough_candidates {
+                "semantic(filtered)+fts".to_string()
+            } else {
+                "semantic+fts".to_string()
+            };
             let sim_floor = req.min_score.unwrap_or(0.3);
             for (id, sim) in &semantic_results {
                 if *sim < sim_floor {
@@ -211,8 +257,7 @@ pub fn recall(
         }
     }
 
-    // FTS keyword search (always runs)
-    let fts = db.search_fts(&req.query, limit * 3);
+    // FTS keyword search
     let max_bm25 = fts.iter().map(|r| r.1).fold(0.001_f64, f64::max);
 
     for (id, bm25) in &fts {
@@ -237,47 +282,38 @@ pub fn recall(
         }
     }
 
-    // Expanded FTS queries (from LLM query expansion)
-    if let Some(queries) = extra_queries {
-        for eq in queries {
-            let extra_fts = db.search_fts(eq, limit);
-            let emax = extra_fts.iter().map(|r| r.1).fold(0.001_f64, f64::max);
-            for (id, bm25) in &extra_fts {
-                if seen.contains(id) {
+    // Expanded FTS queries (from LLM query expansion) — already fetched above
+    for extra_fts in &extra_fts_results {
+        let emax = extra_fts.iter().map(|r| r.1).fold(0.001_f64, f64::max);
+        for (id, bm25) in extra_fts {
+            if seen.contains(id) {
+                continue;
+            }
+            if let Ok(Some(mem)) = db.get(id) {
+                if !passes_filters(&mem) {
                     continue;
                 }
-                if let Ok(Some(mem)) = db.get(id) {
-                    if !passes_filters(&mem) {
-                        continue;
-                    }
-                    // slight penalty so direct matches rank higher
-                    let relevance = (bm25 / emax) * 0.85;
-                    seen.insert(id.clone());
-                    scored.push(score_memory(&mem, relevance));
-                }
+                // slight penalty so direct matches rank higher
+                let relevance = (bm25 / emax) * 0.85;
+                seen.insert(id.clone());
+                scored.push(score_memory(&mem, relevance));
             }
         }
     }
 
     // Don't pad with unrelated core memories — they add noise.
 
-    // Fact-based recall: query the facts table for matching entities,
-    // then pull linked memories at high relevance (exact knowledge match)
-    if !req.query.is_empty() {
-        let fact_ns = req.namespace.as_deref().unwrap_or("default");
-        if let Ok(facts) = db.query_facts(&req.query, fact_ns, false) {
-            for fact in &facts {
-                if seen.contains(&fact.memory_id) {
-                    continue;
-                }
-                if let Ok(Some(mem)) = db.get(&fact.memory_id) {
-                    if !passes_filters(&mem) {
-                        continue;
-                    }
-                    seen.insert(fact.memory_id.clone());
-                    scored.push(score_memory(&mem, 1.0));
-                }
+    // Fact-based recall: pull linked memories at high relevance (exact knowledge match)
+    for fact in &fact_results {
+        if seen.contains(&fact.memory_id) {
+            continue;
+        }
+        if let Ok(Some(mem)) = db.get(&fact.memory_id) {
+            if !passes_filters(&mem) {
+                continue;
             }
+            seen.insert(fact.memory_id.clone());
+            scored.push(score_memory(&mem, 1.0));
         }
     }
 
@@ -978,5 +1014,91 @@ mod tests {
         let after_dry = db.get(id).unwrap().unwrap();
         assert_eq!(after_dry.access_count, ac_before,
             "dry recall must not increment access_count");
+    }
+
+    #[test]
+    fn prefilter_restricts_semantic_search() {
+        // When FTS+facts produce enough candidates (>= limit * 2), semantic search
+        // should only consider those candidates — not the full corpus.
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+
+        // Create a "hidden" memory that has a very similar embedding to the query
+        // but doesn't match any FTS keywords. With prefiltering, it should NOT appear.
+        let hidden = db.insert(MemoryInput::new("completely unrelated topic about gardening")).unwrap();
+        // Give it a high-similarity embedding (will match query embedding perfectly)
+        let query_emb = vec![1.0, 0.0, 0.0];
+        db.set_embedding(&hidden.id, &query_emb).unwrap();
+
+        // Create enough FTS-matching memories to trigger prefiltering.
+        // limit=2, so we need >= 4 candidates.
+        let mut fts_ids = Vec::new();
+        for i in 0..6 {
+            let mem = db.insert(
+                MemoryInput::new(format!("rust programming concept number {i}"))
+                    .skip_dedup()
+            ).unwrap();
+            // Give them partial similarity to the query so semantic search returns them
+            db.set_embedding(&mem.id, &vec![0.6, 0.8, (i as f64) * 0.1]).unwrap();
+            fts_ids.push(mem.id);
+        }
+
+        let req = RecallRequest {
+            query: "rust programming".into(),
+            limit: Some(2),
+            min_score: Some(0.0), // don't filter by score
+            ..Default::default()
+        };
+        let result = recall(&db, &req, Some(&query_emb), None);
+
+        // The "hidden" gardening memory has cosine=1.0 with query but no FTS match.
+        // With prefiltering active (6 candidates >= 2*2), it should be excluded.
+        assert!(
+            result.search_mode.contains("filtered"),
+            "should use filtered semantic search, got: {}", result.search_mode,
+        );
+        let found_hidden = result.memories.iter().any(|m| m.memory.id == hidden.id);
+        assert!(
+            !found_hidden,
+            "prefiltered search should not find the hidden memory"
+        );
+
+        // But FTS-matched memories should still appear
+        assert!(!result.memories.is_empty(), "should still find FTS matches");
+    }
+
+    #[test]
+    fn prefilter_falls_back_when_few_candidates() {
+        // When FTS+facts produce too few candidates (< limit * 2),
+        // full semantic search should run.
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+
+        // Only 1 FTS match — not enough for prefiltering with limit=2
+        let mem = db.insert(MemoryInput::new("rare keyword xylophone")).unwrap();
+        let query_emb = vec![1.0, 0.0, 0.0];
+        db.set_embedding(&mem.id, &query_emb).unwrap();
+
+        // A memory that only matches semantically (no FTS match)
+        let semantic_only = db.insert(MemoryInput::new("something about music instruments")).unwrap();
+        db.set_embedding(&semantic_only.id, &vec![0.9, 0.1, 0.0]).unwrap();
+
+        let req = RecallRequest {
+            query: "xylophone".into(),
+            limit: Some(2),
+            min_score: Some(0.0),
+            ..Default::default()
+        };
+        let result = recall(&db, &req, Some(&query_emb), None);
+
+        // Only 1 candidate < 2*2=4, so full search should run
+        assert!(
+            !result.search_mode.contains("filtered"),
+            "should use full semantic search, got: {}", result.search_mode,
+        );
+        // The semantic-only memory should be found via full scan
+        let found_semantic = result.memories.iter().any(|m| m.memory.id == semantic_only.id);
+        assert!(
+            found_semantic,
+            "full scan should find semantically similar memories"
+        );
     }
 }
