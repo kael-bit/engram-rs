@@ -216,9 +216,11 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Buffer TTL — old L1 entries that weren't accessed enough get dropped.
     // Only rescue to Working if accessed at least half the promote threshold,
     // otherwise it wasn't important enough to keep.
-    // Procedural memories are exempt — they persist indefinitely.
+    // Procedural memories and lessons are exempt — they persist indefinitely.
+    // Lessons encode past mistakes; forgetting them defeats their purpose.
     for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0) {
-        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" {
+        let is_lesson = mem.tags.iter().any(|t| t == "lesson");
+        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson {
             continue;
         }
         let age = now - mem.created_at;
@@ -237,10 +239,11 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         }
     }
 
-    // Drop decayed Buffer/Working entries — but skip anything we just promoted
-    // or procedural memories (they don't decay).
+    // Drop decayed Buffer/Working entries — but skip anything we just promoted,
+    // procedural memories, or lessons (they don't decay).
     for mem in db.get_decayed_meta(decay_threshold) {
-        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" {
+        let is_lesson = mem.tags.iter().any(|t| t == "lesson");
+        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson {
             continue;
         }
         if db.delete(&mem.id).unwrap_or(false) {
@@ -1371,5 +1374,25 @@ mod tests {
         assert!(candidate_ids.contains(&"normal-mem"), "normal memory should be a candidate");
         assert!(!candidate_ids.contains(&"session-mem"), "session memory must not be a candidate");
         assert!(!candidate_ids.contains(&"ephemeral-mem"), "ephemeral memory must not be a candidate");
+    }
+
+    #[test]
+    fn lesson_tag_survives_buffer_ttl() {
+        let db = test_db();
+        let two_days_ago = crate::db::now_ms() - 2 * 86_400_000;
+
+        // Lesson tagged memory — old, zero accesses, but should NOT be dropped
+        let mut lesson = mem_with_ts("never-force-push", Layer::Buffer, 0.5, 0, two_days_ago, two_days_ago);
+        lesson.tags = vec!["lesson".into(), "trigger:git-push".into()];
+
+        // Regular buffer — same age, same accesses, should be dropped
+        let regular = mem_with_ts("some-note", Layer::Buffer, 0.5, 0, two_days_ago, two_days_ago);
+
+        db.import(&[lesson, regular]).unwrap();
+
+        let r = consolidate_sync(&db, None);
+        assert!(db.get("never-force-push").unwrap().is_some(), "lesson must survive TTL");
+        assert!(db.get("some-note").unwrap().is_none(), "regular buffer should be dropped");
+        assert!(r.decayed >= 1);
     }
 }

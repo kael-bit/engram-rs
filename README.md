@@ -19,7 +19,7 @@ Memories promote upward through access frequency (Ebbinghaus-style reinforcement
 - **Buffer → Working**: reinforcement score ≥ 5.0 (access + repetition × 2.5)
 - **Working → Core**: reinforcement score ≥ 3.0, importance ≥ 0.6, passes LLM quality gate
 - **Buffer TTL**: 24 hours — unaccessed buffer entries are dropped; half-threshold entries rescue to Working
-- **Procedural** memories are exempt from TTL (persist indefinitely)
+- **Procedural** memories and **lessons** (`tag=lesson`) are exempt from TTL — they persist indefinitely
 - **Session notes** (`source=session`) and `ephemeral`-tagged memories never promote to Core
 - Each recall bumps importance by 0.02 (capped at 1.0)
 - Near-duplicate insertions count as repetition (2.5× weight)
