@@ -199,6 +199,7 @@ EXTRACT these (worth remembering):
 - Identity: who someone is, their preferences, principles, personality
 - Decisions: choices made and why, trade-offs considered
 - Lessons: mistakes, insights, things that worked or didn't
+- Self-reflections: realizations about own behavior patterns, blind spots, habits to change (these are HIGH value — 0.8+)
 - Relationships: facts about people, how they relate to each other
 - Strategic: goals, plans, architectural choices
 
@@ -207,7 +208,7 @@ SKIP these (not worth remembering):
 - Implementation notes: "update X to do Y", "add Z to W", "fix A in B" — these are code tasks, not memories
 - Transient states: "service is running", "memory at 33%", "tests passing"
 - Debug info, log output, error messages
-- Summaries or recaps of work done (these are session logs, not memories)
+- Summaries or recaps of work done (these are session logs, not memories) — BUT self-critical reflections about patterns/habits ARE worth extracting
 - Instructions from one agent to another (e.g. "also add to proxy", "fix now — add touch")
 
 HARD REJECT — NEVER extract these as memories (they are scaffolding, not knowledge):
