@@ -38,6 +38,8 @@ pub struct AppState {
     pub(crate) embed_cache: EmbedCache,
     pub(crate) proxy: Option<proxy::ProxyConfig>,
     pub(crate) started_at: std::time::Instant,
+    /// Timestamp (ms) of the last proxy turn saved — drives debounce flush.
+    pub(crate) last_proxy_turn: std::sync::Arc<std::sync::atomic::AtomicI64>,
 }
 
 /// Small LRU-ish cache for query embeddings to avoid repeated API calls.
@@ -163,6 +165,7 @@ async fn main() {
         db: shared.clone(), ai: ai_cfg, api_key, embed_cache,
         proxy: proxy_cfg,
         started_at: std::time::Instant::now(),
+        last_proxy_turn: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
     };
     let app = api::router(state.clone());
 
@@ -271,13 +274,25 @@ async fn main() {
         }
     }
 
-    // Flush proxy conversation window periodically (every 2 min)
+    // Flush proxy conversation window with debounce.
+    // Instead of a fixed clock, wait for 30s of silence after the last turn.
     if state.proxy.is_some() {
         let flush_state = state.clone();
         tokio::spawn(async move {
+            let silence_threshold_ms: i64 = 30_000; // 30s of quiet
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-                proxy::flush_window(&flush_state).await;
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                let last = flush_state.last_proxy_turn.load(std::sync::atomic::Ordering::Relaxed);
+                if last == 0 {
+                    continue; // no turns yet
+                }
+                let now = crate::db::now_ms();
+                let silence = now - last;
+                if silence >= silence_threshold_ms {
+                    // Reset before flushing so new turns during flush start a fresh debounce
+                    flush_state.last_proxy_turn.store(0, std::sync::atomic::Ordering::Relaxed);
+                    proxy::flush_window(&flush_state).await;
+                }
             }
         });
     }

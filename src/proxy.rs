@@ -249,6 +249,11 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, se
     if let Err(e) = state.db.save_proxy_turn(&session_key, &turn) {
         warn!("proxy: failed to persist turn: {e}");
     }
+    // Stamp for debounce — flush task checks this to detect silence
+    state.last_proxy_turn.store(
+        crate::db::now_ms(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 
     // Check if we've accumulated enough to extract.
     // Debounce: only flush if the window is full AND the last turn is old enough.
@@ -586,7 +591,7 @@ fn extract_last_user_msg(raw: &[u8]) -> String {
                     let content = msg.get("content");
                     // Plain string content
                     if let Some(s) = content.and_then(|c| c.as_str()) {
-                        return s.chars().take(2000).collect();
+                        return s.chars().take(6000).collect();
                     }
                     // Array of content blocks (vision, tool results, etc.)
                     if let Some(blocks) = content.and_then(|c| c.as_array()) {
@@ -600,7 +605,7 @@ fn extract_last_user_msg(raw: &[u8]) -> String {
                             }
                         }
                         if !out.is_empty() {
-                            return out.chars().take(2000).collect();
+                            return out.chars().take(6000).collect();
                         }
                     }
                 }
