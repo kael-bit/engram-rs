@@ -80,13 +80,14 @@ fn drain_all_windows() -> Vec<(String, String)> {
     let mut guard = WINDOWS.lock().unwrap();
     let Some(map) = guard.as_mut() else { return vec![] };
     let mut results = Vec::new();
-    for (key, w) in map.iter_mut() {
-        if !w.is_empty() {
-            results.push((key.clone(), w.drain()));
+    let keys: Vec<String> = map.keys().cloned().collect();
+    for key in keys {
+        if let Some(w) = map.get_mut(&key) {
+            if !w.is_empty() {
+                results.push((key.clone(), w.drain()));
+            }
         }
     }
-    // remove empty entries
-    map.retain(|_, w| !w.is_empty());
     results
 }
 
@@ -177,13 +178,15 @@ pub async fn handle(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|ct| ct.contains("text/event-stream"));
 
-    // Use auth token (last 8 chars) as session key to separate conversation windows
+    // Hash auth token to separate conversation windows per caller
     let session_key = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .map(|s| {
-            let s = s.strip_prefix("Bearer ").unwrap_or(s);
-            if s.len() > 8 { s[s.len()-8..].to_string() } else { s.to_string() }
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            s.hash(&mut h);
+            format!("{:016x}", h.finish())
         })
         .unwrap_or_else(|| "default".into());
 
@@ -234,12 +237,14 @@ async fn stream_response(
     tokio::spawn(async move {
         let mut buf = Vec::new();
         let mut stream = upstream_res.bytes_stream();
+        let mut client_gone = false;
 
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
                     buf.extend_from_slice(&bytes);
                     if tx.send(Ok(bytes.to_vec())).await.is_err() {
+                        client_gone = true;
                         break;
                     }
                 }
@@ -252,7 +257,8 @@ async fn stream_response(
         }
         drop(tx);
 
-        if !buf.is_empty() {
+        // Only extract if stream completed normally — truncated content is garbage
+        if !buf.is_empty() && !client_gone {
             buffer_exchange(state_clone, req_capture, buf, session_key).await;
         }
     });
