@@ -118,12 +118,14 @@ pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String
         .unwrap_or_default())
 }
 
-const EXPAND_PROMPT: &str = "Given a search query, generate 3-4 alternative phrasings \
-    that would match relevant stored memories. Include: synonyms, related concrete terms, \
-    more specific implementations, and broader categories. \
-    Think about what someone might have actually written when storing this knowledge. \
-    Output one query per line, no numbering or bullets. \
-    Match the language of the input query.";
+const EXPAND_PROMPT: &str = "Given a search query for a personal knowledge base, \
+    generate 3-5 alternative search phrases that would find relevant stored notes. \
+    Key strategy: bridge abstract concepts to concrete implementations. \
+    For example: 可观测性 → 日志系统 Loki Grafana ELK 监控告警. \
+    Include: specific tools/technologies, concrete implementations, \
+    synonyms in the same language, and the opposite abstraction level \
+    (abstract→concrete, concrete→abstract). \
+    Output one phrase per line, no numbering. Match the input language.";
 
 /// Generate alternative query phrasings for better recall coverage.
 pub async fn expand_query(cfg: &AiConfig, query: &str) -> Vec<String> {
@@ -132,7 +134,7 @@ pub async fn expand_query(cfg: &AiConfig, query: &str) -> Vec<String> {
             .lines()
             .map(|l| l.trim().to_string())
             .filter(|l| !l.is_empty() && l.len() > 2)
-            .take(3)
+            .take(5)
             .collect(),
         Err(_) => vec![],
     }
