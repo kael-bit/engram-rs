@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "engram": {
+      "command": "node",
+      "args": ["/path/to/engram/mcp/dist/index.js"],
+      "env": {
+        "ENGRAM_URL": "http://127.0.0.1:3917",
+        "ENGRAM_API_KEY": "test-key"
+      }
+    }
+  }
+}

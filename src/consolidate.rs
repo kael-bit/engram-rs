@@ -45,7 +45,10 @@ pub async fn consolidate(
         consolidate_sync(&db2, req.as_ref())
     })
     .await
-    .unwrap_or_default();
+    .unwrap_or_else(|e| {
+        warn!(error = %e, "consolidate_sync task panicked");
+        ConsolidateResponse::default()
+    });
 
     if do_merge {
         if let Some(cfg) = ai {
@@ -120,8 +123,11 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
             }
     }
 
-    // Drop decayed Buffer/Working entries
+    // Drop decayed Buffer/Working entries — but skip anything we just promoted
     for mem in db.get_decayed(decay_threshold) {
+        if promoted_ids.contains(&mem.id) {
+            continue;
+        }
         if db.delete(&mem.id).unwrap_or(false) {
             dropped_ids.push(mem.id.clone());
             decayed += 1;
