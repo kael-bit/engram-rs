@@ -887,3 +887,21 @@ mod tests {
         assert!(result.memories[0].memory.content.contains("high"));
     }
 }
+
+/// Check if content is semantically duplicate of an existing memory.
+/// Uses embedding cosine similarity (threshold 0.85).
+pub async fn quick_semantic_dup(
+    ai_cfg: &AiConfig,
+    db: &MemoryDB,
+    content: &str,
+) -> Result<bool, String> {
+    let embeddings = ai::get_embeddings(ai_cfg, &[content.to_string()]).await?;
+    let emb = embeddings.first().ok_or("no embedding returned")?;
+    let candidates = db.search_semantic(emb, 3);
+    for (_, score) in &candidates {
+        if *score > 0.85 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}

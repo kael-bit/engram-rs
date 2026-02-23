@@ -262,9 +262,13 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
             continue;
         }
 
-        // Dedup: skip if we already have something very similar (lower threshold than insert dedup)
-        if state.db.is_near_duplicate_with(&entry.content, 0.6) {
-            debug!("proxy: skipping duplicate extraction");
+        // Dedup: semantic similarity check against existing memories
+        let is_dup = match crate::recall::quick_semantic_dup(ai_cfg, &state.db, &entry.content).await {
+            Ok(dup) => dup,
+            Err(_) => state.db.is_near_duplicate_with(&entry.content, 0.5), // fallback to Jaccard
+        };
+        if is_dup {
+            debug!("proxy: skipping duplicate extraction: {}", &entry.content[..entry.content.len().min(60)]);
             continue;
         }
 
