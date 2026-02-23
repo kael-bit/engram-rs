@@ -861,6 +861,36 @@ impl MemoryDB {
         }
     }
 
+    /// Auto-repair FTS index: remove orphans and rebuild missing entries.
+    /// Returns (orphans_removed, missing_rebuilt).
+    pub fn repair_fts(&self) -> Result<(usize, usize), EngramError> {
+        let conn = self.conn()?;
+
+        // Remove orphan FTS entries (no matching memory row)
+        let orphans = conn.execute(
+            "DELETE FROM memories_fts WHERE id NOT IN (SELECT id FROM memories)", []
+        )?;
+
+        // Rebuild missing FTS entries
+        let mut stmt = conn.prepare(
+            "SELECT id, content, tags FROM memories WHERE id NOT IN (SELECT id FROM memories_fts)"
+        )?;
+        let missing: Vec<(String, String, String)> = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?.filter_map(|r| r.ok()).collect();
+
+        let rebuilt = missing.len();
+        for (id, content, tags_json) in &missing {
+            let processed = append_cjk_bigrams(content);
+            conn.execute(
+                "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
+                params![id, processed, tags_json],
+            )?;
+        }
+
+        Ok((orphans, rebuilt))
+    }
+
     pub fn update_fields(
         &self,
         id: &str,
@@ -1703,5 +1733,48 @@ mod tests {
         assert_eq!(report.fts_indexed, 1);
         assert_eq!(report.orphan_fts, 0);
         assert_eq!(report.missing_fts, 0);
+    }
+
+    #[test]
+    fn repair_fixes_orphan_fts() {
+        let db = test_db();
+        let mem = db.insert(MemoryInput::new("will break fts")).unwrap();
+        // Manually delete from memories but leave FTS orphan
+        let conn = db.conn().unwrap();
+        conn.execute("DELETE FROM memories WHERE id = ?1", params![mem.id]).unwrap();
+
+        let report = db.integrity();
+        assert_eq!(report.orphan_fts, 1);
+        assert!(!report.ok);
+
+        let (orphans, rebuilt) = db.repair_fts().unwrap();
+        assert_eq!(orphans, 1);
+        assert_eq!(rebuilt, 0);
+
+        let report = db.integrity();
+        assert!(report.ok);
+    }
+
+    #[test]
+    fn repair_rebuilds_missing_fts() {
+        let db = test_db();
+        let mem = db.insert(MemoryInput::new("missing fts entry")).unwrap();
+        // Delete FTS but keep memory
+        let conn = db.conn().unwrap();
+        conn.execute("DELETE FROM memories_fts WHERE id = ?1", params![mem.id]).unwrap();
+
+        let report = db.integrity();
+        assert_eq!(report.missing_fts, 1);
+        assert!(!report.ok);
+
+        let (orphans, rebuilt) = db.repair_fts().unwrap();
+        assert_eq!(orphans, 0);
+        assert_eq!(rebuilt, 1);
+
+        let report = db.integrity();
+        assert!(report.ok);
+        // FTS search should work again
+        let results = db.search_fts("missing fts", 5);
+        assert!(!results.is_empty());
     }
 }

@@ -85,6 +85,7 @@ pub fn router(state: AppState) -> Router {
         .route("/recent", get(list_recent))
         .route("/resume", get(do_resume))
         .route("/consolidate", post(do_consolidate))
+        .route("/repair", post(do_repair))
         .route("/extract", post(do_extract))
         .route("/export", get(do_export))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
@@ -142,6 +143,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /recent?hours=2": "recent memories by time",
             "GET /resume?hours=4": "session recovery (identity + recent + sessions)",
             "POST /consolidate": "run maintenance cycle",
+            "POST /repair": "auto-repair FTS index (remove orphans, rebuild missing)",
             "POST /extract": "LLM-extract memories from text",
             "GET /export": "export all memories (?embed=true to include vectors)",
             "POST /import": "import memories from JSON",
@@ -740,6 +742,17 @@ async fn do_consolidate(
     Ok(Json(result))
 }
 
+async fn do_repair(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let db = state.db.clone();
+    let (orphans, rebuilt) = blocking(move || db.repair_fts()).await??;
+    Ok(Json(serde_json::json!({
+        "orphans_removed": orphans,
+        "fts_rebuilt": rebuilt,
+    })))
+}
+
 #[derive(Deserialize)]
 struct ExtractRequest {
     text: String,
@@ -1331,5 +1344,24 @@ mod tests {
         // no embedding field in default export
         let first = &j["memories"][0];
         assert!(first.get("embedding").is_none(), "embedding should be omitted by default");
+    }
+
+    #[tokio::test]
+    async fn repair_returns_counts() {
+        let app = router(test_state(None));
+        let body = serde_json::json!({"content": "repair test"});
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        let resp = app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/repair")
+                .body(Body::empty())
+                .unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert_eq!(j["orphans_removed"], 0);
+        assert_eq!(j["fts_rebuilt"], 0);
     }
 }
