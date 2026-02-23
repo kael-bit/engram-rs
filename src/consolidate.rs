@@ -53,6 +53,16 @@ pub async fn consolidate(
         }
     }
 
+    // auto-repair FTS after merge (merge deletes can leave orphans)
+    let db3 = db.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Ok((orphans, rebuilt)) = db3.repair_fts() {
+            if orphans > 0 || rebuilt > 0 {
+                info!(orphans, rebuilt, "auto-repaired FTS index");
+            }
+        }
+    }).await;
+
     result
 }
 
