@@ -265,6 +265,11 @@ Lessons from mistakes (with trigger for pre-action recall):
     -H 'Content-Type: application/json' \
     -d '{"content": "never force-push to main", "tags": ["lesson","trigger:git-push"]}'
 
+Workflows and procedures (these never decay):
+  curl -X POST http://localhost:3917/memories \
+    -H 'Content-Type: application/json' \
+    -d '{"content": "deploy flow: cargo test && cargo build --release && systemctl stop && cp && systemctl start", "tags": ["deploy"], "kind": "procedural"}'
+
 User explicitly says "remember this":
   curl -X POST http://localhost:3917/memories \
     -H 'Content-Type: application/json' \

@@ -312,7 +312,8 @@ async fn extract_from_context(state: AppState, context: &str) {
         - Descriptions of how a system works (architecture, features, mechanisms)\n\
         - Anything you'd extract identically from the NEXT conversation too (it's template, not content)\n\
         - Anything that overlaps with the ALREADY IN MEMORY section below\n\n\
-        MAX 3 items per conversation window. Return JSON array of {\"content\": \"...\", \"tags\": [\"...\"]}.\n\
+        MAX 3 items per conversation window. Return JSON array of {\"content\": \"...\", \"tags\": [\"...\"], \"kind\": \"...\"}.\n\
+        kind is one of: \"semantic\" (facts, knowledge — default), \"episodic\" (time-bound events), \"procedural\" (how-to, workflows — these never decay).\n\
         Content must be under 150 chars — one sentence, concrete, actionable.";
 
     let user = format!(
