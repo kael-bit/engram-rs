@@ -1421,8 +1421,8 @@ mod tests {
 
         // Two-char CJK words should match via bigrams
         assert!(!db.search_fts("天气", 10).is_empty(), "天气 should match");
-        assert!(!db.search_fts("很好", 10).is_empty(), "很好 should match");
-        assert!(!db.search_fts("天气", 10).is_empty(), "天气 should match");
+        assert!(!db.search_fts("散步", 10).is_empty(), "散步 should match");
+        assert!(!db.search_fts("出门散步", 10).is_empty(), "出门散步 should match");
     }
 
     #[test]
