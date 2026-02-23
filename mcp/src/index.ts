@@ -41,7 +41,7 @@ async function engramFetch(path: string, body?: unknown): Promise<unknown> {
 
 const server = new McpServer({
   name: "engram",
-  version: "0.5.0",
+  version: "0.6.0",
 });
 
 server.tool(
@@ -233,6 +233,31 @@ server.tool(
   {},
   async () => {
     const result = await engramFetch("/stats");
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "engram_repair",
+  "Repair FTS search index. Removes orphaned entries and rebuilds missing ones. " +
+    "Safe to run anytime — idempotent.",
+  {},
+  async () => {
+    const result = await engramFetch("/repair", {});
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "engram_health",
+  "Detailed health check: uptime, RSS memory, embed cache stats, AI config status.",
+  {},
+  async () => {
+    const result = await engramFetch("/health");
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
