@@ -674,12 +674,13 @@ async fn do_resume(
             ns_filter.as_ref().is_none_or(|ns| m.namespace == *ns)
         };
 
-        // core identity — always relevant
-        let identity: Vec<db::Memory> = d
-            .list_by_layer(db::Layer::Core, 100, 0)
+        // Core memories — always loaded, unconditionally.
+        // This is the whole point of Core: knowledge important enough
+        // to be present in every session, no query needed.
+        let core: Vec<db::Memory> = d
+            .list_by_layer(db::Layer::Core, 1000, 0)
             .into_iter()
-            .filter(|m| m.importance >= 0.8 && ns_ok(m))
-            .take(10)
+            .filter(|m| ns_ok(m))
             .collect();
 
         // all recent memories in one query, then split by source
@@ -709,18 +710,18 @@ async fn do_resume(
         next_actions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         next_actions.truncate(3);
 
-        (identity, recent, sessions, next_actions)
+        (core, recent, sessions, next_actions)
     })
     .await?;
 
-    let (identity, recent, sessions, next_actions) = sections;
+    let (core, recent, sessions, next_actions) = sections;
     Ok(Json(serde_json::json!({
-        "identity": identity,
+        "core": core,
         "recent": recent,
         "sessions": sessions,
         "next_actions": next_actions,
         "hours": hours,
-        "identity_count": identity.len(),
+        "core_count": core.len(),
         "recent_count": recent.len(),
         "session_count": sessions.len(),
         "next_action_count": next_actions.len(),
@@ -1454,16 +1455,16 @@ mod tests {
         let j = body_json(resp).await;
 
         // Structure checks
-        assert!(j["identity"].is_array());
+        assert!(j["core"].is_array());
         assert!(j["recent"].is_array());
         assert!(j["sessions"].is_array());
         assert!(j["next_actions"].is_array());
         assert!(j["hours"].as_f64().unwrap() > 0.0);
 
-        // Identity should include the high-importance core memory
-        let identity = j["identity"].as_array().unwrap();
-        assert!(!identity.is_empty(), "should have identity memories");
-        assert!(identity[0]["content"].as_str().unwrap().contains("test agent"));
+        // Core should include the high-importance core memory
+        let core = j["core"].as_array().unwrap();
+        assert!(!core.is_empty(), "should have core memories");
+        assert!(core[0]["content"].as_str().unwrap().contains("test agent"));
 
         // Next actions should have the tagged memory
         let next = j["next_actions"].as_array().unwrap();
@@ -1500,8 +1501,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let j = body_json(resp).await;
 
-        let identity = j["identity"].as_array().unwrap();
-        assert!(identity.iter().all(|m| {
+        let core = j["core"].as_array().unwrap();
+        assert!(core.iter().all(|m| {
             m["namespace"].as_str().unwrap_or("default") == "ns-a"
                 || m["namespace"].as_str().is_none()
         }), "should only return ns-a memories");
