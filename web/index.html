@@ -93,7 +93,12 @@ body { background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, 
       <li data-view="working"><span>🟨</span><span class="label">Working</span><span class="count" id="count-working">0</span></li>
       <li data-view="core"><span>🟪</span><span class="label">Core</span><span class="count" id="count-core">0</span></li>
       <li data-view="recall"><span>🔍</span><span class="label">Recall</span></li>
+      <li data-view="create"><span>✏️</span><span class="label">Create</span></li>
     </ul>
+    <div style="padding:8px;margin-top:auto;border-top:1px solid var(--border)">
+      <button onclick="doConsolidate()" style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px;color:var(--text);cursor:pointer;font-size:12px">🔄 Consolidate</button>
+      <button onclick="doRepair()" style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px;color:var(--text);cursor:pointer;font-size:12px;margin-top:4px">🔧 Repair</button>
+    </div>
   </div>
   <div class="main" id="main"></div>
   <div class="detail-overlay" id="detail"></div>
@@ -344,6 +349,8 @@ function switchView(view) {
   });
   if (view === 'recall') {
     renderRecallView();
+  } else if (view === 'create') {
+    renderCreateView();
   } else {
     renderList(getViewMemories());
   }
@@ -357,6 +364,58 @@ document.getElementById('nav').onclick = e => {
 
 // ESC to close detail
 document.onkeydown = e => { if (e.key === 'Escape') closeDetail(); };
+
+function renderCreateView() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <h2 style="margin-bottom:16px">✏️ Create Memory</h2>
+    <div style="display:flex;flex-direction:column;gap:12px;max-width:600px">
+      <textarea id="createContent" rows="6" placeholder="Memory content..." 
+        style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;color:var(--text);font-size:14px;resize:vertical"></textarea>
+      <input type="text" id="createTags" placeholder="Tags (comma-separated)" 
+        style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:14px">
+      <input type="text" id="createSource" placeholder="Source (optional)" 
+        style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:14px">
+      <button onclick="doCreate()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:10px;cursor:pointer;font-size:14px;width:fit-content">Create</button>
+      <div id="createResult"></div>
+    </div>`;
+}
+
+async function doCreate() {
+  const content = document.getElementById('createContent').value.trim();
+  if (!content) return;
+  const tags = document.getElementById('createTags').value.split(',').map(t => t.trim()).filter(Boolean);
+  const source = document.getElementById('createSource').value.trim();
+  const body = { content };
+  if (tags.length) body.tags = tags;
+  if (source) body.source = source;
+  try {
+    const mem = await api('/memories', { method: 'POST', body: JSON.stringify(body) });
+    document.getElementById('createResult').innerHTML = 
+      `<div style="color:var(--green);margin-top:8px">✓ Created: ${mem.id.slice(0,8)}… (${layerName(mem.layer)})</div>`;
+    document.getElementById('createContent').value = '';
+    loadMemories(); loadStats();
+  } catch(e) {
+    document.getElementById('createResult').innerHTML = 
+      `<div style="color:var(--red);margin-top:8px">✗ ${e.message}</div>`;
+  }
+}
+
+async function doConsolidate() {
+  try {
+    const r = await api('/consolidate', { method: 'POST', body: '{}' });
+    alert(`Consolidate: promoted=${r.promoted}, decayed=${r.decayed}, merged=${r.merged||0}`);
+    refresh();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function doRepair() {
+  try {
+    const r = await api('/repair', { method: 'POST' });
+    alert(`Repair: orphans=${r.orphans_removed}, fts_rebuilt=${r.fts_rebuilt}, embed_backfill=${r.embed_backfill_queued}`);
+    refresh();
+  } catch(e) { alert('Error: ' + e.message); }
+}
 
 // Init
 refresh();
