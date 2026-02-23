@@ -143,6 +143,8 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         .map(|c| (c.len(), c.capacity()))
         .unwrap_or((0, 0));
 
+    let (proxy_reqs, proxy_extracted) = crate::proxy::proxy_stats();
+
     Json(serde_json::json!({
         "name": "engram",
         "version": env!("CARGO_PKG_VERSION"),
@@ -150,6 +152,11 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "rss_kb": rss_kb,
         "ai_enabled": state.ai.is_some(),
         "embed_cache": { "size": cache_len, "capacity": cache_cap },
+        "proxy": {
+            "enabled": state.proxy.is_some(),
+            "requests": proxy_reqs,
+            "extracted": proxy_extracted,
+        },
         "integrity": integrity,
         "stats": s,
         "endpoints": {

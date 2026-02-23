@@ -431,10 +431,11 @@ async function doRepair() {
 // Proxy view
 async function checkProxyStatus() {
   try {
-    const res = await fetch(API + '/proxy/v1/models', { method: 'HEAD' });
-    return res.status !== 404;
+    const res = await fetch(API + '/health', { headers: authHeader() });
+    const data = await res.json();
+    return data.proxy || { enabled: false, requests: 0, extracted: 0 };
   } catch {
-    return false;
+    return { enabled: false, requests: 0, extracted: 0 };
   }
 }
 
@@ -450,17 +451,19 @@ async function renderProxyView() {
   const main = document.getElementById('main');
   main.innerHTML = '<div class="empty">Loading proxy status...</div>';
 
-  const proxyEnabled = await checkProxyStatus();
+  const proxyInfo = await checkProxyStatus();
   const proxyMems = getProxyMemories();
 
   main.innerHTML = `
     <h2 style="margin-bottom:16px">🔀 Proxy</h2>
     <div class="proxy-status">
-      <span class="status-dot ${proxyEnabled ? 'on' : 'off'}"></span>
-      <span style="font-size:14px">${proxyEnabled ? 'Proxy is <b style="color:var(--green)">enabled</b>' : 'Proxy is <b style="color:var(--red)">not configured</b>'}</span>
+      <span class="status-dot ${proxyInfo.enabled ? 'on' : 'off'}"></span>
+      <span style="font-size:14px">${proxyInfo.enabled ? 'Proxy is <b style="color:var(--green)">enabled</b>' : 'Proxy is <b style="color:var(--red)">not configured</b>'}</span>
     </div>
     <div class="proxy-stat-bar">
-      <div class="stat-card"><div class="value">${proxyMems.length}</div><div class="label">Extracted Memories</div></div>
+      <div class="stat-card"><div class="value">${proxyInfo.requests}</div><div class="label">Requests</div></div>
+      <div class="stat-card"><div class="value">${proxyInfo.extracted}</div><div class="label">Stored</div></div>
+      <div class="stat-card"><div class="value">${proxyMems.length}</div><div class="label">Total Memories</div></div>
     </div>
     ${proxyMems.length ? `
       <div class="search-box">

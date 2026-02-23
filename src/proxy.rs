@@ -9,6 +9,15 @@ use tracing::{debug, error, info, warn};
 
 use crate::{ai, db, AppState};
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static PROXY_REQUESTS: AtomicU64 = AtomicU64::new(0);
+static PROXY_EXTRACTED: AtomicU64 = AtomicU64::new(0);
+
+pub fn proxy_stats() -> (u64, u64) {
+    (PROXY_REQUESTS.load(Ordering::Relaxed), PROXY_EXTRACTED.load(Ordering::Relaxed))
+}
+
 #[derive(Clone)]
 pub struct ProxyConfig {
     pub upstream: String,
@@ -28,8 +37,9 @@ pub async fn handle(
         return (StatusCode::NOT_FOUND, "proxy not configured").into_response();
     };
 
-    // Build upstream URL: /proxy/v1/chat/completions → upstream + /v1/chat/completions
     let path = uri.path().strip_prefix("/proxy").unwrap_or(uri.path());
+    PROXY_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    info!(path, "proxy: incoming request");
     let upstream_url = if let Some(q) = uri.query() {
         format!("{}{}?{}", proxy.upstream, path, q)
     } else {
@@ -297,6 +307,7 @@ async fn extract_memories(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>) {
     }
 
     if stored > 0 {
+        PROXY_EXTRACTED.fetch_add(stored, Ordering::Relaxed);
         info!(stored, extracted = count, "proxy: stored memories");
     } else if count > 0 {
         debug!(extracted = count, "proxy: all extractions were duplicates");
