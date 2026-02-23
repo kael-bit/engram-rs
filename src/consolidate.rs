@@ -203,15 +203,24 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         }
     }
 
-    // Buffer → Working: same weighted score, higher threshold.
+    // Buffer → Working: weighted score OR lesson/procedural with cooldown.
+    // Lessons and procedurals are inherently worth keeping — if they survived
+    // initial dedup and 2+ hours in buffer, promote them.
     let buffer_threshold = promote_threshold.max(5) as f64;
+    let lesson_cooldown_ms: i64 = 2 * 3600 * 1000; // 2 hours
     for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0) {
         let score = mem.access_count as f64 + mem.repetition_count as f64 * 2.5;
-        if score >= buffer_threshold
-            && db.promote(&mem.id, Layer::Working).is_ok() {
-                promoted_ids.push(mem.id.clone());
-                promoted += 1;
-            }
+        let is_lesson = mem.tags.iter().any(|t| t == "lesson");
+        let is_procedural = mem.kind == "procedural";
+        let age = now - mem.created_at;
+
+        let by_score = score >= buffer_threshold;
+        let by_kind = (is_lesson || is_procedural) && age > lesson_cooldown_ms;
+
+        if (by_score || by_kind) && db.promote(&mem.id, Layer::Working).is_ok() {
+            promoted_ids.push(mem.id.clone());
+            promoted += 1;
+        }
     }
 
     // Buffer TTL — old L1 entries that weren't accessed enough get dropped.

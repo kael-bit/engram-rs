@@ -334,6 +334,19 @@ pub(super) async fn do_resume(
     let recent_out = take_within_budget(&recent);
     let buffer_out = take_within_budget(&buffer);
 
+    // Touch Working/Core memories served by resume — they're actively being used.
+    // Skip Buffer to avoid inflating scores for unproven memories.
+    {
+        let db = state.db.clone();
+        let ids: Vec<String> = core_out.iter().chain(working_out.iter())
+            .map(|m| m.id.clone()).collect();
+        tokio::task::spawn_blocking(move || {
+            for id in &ids {
+                let _ = db.touch(id);
+            }
+        });
+    }
+
     Ok(Json(serde_json::json!({
         "core": to_json(&core_out),
         "working": to_json(&working_out),
