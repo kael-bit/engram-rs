@@ -54,6 +54,12 @@ pub struct ConsolidateResponse {
 
 fn is_zero(n: &usize) -> bool { *n == 0 }
 
+/// Session note check: source="session" OR tag="session". API-created session
+/// memories often have source="api" + tag="session", so both must be checked.
+fn is_session(mem: &crate::db::Memory) -> bool {
+    mem.source == "session" || mem.tags.iter().any(|t| t == "session")
+}
+
 pub async fn consolidate(
     db: SharedDB,
     req: Option<ConsolidateRequest>,
@@ -177,7 +183,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Session logs are episodic — they belong in Working at most.
     let mut demoted = 0_usize;
     for mem in db.list_by_layer_meta(Layer::Core, 10000, 0) {
-        if (mem.source == "session" || mem.tags.iter().any(|t| t == "ephemeral"))
+        if (is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral"))
             && db.demote(&mem.id, Layer::Working).is_ok() {
                 demoted += 1;
             }
@@ -188,7 +194,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Repetition weighs 2.5x because restating > incidental recall hit.
     // Session notes and ephemeral tags are always blocked.
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0) {
-        if mem.source == "session" || mem.tags.iter().any(|t| t == "ephemeral") {
+        if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral") {
             continue;
         }
         let score = mem.access_count as f64 + mem.repetition_count as f64 * 2.5;

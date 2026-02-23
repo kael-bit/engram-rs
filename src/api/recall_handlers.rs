@@ -198,6 +198,11 @@ pub(super) async fn do_resume(
             })
         };
 
+        // Session note: source="session" OR tag="session" (API-created notes use source=api)
+        let is_session = |m: &db::Memory| -> bool {
+            m.source == "session" || m.tags.iter().any(|t| t == "session")
+        };
+
         // Use list_by_layer_meta — skip embedding blobs, resume doesn't need them.
         // DB already sorts by importance DESC.
         let core: Vec<db::Memory> = d
@@ -211,7 +216,7 @@ pub(super) async fn do_resume(
         let working: Vec<db::Memory> = d
             .list_by_layer_meta_ns(db::Layer::Working, core_limit * 2, 0, ns_filter.as_deref())
             .into_iter()
-            .filter(|m| ws_match(m) && m.source != "session")
+            .filter(|m| ws_match(m) && !is_session(m))
             .take(core_limit)
             .collect();
 
@@ -237,14 +242,14 @@ pub(super) async fn do_resume(
         // Recent, sessions, next-actions: all deduped against layer sections.
         // If a session note is already in Working, don't repeat it.
         let recent: Vec<db::Memory> = all_recent.iter()
-            .filter(|m| m.source != "session" && !seen.contains(&m.id))
+            .filter(|m| !is_session(m) && !seen.contains(&m.id))
             .take(20)
             .cloned()
             .collect();
 
         let mut next_actions = Vec::new();
         let mut sessions = Vec::new();
-        for m in all_recent.into_iter().filter(|m| m.source == "session") {
+        for m in all_recent.into_iter().filter(|m| is_session(m)) {
             if seen.contains(&m.id) { continue; }
             if m.tags.iter().any(|t| t == "next-action") {
                 next_actions.push(m);
