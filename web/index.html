@@ -635,6 +635,14 @@ function renderHealth(){
       <div class="stats" style="margin:8px 0 0">
         ${Object.entries(stats.by_kind).map(([k,v])=>`<div class="sc"><div class="v">${v}</div><div class="l">${k}</div></div>`).join('')}
       </div>
+    </div>`:''}
+    ${h.integrity?`<div class="card"><b style="font-size:12px">Integrity</b>
+      <div class="stats" style="margin:8px 0 0">
+        <div class="sc"><div class="v"><span class="dot ${h.integrity.ok?'on':'off'}"></span></div><div class="l">Status</div></div>
+        <div class="sc"><div class="v">${h.integrity.missing_embedding||0}</div><div class="l">Missing embed</div></div>
+        <div class="sc"><div class="v">${h.integrity.missing_fts||0}</div><div class="l">Missing FTS</div></div>
+        <div class="sc"><div class="v">${h.integrity.orphan_fts||0}</div><div class="l">Orphan FTS</div></div>
+      </div>
     </div>`:''}`;
 }
 
