@@ -430,7 +430,8 @@ impl MemoryDB {
         // update it instead of creating a duplicate. Uses token overlap as a proxy.
         let do_dedup = !input.skip_dedup.unwrap_or(false);
         if do_dedup {
-        if let Some(existing) = self.find_near_duplicate(&input.content) {
+        let ns = input.namespace.as_deref().unwrap_or("default");
+        if let Some(existing) = self.find_near_duplicate(&input.content, ns) {
             tracing::debug!(existing_id = %existing.id, "near-duplicate found, updating instead");
             let tags = input.tags.unwrap_or_default();
             // Merge tags from both
@@ -931,8 +932,14 @@ impl MemoryDB {
 
     /// Check if content is a near-duplicate of an existing memory.
     /// Uses token-level Jaccard similarity (threshold ~0.8).
-    fn find_near_duplicate(&self, content: &str) -> Option<Memory> {
-        let candidates = self.search_fts(content, 5);
+    fn find_near_duplicate(&self, content: &str, ns: &str) -> Option<Memory> {
+        // Use only the first 200 chars for the FTS query — enough for similarity matching
+        let query_text = if content.len() > 200 {
+            &content[..content.char_indices().take(200).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(200)]
+        } else {
+            content
+        };
+        let candidates = self.search_fts(query_text, 5);
         if candidates.is_empty() {
             return None;
         }
@@ -944,6 +951,9 @@ impl MemoryDB {
 
         for (id, _) in &candidates {
             if let Ok(Some(mem)) = self.get(id) {
+                if mem.namespace != ns {
+                    continue;
+                }
                 let old_tokens = tokenize_for_dedup(&mem.content);
                 let intersection = new_tokens.intersection(&old_tokens).count();
                 let union = new_tokens.union(&old_tokens).count();
@@ -1559,5 +1569,28 @@ mod tests {
         // stats_ns
         let s = db.stats_ns("agent-a");
         assert_eq!(s.total, 1);
+    }
+
+    #[test]
+    fn dedup_respects_namespace() {
+        let db = test_db();
+        let content = "this is identical content for dedup testing purposes";
+        let a = db
+            .insert(MemoryInput::new(content).namespace("ns-a"))
+            .unwrap();
+        // Same content in a different namespace should NOT be deduped
+        let b = db
+            .insert(MemoryInput::new(content).namespace("ns-b"))
+            .unwrap();
+        assert_ne!(a.id, b.id, "different namespaces should not dedup");
+
+        // Same content in the same namespace SHOULD be deduped (updates existing)
+        let a2 = db
+            .insert(MemoryInput::new(content).namespace("ns-a"))
+            .unwrap();
+        assert_eq!(a.id, a2.id, "same namespace should dedup");
+
+        assert_eq!(db.list_all_ns(50, 0, Some("ns-a")).unwrap().len(), 1);
+        assert_eq!(db.list_all_ns(50, 0, Some("ns-b")).unwrap().len(), 1);
     }
 }
