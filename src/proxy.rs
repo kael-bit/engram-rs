@@ -238,16 +238,14 @@ async fn stream_response(
     tokio::spawn(async move {
         let mut buf = Vec::new();
         let mut stream = upstream_res.bytes_stream();
-        let mut client_gone = false;
 
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
                     buf.extend_from_slice(&bytes);
-                    if tx.send(Ok(bytes.to_vec())).await.is_err() {
-                        client_gone = true;
-                        break;
-                    }
+                    // Client disconnect is fine — we still have the full response in buf.
+                    // Don't break; keep draining the upstream so we capture everything.
+                    let _ = tx.send(Ok(bytes.to_vec())).await;
                 }
                 Err(e) => {
                     warn!("stream chunk error: {e}");
@@ -258,8 +256,7 @@ async fn stream_response(
         }
         drop(tx);
 
-        // Only extract if stream completed normally and upstream succeeded
-        if extract_ok && !buf.is_empty() && !client_gone {
+        if extract_ok && !buf.is_empty() {
             buffer_exchange(state_clone, req_capture, buf, session_key).await;
         }
     });
@@ -396,7 +393,7 @@ async fn extract_from_context(state: AppState, context: &str) {
     let mut stored: u64 = 0;
     let mut batch_contents: Vec<String> = Vec::new();
     for entry in entries {
-        if entry.content.is_empty() || entry.content.len() > 300 {
+        if entry.content.is_empty() || entry.content.len() > 200 {
             continue;
         }
 
@@ -535,11 +532,9 @@ fn extract_assistant_msg(raw: &[u8]) -> String {
     let text = String::from_utf8_lossy(raw);
 
     // Try SSE stream format first (collect all content deltas).
-    // Only treat as SSE if the body looks structurally like an event stream —
-    // i.e. starts with "data: " or the very first non-empty line does.
-    // A plain JSON body that happens to contain "\ndata: " somewhere is not SSE.
-    let looks_like_sse = text.starts_with("data: ")
-        || text.lines().next().map(|l| l.starts_with("data: ")).unwrap_or(false);
+    // SSE streams may start with "data: " or "event: " lines.
+    let first_line = text.lines().next().unwrap_or("");
+    let looks_like_sse = first_line.starts_with("data: ") || first_line.starts_with("event:");
     if looks_like_sse {
         let mut assembled = String::new();
         for line in text.lines() {
