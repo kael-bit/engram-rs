@@ -109,11 +109,18 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), require_auth))
         .layer(RequestBodyLimitLayer::new(32 * 1024 * 1024)); // 32MB
 
-    // 64KB for normal operations, 32MB for import
+    // Proxy route — transparent forwarding, no auth (clients bring their own API keys).
+    // 10MB body limit covers large prompts.
+    let proxy_route = Router::new()
+        .route("/proxy/{*path}", axum::routing::any(crate::proxy::handle))
+        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024));
+
+    // 64KB for normal operations, 32MB for import, 10MB for proxy
     public
         .merge(protected)
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .merge(import_route)
+        .merge(proxy_route)
         .with_state(state)
 }
 
@@ -1034,6 +1041,7 @@ mod tests {
             embed_cache: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::EmbedCacheInner::new(16),
             )),
+            proxy: None,
             started_at: std::time::Instant::now(),
         }
     }

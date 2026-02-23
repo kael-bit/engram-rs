@@ -85,11 +85,10 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Session logs are episodic — they belong in Working at most.
     let mut demoted = 0_usize;
     for mem in db.list_by_layer(Layer::Core, 10000, 0) {
-        if mem.source == "session" || mem.tags.iter().any(|t| t == "ephemeral") {
-            if db.demote(&mem.id, Layer::Working).is_ok() {
+        if (mem.source == "session" || mem.tags.iter().any(|t| t == "ephemeral"))
+            && db.demote(&mem.id, Layer::Working).is_ok() {
                 demoted += 1;
             }
-        }
     }
 
     // Working → Core: access-based or age-based (single pass)

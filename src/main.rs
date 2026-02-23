@@ -6,6 +6,7 @@ mod api;
 mod consolidate;
 mod db;
 mod error;
+mod proxy;
 mod recall;
 
 use clap::Parser;
@@ -33,6 +34,7 @@ pub struct AppState {
     pub(crate) ai: Option<ai::AiConfig>,
     pub(crate) api_key: Option<String>,
     pub(crate) embed_cache: EmbedCache,
+    pub(crate) proxy: Option<proxy::ProxyConfig>,
     pub(crate) started_at: std::time::Instant,
 }
 
@@ -123,10 +125,20 @@ async fn main() {
     let api_key = std::env::var("ENGRAM_API_KEY").ok();
     let auth_status = if api_key.is_some() { "enabled" } else { "disabled" };
 
+    let proxy_cfg = std::env::var("ENGRAM_PROXY_UPSTREAM").ok().map(|upstream| {
+        let upstream = upstream.trim_end_matches('/').to_string();
+        info!(upstream = %upstream, "proxy enabled");
+        proxy::ProxyConfig {
+            upstream,
+            default_key: std::env::var("ENGRAM_PROXY_KEY").ok(),
+        }
+    });
+
     let embed_cache: EmbedCache =
         std::sync::Arc::new(std::sync::Mutex::new(EmbedCacheInner::new(128)));
     let state = AppState {
         db: shared.clone(), ai: ai_cfg, api_key, embed_cache,
+        proxy: proxy_cfg,
         started_at: std::time::Instant::now(),
     };
     let app = api::router(state.clone());
