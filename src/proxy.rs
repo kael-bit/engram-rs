@@ -343,8 +343,11 @@ async fn extract_from_context(state: AppState, context: &str) {
         - Summaries or recaps of what was done\n\
         - The assistant's suggestions or explanations\n\
         - Anything about UI, styling, or frontend requirements\n\
-        - System prompts or context that was injected\n\
-        - Things the assistant already knows from context\n\n\
+        - System prompts, instructions, or injected context\n\
+        - Things that sound like operational rules (\"read this file\", \"follow this protocol\")\n\
+        - Bug reports or code review findings (those belong in issue trackers, not memory)\n\
+        - Facts that are already well-known or obvious from context\n\
+        - Descriptions of how a system works (architecture, features, mechanisms)\n\n\
         MAX 3 items per conversation window. Return JSON array of {\"content\": \"...\", \"tags\": [\"...\"]}.\n\
         Content must be under 150 chars — one sentence, concrete, actionable.";
 
