@@ -89,11 +89,12 @@ server.tool(
     until: z.number().int().optional().describe("Only memories created before this unix ms timestamp"),
     sort_by: z.enum(["score", "recent", "accessed"]).optional().describe("Sort order (default: score)"),
     rerank: z.boolean().optional().describe("Re-rank results using LLM"),
+    expand: z.boolean().optional().describe("Expand query with LLM-generated synonyms for better recall"),
     source: z.string().optional().describe("Filter by source (e.g. session, extract, api)"),
     tags: z.array(z.string()).optional().describe("Filter by tags (must have ALL specified)"),
     namespace: z.string().optional().describe("Filter by namespace"),
   },
-  async ({ query, budget_tokens, layers, min_importance, limit, since, until, sort_by, rerank, source, tags, namespace }) => {
+  async ({ query, budget_tokens, layers, min_importance, limit, since, until, sort_by, rerank, expand, source, tags, namespace }) => {
     const body: Record<string, unknown> = { query };
     if (budget_tokens !== undefined) body.budget_tokens = budget_tokens;
     if (layers !== undefined) body.layers = layers;
@@ -103,6 +104,7 @@ server.tool(
     if (until !== undefined) body.until = until;
     if (sort_by !== undefined) body.sort_by = sort_by;
     if (rerank !== undefined) body.rerank = rerank;
+    if (expand !== undefined) body.expand = expand;
     if (source !== undefined) body.source = source;
     if (tags !== undefined) body.tags = tags;
     if (namespace !== undefined) body.namespace = namespace;
