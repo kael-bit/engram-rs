@@ -302,6 +302,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         NEVER extract:\n\
         - Task descriptions, instructions, or assignments\n\
         - Technical implementation details (code, config, API calls)\n\
+        - Code changes, refactors, or what was modified in source files\n\
         - Summaries or recaps of what was done\n\
         - The assistant's suggestions or explanations\n\
         - Anything about UI, styling, or frontend requirements\n\
@@ -339,7 +340,7 @@ async fn extract_from_context(state: AppState, context: &str) {
                         "kind": {
                             "type": "string",
                             "enum": ["semantic", "episodic", "procedural"],
-                            "description": "semantic=facts/knowledge, episodic=time-bound events, procedural=how-to/workflows (never decay)"
+                            "description": "semantic=facts/decisions/lessons/preferences (most memories are this). episodic=specific dated events. procedural=reusable step-by-step workflows ONLY (e.g. 'deploy: test→build→stop→copy→start'). Code changes, prompt edits, bug fixes are NOT procedural — they are semantic."
                         }
                     },
                     "required": ["content", "tags", "kind"]
