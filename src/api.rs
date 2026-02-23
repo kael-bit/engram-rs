@@ -56,6 +56,7 @@ pub fn router(state: AppState) -> Router {
 
     let protected = Router::new()
         .route("/memories", post(create_memory).get(list_memories).delete(batch_delete))
+        .route("/memories/batch", post(batch_create))
         .route(
             "/memories/{id}",
             get(get_memory).patch(update_memory).delete(delete_memory),
@@ -93,6 +94,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /": "this health check",
             "GET /stats": "memory counts per layer",
             "POST /memories": "create a memory",
+            "POST /memories/batch": "batch create memories (body: [{content, ...}, ...])",
             "GET /memories": "list memories (optional ?layer=N&tag=X&limit=N)",
             "GET /memories/:id": "get a memory by id",
             "PATCH /memories/:id": "update a memory",
@@ -180,6 +182,43 @@ async fn create_memory(
     }
 
     Ok((StatusCode::CREATED, Json(mem)))
+}
+
+async fn batch_create(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(mut inputs): Json<Vec<db::MemoryInput>>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let ns = get_namespace(&headers);
+    if let Some(ref ns_val) = ns {
+        for inp in &mut inputs {
+            if inp.namespace.is_none() {
+                inp.namespace = Some(ns_val.clone());
+            }
+        }
+    }
+    let count = inputs.len();
+    let db = state.db.clone();
+    let results = tokio::task::spawn_blocking(move || db.insert_batch(inputs))
+        .await
+        .map_err(|e| EngramError::Internal(e.to_string()))??;
+
+    // batch embed if AI is configured
+    if let Some(ref cfg) = state.ai {
+        if cfg.has_embed() {
+            let items: Vec<(String, String)> = results
+                .iter()
+                .map(|m| (m.id.clone(), m.content.clone()))
+                .collect();
+            spawn_embed_batch(state.db.clone(), cfg.clone(), items);
+        }
+    }
+
+    let inserted = results.len();
+    Ok(Json(serde_json::json!({
+        "inserted": inserted,
+        "requested": count,
+    })))
 }
 
 async fn get_memory(
@@ -915,5 +954,23 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
         let j = body_json(resp).await;
         assert_eq!(j["namespace"], "test-ns");
+    }
+
+    #[tokio::test]
+    async fn batch_create_inserts_all() {
+        let app = router(test_state(None));
+        let body = serde_json::json!([
+            {"content": "batch item 1"},
+            {"content": "batch item 2"},
+            {"content": "batch item 3"},
+        ]);
+        let resp = app
+            .oneshot(json_req("POST", "/memories/batch", body))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert_eq!(j["inserted"], 3);
+        assert_eq!(j["requested"], 3);
     }
 }

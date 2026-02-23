@@ -292,9 +292,17 @@ impl MemoryDB {
     /// Open (or create) a database at the given path.
     /// Pool size defaults to 8 (1 writer + 7 readers in WAL mode).
     pub fn open(path: &str) -> Result<Self, EngramError> {
-        let manager = SqliteConnectionManager::file(path);
+        let pool_size = if path == ":memory:" { 2 } else { 8 };
+        let manager = if path == ":memory:" {
+            // Shared cache so all pool connections see the same in-memory DB.
+            // Each test gets a unique name to avoid cross-test pollution.
+            let name = uuid::Uuid::new_v4().to_string();
+            SqliteConnectionManager::file(format!("file:{name}?mode=memory&cache=shared"))
+        } else {
+            SqliteConnectionManager::file(path)
+        };
         let pool = Pool::builder()
-            .max_size(8)
+            .max_size(pool_size)
             .build(manager)
             .map_err(|e| EngramError::Internal(format!("pool: {e}")))?;
 
@@ -522,6 +530,65 @@ impl MemoryDB {
             namespace,
             embedding: None,
         })
+    }
+
+    /// Batch insert within a single transaction. Skips dedup for speed.
+    /// Returns the successfully inserted memories.
+    pub fn insert_batch(&self, inputs: Vec<MemoryInput>) -> Result<Vec<Memory>, EngramError> {
+        let conn = self.conn();
+        conn.execute_batch("BEGIN")?;
+        let mut results = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            if let Err(e) = validate_input(&input) {
+                tracing::warn!(error = %e, "batch: skipping invalid input");
+                continue;
+            }
+            let now = now_ms();
+            let layer_val = input.layer.unwrap_or(1);
+            let layer: Layer = match layer_val.try_into() {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            let id = Uuid::new_v4().to_string();
+            let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
+            let source = input.source.unwrap_or_else(|| "api".into());
+            let tags = input.tags.unwrap_or_default();
+            let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
+            let namespace = input.namespace.unwrap_or_else(|| "default".into());
+
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, content, layer, importance, created_at, last_accessed, \
+                  access_count, decay_rate, source, tags, namespace) \
+                 VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10)",
+                params![
+                    id, input.content, layer_val, importance, now, now,
+                    layer.default_decay(), source, tags_json, namespace
+                ],
+            )?;
+            let processed = append_cjk_bigrams(&input.content);
+            conn.execute(
+                "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
+                params![id, processed, tags_json],
+            )?;
+
+            results.push(Memory {
+                id,
+                content: input.content,
+                layer,
+                importance,
+                created_at: now,
+                last_accessed: now,
+                access_count: 0,
+                decay_rate: layer.default_decay(),
+                source,
+                tags,
+                namespace,
+                embedding: None,
+            });
+        }
+        conn.execute_batch("COMMIT")?;
+        Ok(results)
     }
 
     pub fn get(&self, id: &str) -> Result<Option<Memory>, EngramError> {
@@ -911,14 +978,21 @@ impl MemoryDB {
     /// Import memories from an export. Skips entries whose id already exists.
     /// Returns count of newly imported memories.
     pub fn import(&self, memories: &[Memory]) -> Result<usize, EngramError> {
+        let conn = self.conn();
+        conn.execute_batch("BEGIN")?;
         let mut imported = 0;
         for m in memories {
-            // skip if id already present
-            if self.get(&m.id)?.is_some() {
+            // check for existing id using the same connection
+            let exists: bool = conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE id = ?1",
+                params![m.id],
+                |r| r.get::<_, i64>(0),
+            ).unwrap_or(0) > 0;
+            if exists {
                 continue;
             }
             let tags_json = serde_json::to_string(&m.tags).unwrap_or_else(|_| "[]".into());
-            self.conn().execute(
+            conn.execute(
                 "INSERT INTO memories \
                  (id, content, layer, importance, created_at, last_accessed, \
                   access_count, decay_rate, source, tags) \
@@ -936,9 +1010,14 @@ impl MemoryDB {
                     tags_json,
                 ],
             )?;
-            self.fts_insert(&m.id, &m.content, &tags_json)?;
+            let processed = append_cjk_bigrams(&m.content);
+            conn.execute(
+                "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
+                params![m.id, processed, tags_json],
+            )?;
             imported += 1;
         }
+        conn.execute_batch("COMMIT")?;
         Ok(imported)
     }
 }
