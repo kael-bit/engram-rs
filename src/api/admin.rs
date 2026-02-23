@@ -268,6 +268,7 @@ pub(super) async fn do_import(
 #[derive(Deserialize, Default)]
 pub(super) struct TrashQuery {
     limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 pub(super) async fn trash_list(
@@ -275,10 +276,15 @@ pub(super) async fn trash_list(
     Query(q): Query<TrashQuery>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let limit = q.limit.unwrap_or(100);
+    let offset = q.offset.unwrap_or(0);
     let db = state.db.clone();
-    let entries = blocking(move || db.trash_list(limit)).await??;
+    let total = {
+        let db2 = db.clone();
+        blocking(move || db2.trash_count()).await??
+    };
+    let entries = blocking(move || db.trash_list(limit, offset)).await??;
     let count = entries.len();
-    Ok(Json(serde_json::json!({ "count": count, "items": entries })))
+    Ok(Json(serde_json::json!({ "total": total, "count": count, "items": entries })))
 }
 
 pub(super) async fn trash_restore(

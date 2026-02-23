@@ -638,11 +638,14 @@ function renderHealth(){
     </div>`:''}`;
 }
 
+let trashPage=0,trashTotal=0;
+const TPP=30;
+
 async function loadTrashCount(){
   try{
     const d=await api('/trash?limit=1');
     const el=document.getElementById('c-trash');
-    if(el) el.textContent=d.count||0;
+    if(el) el.textContent=d.total||d.count||0;
   }catch(_){}
 }
 
@@ -650,38 +653,54 @@ function renderTrash(){
   document.getElementById('main').innerHTML=`
     <h2>Trash</h2>
     <div class="row" style="margin-bottom:12px;gap:8px">
-      <button class="btn" onclick="loadTrash()">Refresh</button>
+      <button class="btn" onclick="loadTrashPage(0)">Refresh</button>
       <button class="btn" style="background:#7f1d1d" onclick="purgeTrash()">Purge All</button>
     </div>
-    <div id="trashList"><div class="empty">Loading...</div></div>`;
-  loadTrash();
+    <div id="trashList"><div class="empty">Loading...</div></div>
+    <div id="trashPager"></div>`;
+  loadTrashPage(0);
 }
 
-async function loadTrash(){
+async function loadTrashPage(p){
+  trashPage=Math.max(0,p);
+  const offset=trashPage*TPP;
   const el=document.getElementById('trashList');
+  const pgEl=document.getElementById('trashPager');
   try{
-    const d=await api('/trash?limit=200');
+    const d=await api('/trash?limit='+TPP+'&offset='+offset);
     const items=d.items||[];
-    if(!items.length){el.innerHTML='<div class="empty">Trash is empty</div>';return;}
-    el.innerHTML=items.map(t=>{
-      const layer={1:'Buffer',2:'Working',3:'Core'}[t.layer]||'?';
+    trashTotal=d.total||items.length;
+    if(!items.length&&trashTotal===0){el.innerHTML='<div class="empty">Trash is empty</div>';if(pgEl)pgEl.innerHTML='';return;}
+    el.innerHTML='<div class="ml">'+items.map(t=>{
       const tags=(t.tags||[]).map(tg=>'<span class="tag">'+esc(tg)+'</span>').join(' ');
-      const created=new Date(t.created_at).toLocaleString();
-      const deleted=new Date(t.deleted_at).toLocaleString();
-      return `<div class="card" style="padding:10px 14px;opacity:0.8">
-        <div class="ct">${esc(t.content)}</div>
-        <div class="meta" style="margin-top:6px">
-          <span class="lb l${t.layer}">${layer}</span>
-          <span>imp: ${t.importance.toFixed(2)}</span>
-          <span>created: ${created}</span>
-          <span>deleted: ${deleted}</span>
-          ${tags}
-        </div>
-        <div style="margin-top:6px">
-          <button class="btn btn-ghost" style="font-size:11px" onclick="restoreTrash('${t.id}')">Restore</button>
-        </div>
-      </div>`;
-    }).join('');
+      const kind=t.kind&&t.kind!=='semantic'?'<span class="kind-badge">'+esc(t.kind)+'</span>':'';
+      return '<div class="mc" style="opacity:0.85">'+
+        '<div class="ct">'+esc((t.content||'').slice(0,280))+(t.content&&t.content.length>280?'…':'')+'</div>'+
+        '<div class="meta">'+
+          '<span class="lb l'+t.layer+'">'+ ({1:'Buffer',2:'Working',3:'Core'}[t.layer]||'?')+'</span>'+
+          kind+
+          '<span>imp '+(t.importance||0).toFixed(2)+'</span>'+
+          '<span>'+ago(t.created_at)+'</span>'+
+          '<span style="color:#c0392b">deleted '+ago(t.deleted_at)+'</span>'+
+          tags+
+        '</div>'+
+        '<div style="margin-top:6px">'+
+          '<button class="btn btn-ghost" style="font-size:11px" onclick="event.stopPropagation();restoreTrash(\''+t.id+'\')">Restore</button>'+
+        '</div>'+
+      '</div>';
+    }).join('')+'</div>';
+    const pages=Math.ceil(trashTotal/TPP);
+    if(pgEl){
+      if(pages>1){
+        pgEl.innerHTML='<div class="pager">'+
+          '<button onclick="loadTrashPage('+(trashPage-1)+')" '+(trashPage===0?'disabled':'')+'>Prev</button>'+
+          '<span>'+(trashPage+1)+'/'+pages+' ('+trashTotal+')</span>'+
+          '<button onclick="loadTrashPage('+(trashPage+1)+')" '+(trashPage>=pages-1?'disabled':'')+'>Next</button>'+
+        '</div>';
+      }else{
+        pgEl.innerHTML='<div style="text-align:center;font-size:11px;color:#555;margin-top:10px">'+trashTotal+' items</div>';
+      }
+    }
   }catch(e){el.innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
 }
 
@@ -690,7 +709,7 @@ async function restoreTrash(id){
     await api('/trash/'+id+'/restore',{method:'POST'});
     toast('Restored');
     await refresh();
-    loadTrash();
+    loadTrashPage(trashPage);
     loadTrashCount();
   }catch(e){toast(e.message,false);}
 }
@@ -700,7 +719,7 @@ async function purgeTrash(){
   try{
     const d=await api('/trash',{method:'DELETE'});
     toast('Purged '+(d.purged||0)+' items');
-    loadTrash();
+    loadTrashPage(0);
     loadTrashCount();
   }catch(e){toast(e.message,false);}
 }

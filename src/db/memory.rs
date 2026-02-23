@@ -303,13 +303,13 @@ impl MemoryDB {
 
     // -- Trash (soft-delete recovery) --
 
-    pub fn trash_list(&self, limit: usize) -> Result<Vec<TrashEntry>, EngramError> {
+    pub fn trash_list(&self, limit: usize, offset: usize) -> Result<Vec<TrashEntry>, EngramError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, content, layer, importance, created_at, deleted_at, tags, namespace, source, kind \
-             FROM trash ORDER BY deleted_at DESC LIMIT ?1"
+             FROM trash ORDER BY deleted_at DESC LIMIT ?1 OFFSET ?2"
         )?;
-        let rows = stmt.query_map(params![limit as i64], |row| {
+        let rows = stmt.query_map(params![limit as i64, offset as i64], |row| {
             let tags_json: String = row.get(6)?;
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
             Ok(TrashEntry {
@@ -1712,7 +1712,7 @@ mod tests {
         assert!(db.get(&id).unwrap().is_none());
         assert_eq!(db.trash_count().unwrap(), 1);
 
-        let trash = db.trash_list(10).unwrap();
+        let trash = db.trash_list(10, 0).unwrap();
         assert_eq!(trash.len(), 1);
         assert_eq!(trash[0].content, "important fact");
         assert!(trash[0].importance >= 0.8);

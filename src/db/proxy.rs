@@ -86,6 +86,27 @@ impl MemoryDB {
         count as usize >= max_turns || chars as usize >= max_chars
     }
 
+    /// Check if a session's most recent turn is older than `quiet_secs` seconds.
+    pub fn proxy_session_quiet_for(&self, session_key: &str, quiet_secs: i64) -> bool {
+        let conn = match self.conn() {
+            Ok(c) => c,
+            Err(_) => return true,
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        let latest: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(created_at), 0) FROM proxy_turns WHERE session_key = ?1",
+                params![session_key],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if latest == 0 { return true; }
+        (now_ms - latest) >= quiet_secs * 1000
+    }
+
     /// Read-only peek at buffered turns without draining.
     pub fn peek_proxy_turns(&self) -> Result<Vec<(String, Vec<(String, i64)>)>, EngramError> {
         let conn = self.conn()?;
