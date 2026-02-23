@@ -26,6 +26,9 @@ pub struct ConsolidateResponse {
     pub promoted_ids: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub dropped_ids: Vec<String>,
+    /// IDs of memories that absorbed others during merge (winners).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub merged_ids: Vec<String>,
 }
 
 pub async fn consolidate(
@@ -44,7 +47,9 @@ pub async fn consolidate(
 
     if do_merge {
         if let Some(cfg) = ai {
-            result.merged = merge_similar(&db, &cfg).await;
+            let (count, ids) = merge_similar(&db, &cfg).await;
+            result.merged = count;
+            result.merged_ids = ids;
         }
     }
 
@@ -122,6 +127,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         merged: 0,
         promoted_ids,
         dropped_ids,
+        merged_ids: vec![],
     }
 }
 
@@ -133,17 +139,18 @@ const MERGE_SYSTEM: &str = "Merge these related memory entries into a single con
     - Output must be shorter than the combined length of the inputs.\n\
     - Same language as originals. Output only the merged text, nothing else.";
 
-async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
+async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
     let db2 = db.clone();
     let all = tokio::task::spawn_blocking(move || db2.get_all_with_embeddings())
         .await
         .unwrap_or_default();
 
     if all.len() < 2 {
-        return 0;
+        return (0, vec![]);
     }
 
     let mut merged_total = 0;
+    let mut merged_ids = Vec::new();
 
     for layer in [Layer::Buffer, Layer::Working, Layer::Core] {
         let layer_mems: Vec<&(Memory, Vec<f64>)> =
@@ -210,8 +217,12 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                 .map(|&i| ns_mems[i].0.content.chars().count())
                 .sum();
             if merged_content.chars().count() >= total_input_len && total_input_len > 0 {
-                warn!("merge not shorter than combined inputs ({} >= {}), skipping",
-                    merged_content.chars().count(), total_input_len);
+                let preview: String = cluster.iter()
+                    .map(|&i| ns_mems[i].0.content.chars().take(40).collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                warn!("merge produced longer output than inputs ({} >= {}), skipping: {}",
+                    merged_content.chars().count(), total_input_len, preview);
                 continue;
             }
 
@@ -290,16 +301,28 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
             }
 
             // delete the rest
+            let mut absorbed = Vec::new();
             for &idx in &cluster {
                 if idx == best_idx {
                     continue;
                 }
+                let loser = &ns_mems[idx].0;
+                absorbed.push(loser.content.chars().take(60).collect::<String>());
                 let id = ns_mems[idx].0.id.clone();
                 let db2 = db.clone();
                 let _ = tokio::task::spawn_blocking(move || db2.delete(&id)).await;
             }
 
+            let winner_preview: String = ns_mems[best_idx].0.content.chars().take(60).collect();
+            info!(
+                winner = %best_id,
+                absorbed = ?absorbed,
+                "merged {} memories: '{}'",
+                cluster.len(), winner_preview,
+            );
+
             merged_total += 1;
+            merged_ids.push(best_id);
         }
         } // ns_indices
     }
@@ -308,7 +331,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
         info!(merged = merged_total, "memory merge complete");
     }
 
-    merged_total
+    (merged_total, merged_ids)
 }
 
 fn find_clusters(mems: &[&(Memory, Vec<f64>)], threshold: f64) -> Vec<Vec<usize>> {
