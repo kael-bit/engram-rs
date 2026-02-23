@@ -714,10 +714,11 @@ async fn do_resume(
             .take(core_limit)
             .collect();
 
+        // Working: exclude session-source memories (they go in sessions/next_actions)
         let working: Vec<db::Memory> = d
             .list_by_layer_meta(db::Layer::Working, core_limit * 2, 0)
             .into_iter()
-            .filter(|m| ns_ok(m) && ws_match(m))
+            .filter(|m| ns_ok(m) && ws_match(m) && m.source != "session")
             .take(core_limit)
             .collect();
 
@@ -742,19 +743,18 @@ async fn do_resume(
             .collect();
 
         // Recent activity: dedup against layer sections so we don't repeat
-        // the same memory in both "working" and "recent"
+        // Recent, sessions, next-actions: all deduped against layer sections.
+        // If a session note is already in Working, don't repeat it.
         let recent: Vec<db::Memory> = all_recent.iter()
             .filter(|m| m.source != "session" && !seen.contains(&m.id))
             .take(20)
             .cloned()
             .collect();
 
-        // Session notes and next-actions: NOT deduped — they're episodic
-        // context that serves a different purpose than layer membership
-
         let mut next_actions = Vec::new();
         let mut sessions = Vec::new();
         for m in all_recent.into_iter().filter(|m| m.source == "session") {
+            if seen.contains(&m.id) { continue; }
             if m.tags.iter().any(|t| t == "next-action") {
                 next_actions.push(m);
             } else {
