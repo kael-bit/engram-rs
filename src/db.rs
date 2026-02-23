@@ -320,7 +320,7 @@ impl MemoryDB {
 
         // initialize schema on a fresh connection
         let conn = pool.get().map_err(|e| EngramError::Internal(e.to_string()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA auto_vacuum=INCREMENTAL;")?;
         conn.execute_batch(SCHEMA)?;
         conn.execute(FTS_SCHEMA, [])?;
         for t in &DROP_TRIGGERS {
@@ -882,6 +882,36 @@ impl MemoryDB {
         }
 
         Ok((orphans, rebuilt))
+    }
+
+    /// Run incremental vacuum, returning bytes freed.
+    pub fn vacuum_incremental(&self, pages: u32) -> Result<i64, EngramError> {
+        let conn = self.conn()?;
+        let before: i64 = conn.query_row(
+            "SELECT page_count * page_size FROM pragma_page_count, pragma_page_size",
+            [], |r| r.get(0),
+        )?;
+        conn.execute_batch(&format!("PRAGMA incremental_vacuum({pages})"))?;
+        let after: i64 = conn.query_row(
+            "SELECT page_count * page_size FROM pragma_page_count, pragma_page_size",
+            [], |r| r.get(0),
+        )?;
+        Ok(before - after)
+    }
+
+    /// Full vacuum — reclaims all free pages. Blocks writes.
+    pub fn vacuum_full(&self) -> Result<i64, EngramError> {
+        let conn = self.conn()?;
+        let before: i64 = conn.query_row(
+            "SELECT page_count * page_size FROM pragma_page_count, pragma_page_size",
+            [], |r| r.get(0),
+        )?;
+        conn.execute_batch("VACUUM")?;
+        let after: i64 = conn.query_row(
+            "SELECT page_count * page_size FROM pragma_page_count, pragma_page_size",
+            [], |r| r.get(0),
+        )?;
+        Ok(before - after)
     }
 
     pub fn update_fields(

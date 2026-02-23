@@ -86,6 +86,7 @@ pub fn router(state: AppState) -> Router {
         .route("/resume", get(do_resume))
         .route("/consolidate", post(do_consolidate))
         .route("/repair", post(do_repair))
+        .route("/vacuum", post(do_vacuum))
         .route("/extract", post(do_extract))
         .route("/export", get(do_export))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
@@ -144,6 +145,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /resume?hours=4": "session recovery (identity + recent + sessions)",
             "POST /consolidate": "run maintenance cycle",
             "POST /repair": "auto-repair FTS index (remove orphans, rebuild missing)",
+            "POST /vacuum": "reclaim disk space (?full=true for full vacuum)",
             "POST /extract": "LLM-extract memories from text",
             "GET /export": "export all memories (?embed=true to include vectors)",
             "POST /import": "import memories from JSON",
@@ -796,6 +798,26 @@ async fn do_repair(
 }
 
 #[derive(Deserialize)]
+struct VacuumQuery {
+    full: Option<bool>,
+}
+
+async fn do_vacuum(
+    State(state): State<AppState>,
+    Query(q): Query<VacuumQuery>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let db = state.db.clone();
+    let full = q.full.unwrap_or(false);
+    let freed = blocking(move || {
+        if full { db.vacuum_full() } else { db.vacuum_incremental(1000) }
+    }).await??;
+    Ok(Json(serde_json::json!({
+        "freed_bytes": freed,
+        "mode": if full { "full" } else { "incremental" },
+    })))
+}
+
+#[derive(Deserialize)]
 struct ExtractRequest {
     text: String,
     auto_embed: Option<bool>,
@@ -1405,5 +1427,21 @@ mod tests {
         let j = body_json(resp).await;
         assert_eq!(j["orphans_removed"], 0);
         assert_eq!(j["fts_rebuilt"], 0);
+    }
+
+    #[tokio::test]
+    async fn vacuum_returns_freed() {
+        let app = router(test_state(None));
+        let resp = app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/vacuum")
+                .body(Body::empty())
+                .unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert!(j["freed_bytes"].is_number());
+        assert_eq!(j["mode"], "incremental");
     }
 }
