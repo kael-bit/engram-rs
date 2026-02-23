@@ -11,7 +11,7 @@ mod recall;
 
 use clap::Parser;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -204,6 +204,43 @@ async fn main() {
             }
         });
         info!(every_mins = consolidate_mins, auto_merge = auto_merge, "background consolidation enabled");
+    }
+
+    // Background audit — runs every ENGRAM_AUDIT_HOURS (default 24, 0 = disabled)
+    let audit_hours: u64 = std::env::var("ENGRAM_AUDIT_HOURS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24);
+    if audit_hours > 0 {
+        if let Some(ref ai) = state.ai {
+            let audit_db = state.db.clone();
+            let audit_ai = ai.clone();
+            tokio::spawn(async move {
+                let interval = std::time::Duration::from_secs(audit_hours.saturating_mul(3600));
+                // first run after 5 min (let things settle)
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                loop {
+                    match consolidate::audit_memories(&audit_ai, &audit_db).await {
+                        Ok(r) if r.promoted + r.demoted + r.deleted + r.merged > 0 => {
+                            info!(
+                                reviewed = r.total_reviewed,
+                                promoted = r.promoted,
+                                demoted = r.demoted,
+                                deleted = r.deleted,
+                                merged = r.merged,
+                                "auto-audit"
+                            );
+                        }
+                        Ok(_) => { /* no changes, stay quiet */ }
+                        Err(e) => {
+                            warn!("auto-audit failed: {e}");
+                        }
+                    }
+                    tokio::time::sleep(interval).await;
+                }
+            });
+            info!(every_hours = audit_hours, model = %ai.model_for("gate"), "background audit enabled");
+        }
     }
 
     // Flush proxy conversation window periodically (every 2 min)
