@@ -33,6 +33,7 @@ pub struct AppState {
     pub(crate) ai: Option<ai::AiConfig>,
     pub(crate) api_key: Option<String>,
     pub(crate) embed_cache: EmbedCache,
+    pub(crate) started_at: std::time::Instant,
 }
 
 /// Small LRU-ish cache for query embeddings to avoid repeated API calls.
@@ -70,6 +71,18 @@ impl EmbedCacheInner {
         self.order.push_back(key.clone());
         self.map.insert(key, val);
     }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.cap
+    }
 }
 
 #[tokio::main]
@@ -105,7 +118,10 @@ async fn main() {
 
     let embed_cache: EmbedCache =
         std::sync::Arc::new(std::sync::Mutex::new(EmbedCacheInner::new(128)));
-    let state = AppState { db: shared.clone(), ai: ai_cfg, api_key, embed_cache };
+    let state = AppState {
+        db: shared.clone(), ai: ai_cfg, api_key, embed_cache,
+        started_at: std::time::Instant::now(),
+    };
     let app = api::router(state.clone());
 
     // background consolidation — runs every ENGRAM_CONSOLIDATE_MINS (default 30)

@@ -24,6 +24,14 @@ where
 }
 
 /// Extract namespace from X-Namespace header, defaulting to None (= all namespaces).
+fn read_rss_kb() -> u64 {
+    std::fs::read_to_string("/proc/self/statm")
+        .ok()
+        .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
+        .map(|pages| pages * 4) // page size = 4KB on x86_64
+        .unwrap_or(0)
+}
+
 fn get_namespace(headers: &axum::http::HeaderMap) -> Option<String> {
     headers
         .get("x-namespace")
@@ -101,10 +109,19 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         .await
         .unwrap_or(db::Stats { total: 0, buffer: 0, working: 0, core: 0 });
 
+    let uptime_secs = state.started_at.elapsed().as_secs();
+    let rss_kb = read_rss_kb();
+    let (cache_len, cache_cap) = state.embed_cache.lock()
+        .map(|c| (c.len(), c.capacity()))
+        .unwrap_or((0, 0));
+
     Json(serde_json::json!({
         "name": "engram",
         "version": env!("CARGO_PKG_VERSION"),
+        "uptime_secs": uptime_secs,
+        "rss_kb": rss_kb,
         "ai_enabled": state.ai.is_some(),
+        "embed_cache": { "size": cache_len, "capacity": cache_cap },
         "stats": s,
         "endpoints": {
             "GET /": "this health check",
@@ -847,6 +864,7 @@ mod tests {
             embed_cache: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::EmbedCacheInner::new(16),
             )),
+            started_at: std::time::Instant::now(),
         }
     }
 
