@@ -189,6 +189,14 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "POST /extract": "LLM-extract memories from text",
             "GET /export": "export all memories (?embed=true to include vectors)",
             "POST /import": "import memories from JSON",
+            "POST /facts": "insert fact triples",
+            "GET /facts?entity=X": "query facts by entity",
+            "GET /facts/all": "list all facts",
+            "GET /facts/history?subject=X&predicate=Y": "fact history with superseded entries",
+            "DELETE /facts/:id": "delete a fact",
+            "GET /health": "detailed health (uptime, rss, cache, integrity)",
+            "ANY /proxy/*": "transparent LLM proxy (requires ENGRAM_PROXY_UPSTREAM)",
+            "GET /ui": "web dashboard",
         },
     }))
 }
@@ -320,8 +328,16 @@ async fn create_memory(
 async fn batch_create(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-    Json(mut inputs): Json<Vec<db::MemoryInput>>,
+    body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, EngramError> {
+    // Accept both [{...}] and {"memories": [{...}]}
+    let mut inputs: Vec<db::MemoryInput> = serde_json::from_slice(&body)
+        .or_else(|_| {
+            #[derive(serde::Deserialize)]
+            struct Wrapped { memories: Vec<db::MemoryInput> }
+            serde_json::from_slice::<Wrapped>(&body).map(|w| w.memories)
+        })
+        .map_err(|e| EngramError::Validation(format!("invalid batch body: {e}")))?;
     let ns = get_namespace(&headers);
     if let Some(ref ns_val) = ns {
         for inp in &mut inputs {
