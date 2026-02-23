@@ -1224,4 +1224,91 @@ mod tests {
         let mems = j["memories"].as_array().unwrap();
         assert!(!mems.is_empty(), "should find the memory with unique term");
     }
+
+    #[tokio::test]
+    async fn resume_returns_structured_sections() {
+        let app = router(test_state(None));
+
+        // Seed: a high-importance core memory (identity)
+        let body = serde_json::json!({
+            "content": "I am the test agent, created for integration testing",
+            "layer": 3, "importance": 0.9
+        });
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        // Seed: a session memory with next-action tag
+        let body = serde_json::json!({
+            "content": "next step: write more tests",
+            "layer": 2, "importance": 0.7,
+            "source": "session", "tags": ["next-action"]
+        });
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        // Seed: a regular session memory
+        let body = serde_json::json!({
+            "content": "did some refactoring today",
+            "layer": 2, "importance": 0.6,
+            "source": "session"
+        });
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        let resp = app.oneshot(
+            Request::builder().uri("/resume?hours=1").body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+
+        // Structure checks
+        assert!(j["identity"].is_array());
+        assert!(j["recent"].is_array());
+        assert!(j["sessions"].is_array());
+        assert!(j["next_actions"].is_array());
+        assert!(j["hours"].as_f64().unwrap() > 0.0);
+
+        // Identity should include the high-importance core memory
+        let identity = j["identity"].as_array().unwrap();
+        assert!(!identity.is_empty(), "should have identity memories");
+        assert!(identity[0]["content"].as_str().unwrap().contains("test agent"));
+
+        // Next actions should have the tagged memory
+        let next = j["next_actions"].as_array().unwrap();
+        assert!(!next.is_empty(), "should have next-action memories");
+        assert!(next[0]["content"].as_str().unwrap().contains("write more tests"));
+
+        // Sessions should have the session memory (not tagged as next-action)
+        let sessions = j["sessions"].as_array().unwrap();
+        assert!(!sessions.is_empty(), "should have session memories");
+    }
+
+    #[tokio::test]
+    async fn resume_respects_namespace() {
+        let app = router(test_state(None));
+
+        // Seed in ns-a
+        let body = serde_json::json!({
+            "content": "ns-a identity", "layer": 3, "importance": 0.9,
+            "namespace": "ns-a"
+        });
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        // Seed in ns-b
+        let body = serde_json::json!({
+            "content": "ns-b identity", "layer": 3, "importance": 0.9,
+            "namespace": "ns-b"
+        });
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        // Resume with ns=ns-a
+        let resp = app.oneshot(
+            Request::builder().uri("/resume?hours=1&ns=ns-a").body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+
+        let identity = j["identity"].as_array().unwrap();
+        assert!(identity.iter().all(|m| {
+            m["namespace"].as_str().unwrap_or("default") == "ns-a"
+                || m["namespace"].as_str().is_none()
+        }), "should only return ns-a memories");
+    }
 }

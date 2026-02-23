@@ -125,12 +125,13 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     }
 }
 
-const MERGE_SYSTEM: &str = "Merge these related memory entries into one. Rules:\n\
-    - Keep only facts that appear in BOTH entries or are updates of the same topic.\n\
-    - If one entry updates or supersedes the other, keep only the latest state.\n\
-    - Drop tangential details that don't overlap between entries.\n\
+const MERGE_SYSTEM: &str = "Merge these related memory entries into a single concise note. Rules:\n\
+    - Preserve all important facts from both entries.\n\
+    - If one entry updates or supersedes the other, keep the latest state.\n\
+    - Remove redundant/repeated information.\n\
     - Be specific: names, numbers, versions, dates > vague summaries.\n\
-    - Max 400 chars. Same language as originals. Output only the merged text.";
+    - Output must be shorter than the combined length of the inputs.\n\
+    - Same language as originals. Output only the merged text, nothing else.";
 
 async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
     let db2 = db.clone();
@@ -204,13 +205,13 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
                 merged_content
             };
 
-            // Skip merge if output is longer than longest input — LLM failed to condense
-            let max_input_len = cluster.iter()
+            // Skip if merged output isn't shorter than total input — LLM failed to condense
+            let total_input_len: usize = cluster.iter()
                 .map(|&i| ns_mems[i].0.content.chars().count())
-                .max()
-                .unwrap_or(0);
-            if merged_content.chars().count() > max_input_len && max_input_len > 0 {
-                warn!("merge produced longer output than inputs, skipping");
+                .sum();
+            if merged_content.chars().count() >= total_input_len && total_input_len > 0 {
+                warn!("merge not shorter than combined inputs ({} >= {}), skipping",
+                    merged_content.chars().count(), total_input_len);
                 continue;
             }
 
