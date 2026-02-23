@@ -1143,4 +1143,85 @@ mod tests {
         let j = body_json(resp).await;
         assert!(!j["id"].as_str().unwrap().is_empty());
     }
+
+    #[tokio::test]
+    async fn list_memories_returns_all() {
+        let app = router(test_state(None));
+        for i in 0..3 {
+            let body = serde_json::json!({"content": format!("list test {i}"), "skip_dedup": true});
+            app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+        }
+        let resp = app.oneshot(Request::builder().uri("/memories").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert!(j["count"].as_i64().unwrap() >= 3);
+        assert!(j["memories"].as_array().unwrap().len() >= 3);
+    }
+
+    #[tokio::test]
+    async fn update_memory_changes_content() {
+        let app = router(test_state(None));
+        let body = serde_json::json!({"content": "before update"});
+        let resp = app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+        let created = body_json(resp).await;
+        let id = created["id"].as_str().unwrap();
+
+        let patch = serde_json::json!({"content": "after update"});
+        let resp = app.clone().oneshot(json_req("PATCH", &format!("/memories/{id}"), patch)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let updated = body_json(resp).await;
+        assert_eq!(updated["content"], "after update");
+    }
+
+    #[tokio::test]
+    async fn export_import_roundtrip() {
+        let app = router(test_state(None));
+        // create
+        let body = serde_json::json!({"content": "roundtrip test", "namespace": "rt-test"});
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        // export
+        let resp = app.clone().oneshot(
+            Request::builder().uri("/export").body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let exported = body_json(resp).await;
+        assert!(exported["count"].as_i64().unwrap() >= 1);
+
+        // import into fresh app
+        let app2 = router(test_state(None));
+        let resp = app2.oneshot(json_req("POST", "/import", exported)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let imported = body_json(resp).await;
+        assert!(imported["imported"].as_i64().unwrap() >= 1);
+    }
+
+    #[tokio::test]
+    async fn list_recent_returns_memories() {
+        let app = router(test_state(None));
+        let body = serde_json::json!({"content": "recent test entry"});
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        let resp = app.oneshot(
+            Request::builder().uri("/recent?hours=1").body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert!(j["memories"].as_array().unwrap().len() >= 1);
+    }
+
+    #[tokio::test]
+    async fn quick_search_finds_match() {
+        let app = router(test_state(None));
+        let body = serde_json::json!({"content": "quicksearch xylophone unique"});
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        let resp = app.oneshot(
+            Request::builder().uri("/search?q=xylophone").body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        let mems = j["memories"].as_array().unwrap();
+        assert!(!mems.is_empty(), "should find the memory with unique term");
+    }
 }
