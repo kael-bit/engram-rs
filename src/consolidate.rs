@@ -75,8 +75,10 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     let promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
     let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
     let decay_threshold = req.and_then(|r| r.decay_drop_threshold).unwrap_or(0.01);
-    let buffer_ttl = req.and_then(|r| r.buffer_ttl_secs).unwrap_or(3600) * 1000;
-    let working_age = req.and_then(|r| r.working_age_promote_secs).unwrap_or(7 * 86400) * 1000;
+    let buffer_ttl = req.and_then(|r| r.buffer_ttl_secs).unwrap_or(3600)
+        .saturating_mul(1000);
+    let working_age = req.and_then(|r| r.working_age_promote_secs).unwrap_or(7 * 86400)
+        .saturating_mul(1000);
 
     let now = crate::db::now_ms();
     let mut promoted = 0_usize;
@@ -123,20 +125,11 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
             }
     }
 
-    // Drop decayed Buffer/Working entries — but skip anything we just promoted
-    for mem in db.get_decayed(decay_threshold) {
-        if promoted_ids.contains(&mem.id) {
-            continue;
-        }
-        if db.delete(&mem.id).unwrap_or(false) {
-            dropped_ids.push(mem.id.clone());
-            decayed += 1;
-        }
-    }
-
     // Buffer TTL — old L1 entries that weren't accessed enough get dropped.
     // Accessed ones were already promoted above; stragglers with any access
     // get one more chance via Working, the rest expire.
+    // Must run BEFORE the decay pass so TTL-rescued entries are in promoted_ids
+    // and won't be deleted by the decay loop.
     for mem in db.list_by_layer(Layer::Buffer, 10000, 0) {
         if promoted_ids.contains(&mem.id) {
             continue;
@@ -154,6 +147,17 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
                 dropped_ids.push(mem.id.clone());
                 decayed += 1;
             }
+        }
+    }
+
+    // Drop decayed Buffer/Working entries — but skip anything we just promoted
+    for mem in db.get_decayed(decay_threshold) {
+        if promoted_ids.contains(&mem.id) {
+            continue;
+        }
+        if db.delete(&mem.id).unwrap_or(false) {
+            dropped_ids.push(mem.id.clone());
+            decayed += 1;
         }
     }
 
