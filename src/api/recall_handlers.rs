@@ -223,6 +223,7 @@ pub(super) async fn do_resume(
         let mut buffer: Vec<db::Memory> = d
             .list_by_layer_meta_ns(db::Layer::Buffer, 100, 0, ns_filter.as_deref())
             .into_iter()
+            .filter(|m| !is_session(m))
             .collect();
         buffer.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         buffer.truncate(50);
