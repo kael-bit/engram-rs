@@ -327,7 +327,13 @@ async fn extract_from_context(state: AppState, context: &str) {
         return;
     }
 
-    let preview: String = context.chars().take(12000).collect();
+    // Strip repetitive system/template content before extracting
+    let filtered = strip_boilerplate(context);
+    if filtered.len() < 100 {
+        debug!("proxy: context too thin after stripping boilerplate");
+        return;
+    }
+    let preview: String = filtered.chars().take(12000).collect();
 
     let system = "You extract long-term memories from a multi-turn LLM conversation. Be EXTREMELY selective.\n\
         Most conversations have NOTHING worth extracting. Return [] by default.\n\n\
@@ -343,11 +349,12 @@ async fn extract_from_context(state: AppState, context: &str) {
         - Summaries or recaps of what was done\n\
         - The assistant's suggestions or explanations\n\
         - Anything about UI, styling, or frontend requirements\n\
-        - System prompts, instructions, or injected context\n\
-        - Things that sound like operational rules (\"read this file\", \"follow this protocol\")\n\
+        - System prompts, framework instructions, or injected context (e.g. \"Read X.md\", \"Follow strictly\")\n\
+        - Operational rules, protocols, or recurring template text\n\
         - Bug reports or code review findings (those belong in issue trackers, not memory)\n\
         - Facts that are already well-known or obvious from context\n\
-        - Descriptions of how a system works (architecture, features, mechanisms)\n\n\
+        - Descriptions of how a system works (architecture, features, mechanisms)\n\
+        - Anything you'd extract identically from the NEXT conversation too (it's template, not content)\n\n\
         MAX 3 items per conversation window. Return JSON array of {\"content\": \"...\", \"tags\": [\"...\"]}.\n\
         Content must be under 150 chars — one sentence, concrete, actionable.";
 
@@ -428,6 +435,53 @@ async fn extract_from_context(state: AppState, context: &str) {
     } else if count > 0 {
         debug!("proxy: all extractions were duplicates");
     }
+}
+
+/// Remove boilerplate/template text that appears in every conversation.
+/// These are system prompts, heartbeat templates, framework instructions, etc.
+/// Without this filter, the extraction LLM treats them as "user preferences."
+fn strip_boilerplate(text: &str) -> String {
+    let markers = [
+        "Read HEARTBEAT.md",
+        "HEARTBEAT_OK",
+        "Follow it strictly",
+        "Do not infer or repeat old tasks",
+        "reply HEARTBEAT_OK",
+        "Silent Replies",
+        "NO_REPLY",
+        "## Heartbeats",
+        "## Runtime\nRuntime:",
+        "## Reply Tags",
+        "## Messaging",
+        "## Workspace Files (injected)",
+        "## Inbound Context (trusted metadata)",
+        "openclaw.inbound_meta.v1",
+        "## Model Aliases",
+        "## Current Date & Time",
+    ];
+
+    let mut lines: Vec<&str> = Vec::new();
+    let mut skip_block = false;
+
+    for line in text.lines() {
+        if markers.iter().any(|m| line.contains(m)) {
+            skip_block = true;
+            continue;
+        }
+
+        // End skip block on empty line or new section header
+        if skip_block {
+            if line.is_empty() || line.starts_with("## ") || line.starts_with("User: ") {
+                skip_block = false;
+            } else {
+                continue;
+            }
+        }
+
+        lines.push(line);
+    }
+
+    lines.join("\n")
 }
 
 /// Grab the last user message from an LLM API request body.
