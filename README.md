@@ -29,7 +29,7 @@ Memories promote upward through access frequency (Ebbinghaus-style reinforcement
 # From source
 git clone https://github.com/kael-bit/engram && cd engram
 cargo build --release
-# Binary at ./target/release/engram (~4 MB)
+# Binary at ./target/release/engram (~6 MB)
 ```
 
 ### Run
@@ -63,7 +63,7 @@ curl -X POST http://localhost:3917/recall \
 open http://localhost:3917/ui
 ```
 
-Single binary, ~4 MB, <10 MB RSS. No Docker, no Python, no external database.
+Single binary, ~6 MB, <10 MB RSS. No Docker, no Python, no external database.
 
 ## Real-World Example
 
@@ -554,7 +554,7 @@ Per-component model overrides let you use cheap models for high-volume operation
 | **Contradiction Resolution** | Automatic (temporal supersede) | Graph-based | — | — |
 | **Injection Protection** | Built-in (detect + downrank + sanitize) | — | — | — |
 | **CJK Support** | Native bigram tokenization | Via embedding only | Via embedding only | Via embedding only |
-| **Binary Size** | ~4 MB | — | — | — |
+| **Binary Size** | ~6 MB | — | — | — |
 | **Runtime Memory** | <10 MB RSS | 100+ MB | 200+ MB | 200+ MB |
 | **Dependencies** | None (statically linked) | Python, Redis, vector DB | Python, PostgreSQL | Python, PostgreSQL |
 | **AI Required?** | Optional (FTS works without) | Yes | Yes | Yes |
