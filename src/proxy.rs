@@ -433,6 +433,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         tags.push("auto-extract".into());
 
         let content_copy = entry.content.clone();
+        let facts_input = entry.facts;
         let input = db::MemoryInput {
             content: entry.content,
             importance: entry.importance,
@@ -441,11 +442,26 @@ async fn extract_from_context(state: AppState, context: &str) {
             ..Default::default()
         };
 
-        if let Err(e) = state.db.insert(input) {
-            warn!("proxy: failed to store: {e}");
-        } else {
-            batch_contents.push(content_copy);
-            stored += 1;
+        match state.db.insert(input) {
+            Ok(mem) => {
+                // Store extracted fact triples linked to this memory
+                if let Some(facts) = facts_input {
+                    if !facts.is_empty() {
+                        let linked: Vec<db::FactInput> = facts.into_iter().map(|mut f| {
+                            f.memory_id = Some(mem.id.clone());
+                            f
+                        }).collect();
+                        if let Err(e) = state.db.insert_facts(linked, &mem.namespace) {
+                            warn!("proxy: failed to store facts: {e}");
+                        }
+                    }
+                }
+                batch_contents.push(content_copy);
+                stored += 1;
+            }
+            Err(e) => {
+                warn!("proxy: failed to store: {e}");
+            }
         }
     }
 
@@ -606,4 +622,6 @@ struct ExtractionEntry {
     #[serde(default)]
     tags: Vec<String>,
     importance: Option<f64>,
+    #[serde(default)]
+    facts: Option<Vec<db::FactInput>>,
 }

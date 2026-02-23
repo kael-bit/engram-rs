@@ -267,6 +267,26 @@ pub fn recall(
         }
     }
 
+    // Fact-based recall: query the facts table for matching entities,
+    // then pull linked memories at high relevance (exact knowledge match)
+    if !req.query.is_empty() {
+        let fact_ns = req.namespace.as_deref().unwrap_or("default");
+        if let Ok(facts) = db.query_facts(&req.query, fact_ns, false) {
+            for fact in &facts {
+                if seen.contains(&fact.memory_id) {
+                    continue;
+                }
+                if let Ok(Some(mem)) = db.get(&fact.memory_id) {
+                    if !passes_filters(&mem) {
+                        continue;
+                    }
+                    seen.insert(fact.memory_id.clone());
+                    scored.push(score_memory(&mem, 1.0));
+                }
+            }
+        }
+    }
+
     // Sort based on requested order
     match sort_by {
         "recent" => scored.sort_by(|a, b| {

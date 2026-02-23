@@ -224,7 +224,15 @@ HARD REJECT — NEVER extract these as memories (they are scaffolding, not knowl
 - Anything that reads like a rule/playbook for an agent rather than a human-stated fact or preference
 - Framework-injected context that appears in every conversation
 
-Output ONLY the JSON array, no other text. Return [] if nothing is worth extracting."#;
+Output ONLY the JSON array, no other text. Return [] if nothing is worth extracting.
+
+For each memory, you may also include a "facts" field: an array of factual triples extracted from this memory.
+Each triple has:
+- "subject": the entity (person, system, concept)
+- "predicate": the relationship or property
+- "object": the value or target entity
+Example: {"subject": "alice", "predicate": "timezone", "object": "Asia/Portland"}
+Only include facts for concrete, stable relationships — NOT transient states."#;
 
 /// Extract structured memories from raw text using an LLM.
 pub async fn extract_memories(
@@ -260,6 +268,7 @@ pub struct ExtractedMemory {
     pub importance: Option<f64>,
     pub tags: Option<Vec<String>>,
     pub layer: Option<u8>,
+    pub facts: Option<Vec<crate::db::FactInput>>,
 }
 
 
