@@ -65,6 +65,47 @@ open http://localhost:3917/ui
 
 Single binary, ~4 MB, <10 MB RSS. No Docker, no Python, no external database.
 
+## Real-World Example
+
+Here's what a typical agent session looks like with engram:
+
+```
+# Agent wakes up — first thing, restore context
+$ curl -s localhost:3917/resume?hours=6&compact=true | jq .
+
+core: [
+  {"content": "I'm Atlas, a memory-augmented assistant."},
+  {"content": "Lesson: never commit internal docs to public repos"},
+  {"content": "Lesson: deployment must be atomic — stop && cp && start in one command"}
+]
+working: [
+  {"content": "Currently building engram v0.6 — fact triples + contradiction resolution"}
+]
+next_actions: [
+  {"content": "Next: write integration tests for facts API"}
+]
+
+# Agent knows who it is, what it was doing, and what to do next.
+
+# During work — user says something important
+> User: "from now on, always use Rust instead of Python for new projects"
+
+$ curl -sX POST localhost:3917/memories \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "user preference: always use Rust over Python for new projects", "importance": 0.9}'
+
+# Before deploying — check safety triggers
+$ curl -s localhost:3917/triggers/deploy
+[{"content": "Lesson: deployment must be atomic — stop && cp && start in one command"}]
+
+# Session ending — store continuity
+$ curl -sX POST localhost:3917/memories \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "Session: added fact triple API, all tests pass. Next: write contradiction resolution tests.", "tags": ["session"]}'
+```
+
+No setup, no config files, no framework integration. Just HTTP calls.
+
 ## Setup Guides
 
 ### Claude Code
@@ -102,19 +143,28 @@ Then add to your project's `CLAUDE.md` (or system prompt):
 ```markdown
 ## Memory
 
-You have access to engram, a persistent memory system.
+You have persistent memory via engram MCP tools.
 
-On session start:
-- Call `engram_resume` to restore context from previous sessions.
+### Every session start
+Call `engram_resume` with hours=6 to restore context. Read the core and working sections — that's who you are and what you were doing.
 
-During conversation:
-- Use `engram_store` for important facts, decisions, and preferences.
-- Use `engram_recall` when you need to remember something.
+### During conversation
+- Decisions, preferences, lessons learned → `engram_store` immediately. Don't wait.
+- "Remember this" from the user → `engram_store` with importance=0.9.
+- Need context → `engram_recall` with the question as query.
+- Before risky operations (git push, deploy, send message) → `engram_triggers` with the action name.
 
-On session end:
-- Store a summary of what was done and next steps via `engram_store`.
+### Before session ends
+Store a session summary via `engram_store`:
+- What you did this session
+- What was decided
+- What to do next (critical — without this you'll wake up lost)
+Tags: "session". This is how you maintain continuity across sessions.
 
-Use `engram_extract` to bulk-process conversation logs into memories.
+### What NOT to store
+- Routine task details ("ran cargo build, it passed")
+- Things already in project files
+- Transient operational status
 ```
 
 #### Option B: LLM Proxy (zero-config)
@@ -180,23 +230,50 @@ All conversations between OpenClaw agents and Anthropic models now flow through 
 For explicit memory operations, add instructions to your workspace files:
 
 ```markdown
-<!-- AGENTS.md or SOUL.md -->
+<!-- AGENTS.md or HEARTBEAT.md -->
 ## Memory
 
-You have access to engram at http://localhost:3917.
+engram is your memory. Without it, every session starts from zero.
 
-On session start:
+### Every wake-up / heartbeat
+Restore context first — nothing else matters until you know who you are:
   curl -s http://localhost:3917/resume?hours=6&compact=true
 
-Store important findings:
+Read the core section (identity, constraints, lessons) and working section (active context).
+If there are next_actions, that's your todo list.
+
+### Storing memories
+Important facts, decisions, lessons:
   curl -X POST http://localhost:3917/memories \
     -H 'Content-Type: application/json' \
-    -d '{"content": "...", "tags": ["topic"]}'
+    -d '{"content": "user prefers direct answers, no filler", "tags": ["preference"]}'
 
-Recall context:
-  curl -X POST http://localhost:3917/recall \
+Lessons from mistakes (with trigger for pre-action recall):
+  curl -X POST http://localhost:3917/memories \
     -H 'Content-Type: application/json' \
-    -d '{"query": "..."}'
+    -d '{"content": "never force-push to main", "tags": ["lesson","trigger:git-push"]}'
+
+User explicitly says "remember this":
+  curl -X POST http://localhost:3917/memories \
+    -H 'Content-Type: application/json' \
+    -d '{"content": "...", "importance": 0.9}'
+
+### Before risky operations
+  curl -s http://localhost:3917/triggers/git-push
+  curl -s http://localhost:3917/triggers/deploy
+
+### Before session ends / compaction
+Store what you did and what comes next:
+  curl -X POST http://localhost:3917/memories \
+    -H 'Content-Type: application/json' \
+    -d '{"content": "Session: refactored auth module, decided to use JWT. Next: write integration tests.", "tags": ["session"]}'
+
+Without the "next" part, you'll wake up not knowing what to do.
+
+### Don't store
+- Routine ops ("ran tests, passed")
+- Things already in code/config files
+- Transient status that won't matter tomorrow
 ```
 
 ### Cursor / Windsurf / Other Editors
