@@ -95,8 +95,9 @@ server.tool(
     source: z.string().optional().describe("Filter by source (e.g. session, extract, api)"),
     tags: z.array(z.string()).optional().describe("Filter by tags (must have ALL specified)"),
     namespace: z.string().optional().describe("Filter by namespace"),
+    min_score: z.number().min(0).max(1).optional().describe("Drop results below this score (0-1)"),
   },
-  async ({ query, budget_tokens, layers, min_importance, limit, since, until, sort_by, rerank, expand, source, tags, namespace }) => {
+  async ({ query, budget_tokens, layers, min_importance, limit, since, until, sort_by, rerank, expand, source, tags, namespace, min_score }) => {
     const body: Record<string, unknown> = { query };
     if (budget_tokens !== undefined) body.budget_tokens = budget_tokens;
     if (layers !== undefined) body.layers = layers;
@@ -110,6 +111,7 @@ server.tool(
     if (source !== undefined) body.source = source;
     if (tags !== undefined) body.tags = tags;
     if (namespace !== undefined) body.namespace = namespace;
+    if (min_score !== undefined) body.min_score = min_score;
 
     const result = await engramFetch("/recall", body);
     return {

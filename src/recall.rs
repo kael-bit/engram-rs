@@ -14,8 +14,9 @@ const WEIGHT_IMPORTANCE: f64 = 0.3;
 const WEIGHT_RECENCY: f64 = 0.25;
 
 /// Recall request parameters.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct RecallRequest {
+    #[serde(default)]
     pub query: String,
     pub budget_tokens: Option<usize>,
     pub layers: Option<Vec<u8>>,
@@ -37,6 +38,8 @@ pub struct RecallRequest {
     pub namespace: Option<String>,
     /// Expand query with LLM-generated synonyms for better coverage.
     pub expand: Option<bool>,
+    /// Drop results below this score threshold (0.0-1.0).
+    pub min_score: Option<f64>,
 }
 
 /// Recall response with scored memories and metadata.
@@ -261,8 +264,12 @@ pub fn recall(
     let mut selected = Vec::new();
     let mut total_tokens = 0;
     let mut breakdown = HashMap::new();
+    let min_score = req.min_score.unwrap_or(0.0);
 
     for sm in scored {
+        if sm.score < min_score {
+            continue;
+        }
         let tokens = estimate_tokens(&sm.memory.content);
         if total_tokens + tokens > budget {
             // always return at least one result, unless budget is explicitly 0
@@ -468,6 +475,7 @@ mod tests {
             rerank: None, source: None, tags: None,
             namespace: None,
             expand: None,
+            ..Default::default()
         };
         let result = recall(&db, &req, None, None);
         assert!(result.memories.len() >= 2);
@@ -492,6 +500,7 @@ mod tests {
             rerank: None, source: None, tags: None,
             namespace: None,
             expand: None,
+            ..Default::default()
         };
         let result = recall(&db, &req, None, None);
         assert!(result.memories.len() <= 2, "budget should limit results");
@@ -513,6 +522,7 @@ mod tests {
             rerank: None, source: None, tags: None,
             namespace: None,
             expand: None,
+            ..Default::default()
         };
         let result = recall(&db, &req, None, None);
         assert!(result.memories.is_empty());
@@ -566,6 +576,7 @@ mod tests {
             rerank: None, source: None, tags: None,
             namespace: None,
             expand: None,
+            ..Default::default()
         };
         let result = recall(&db, &req, None, None);
         assert_eq!(result.memories.len(), 1);
@@ -602,6 +613,7 @@ mod tests {
             source: Some("session".into()), tags: None,
             namespace: None,
             expand: None,
+            ..Default::default()
         };
         let result = recall(&db, &req, None, None);
         assert_eq!(result.memories.len(), 1);
@@ -638,6 +650,7 @@ mod tests {
             source: None, tags: Some(vec!["rust".into()]),
             namespace: None,
             expand: None,
+            ..Default::default()
         };
         let result = recall(&db, &req, None, None);
         assert_eq!(result.memories.len(), 1);

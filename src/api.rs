@@ -106,7 +106,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /resume?hours=4": "session recovery (identity + recent + sessions)",
             "POST /consolidate": "run maintenance cycle",
             "POST /extract": "LLM-extract memories from text",
-            "GET /export": "export all memories as JSON",
+            "GET /export": "export all memories (?embed=true to include vectors)",
             "POST /import": "import memories from JSON",
         },
     }))
@@ -763,9 +763,11 @@ async fn do_extract(
 
 async fn do_export(
     State(state): State<AppState>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
+    let include_embed = q.get("embed").map(|v| v == "true" || v == "1").unwrap_or(false);
     let db = state.db.clone();
-    let memories = tokio::task::spawn_blocking(move || db.export_all())
+    let memories = tokio::task::spawn_blocking(move || db.export_with_embeddings(include_embed))
         .await
         .map_err(|e| EngramError::Internal(e.to_string()))??;
 

@@ -78,7 +78,7 @@ pub struct Memory {
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "is_default_ns")]
     pub namespace: String,
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Vec<f64>>,
 }
 
@@ -988,16 +988,17 @@ impl MemoryDB {
     /// Export all memories as a JSON-serializable vec (for backup/migration).
     /// Embeddings are excluded to keep exports portable.
     pub fn export_all(&self) -> Result<Vec<Memory>, EngramError> {
+        self.export_with_embeddings(false)
+    }
+
+    pub fn export_with_embeddings(&self, include: bool) -> Result<Vec<Memory>, EngramError> {
         let conn = self.conn();
         let mut stmt = conn
             .prepare("SELECT * FROM memories ORDER BY created_at ASC")?;
+        let mapper = if include { row_to_memory_with_embedding } else { row_to_memory };
         let rows = stmt
-            .query_map([], row_to_memory)?
+            .query_map([], mapper)?
             .filter_map(|r| r.ok())
-            .map(|mut m| {
-                m.embedding = None; // strip embeddings from export
-                m
-            })
             .collect();
         Ok(rows)
     }
