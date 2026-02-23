@@ -368,25 +368,34 @@ async fn list_memories(
 struct SearchQuery {
     q: String,
     limit: Option<usize>,
+    ns: Option<String>,
 }
 
 async fn quick_search(
     State(state): State<AppState>,
-    Query(sq): Query<SearchQuery>,
+    headers: axum::http::HeaderMap,
+    Query(mut sq): Query<SearchQuery>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     if sq.q.trim().is_empty() {
         return Err(EngramError::EmptyQuery);
     }
+    if sq.ns.is_none() {
+        sq.ns = get_namespace(&headers);
+    }
     let limit = sq.limit.unwrap_or(10).min(50);
+    let ns_filter = sq.ns;
     let db = state.db.clone();
     let query = sq.q.clone();
     let results = tokio::task::spawn_blocking(move || {
         let d = db;
         let hits = d.search_fts(&query, limit);
-        let memories: Vec<db::Memory> = hits
+        let mut memories: Vec<db::Memory> = hits
             .into_iter()
             .filter_map(|(id, _)| d.get(&id).ok().flatten())
             .collect();
+        if let Some(ref ns) = ns_filter {
+            memories.retain(|m| m.namespace == *ns);
+        }
         memories
     })
     .await
