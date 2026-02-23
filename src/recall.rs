@@ -86,6 +86,7 @@ fn recency_score(last_accessed: i64, decay_rate: f64) -> f64 {
     (-decay_rate * hours / 168.0).exp()
 }
 
+#[cfg(test)]
 fn score_combined(importance: f64, relevance: f64, last_accessed: i64) -> f64 {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -214,7 +215,10 @@ pub fn recall(
             if let Some(sm) = scored.iter_mut().find(|s| s.memory.id == *id) {
                 let boost = 1.0 + fts_rel * 0.3;  // 1.0 to 1.3x multiplier
                 sm.relevance = (sm.relevance * boost).min(1.5);
-                sm.score = score_combined(sm.memory.importance, sm.relevance, sm.memory.created_at);
+                // rescore using the full scoring formula (decay_rate + layer bonus)
+                let rescored = score_memory(&sm.memory, sm.relevance);
+                sm.score = rescored.score;
+                sm.recency = rescored.recency;
             }
             continue;
         }
