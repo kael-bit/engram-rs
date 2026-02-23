@@ -194,6 +194,8 @@ Now every conversation flows through engram. It forwards requests transparently 
 
 > **Note:** The proxy only handles **writing** — it captures memories from conversations automatically. For the agent to **read** memories back (resume, recall, search), you need either MCP tools (Option A) or prompt instructions that call the HTTP API directly (e.g., `curl` in CLAUDE.md). **The proxy alone does not give the agent memory recall.**
 
+**Controlling extraction:** Set the `X-Engram-Extract: false` header on requests where you don't want memory extraction (e.g., sub-agent or tool-use traffic). The proxy also auto-detects common sub-agent patterns as a fallback.
+
 #### Option A + B Combined (recommended)
 
 Automatic extraction from all conversations, plus explicit tools for recall and precise control:
