@@ -84,6 +84,7 @@ pub fn router(state: AppState) -> Router {
         .route("/search", get(quick_search))
         .route("/recent", get(list_recent))
         .route("/resume", get(do_resume))
+        .route("/triggers/{action}", get(get_triggers))
         .route("/consolidate", post(do_consolidate))
         .route("/repair", post(do_repair))
         .route("/vacuum", post(do_vacuum))
@@ -143,6 +144,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /search?q=term": "quick keyword search",
             "GET /recent?hours=2": "recent memories by time",
             "GET /resume?hours=4": "session recovery (identity + recent + sessions)",
+            "GET /triggers/:action": "pre-action recall (e.g. /triggers/git-push)",
             "POST /consolidate": "run maintenance cycle",
             "POST /repair": "auto-repair FTS index (remove orphans, rebuild missing)",
             "POST /vacuum": "reclaim disk space (?full=true for full vacuum)",
@@ -561,6 +563,39 @@ async fn list_recent(
 struct ResumeQuery {
     hours: Option<f64>,
     ns: Option<String>,
+}
+
+/// Fetch memories tagged with `trigger:{action}`. Used for pre-action
+/// safety checks — e.g. before `git push`, recall lessons about what
+/// not to commit.
+async fn get_triggers(
+    State(state): State<AppState>,
+    Path(action): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let ns = get_namespace(&headers);
+    let tag = format!("trigger:{action}");
+    let db = state.db.clone();
+    let db2 = state.db.clone();
+
+    let memories: Vec<db::Memory> = blocking(move || {
+        let all = db.list_all(10000, 0).unwrap_or_default();
+        all.into_iter()
+            .filter(|m| m.tags.iter().any(|t| t == &tag))
+            .filter(|m| ns.as_ref().is_none_or(|n| &m.namespace == n))
+            .collect()
+    }).await?;
+
+    // touch each trigger memory so it reinforces over time
+    for m in &memories {
+        let _ = db2.touch(&m.id);
+    }
+
+    Ok(Json(serde_json::json!({
+        "action": action,
+        "count": memories.len(),
+        "memories": memories,
+    })))
 }
 
 async fn do_resume(
@@ -1443,5 +1478,48 @@ mod tests {
         let j = body_json(resp).await;
         assert!(j["freed_bytes"].is_number());
         assert_eq!(j["mode"], "incremental");
+    }
+
+    #[tokio::test]
+    async fn triggers_returns_matching_memories() {
+        let app = router(test_state(None));
+
+        // Create a memory with trigger tag
+        let body = serde_json::json!({
+            "content": "never commit internal docs to public repos",
+            "tags": ["lesson", "trigger:git-push"]
+        });
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        // Create a non-trigger memory
+        let body2 = serde_json::json!({"content": "unrelated note"});
+        app.clone().oneshot(json_req("POST", "/memories", body2)).await.unwrap();
+
+        // Query triggers for git-push
+        let resp = app.clone().oneshot(
+            Request::builder()
+                .uri("/triggers/git-push")
+                .header("Authorization", "Bearer test-key")
+                .body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert_eq!(j["action"], "git-push");
+        assert_eq!(j["count"], 1);
+        assert!(j["memories"][0]["content"].as_str().unwrap().contains("internal docs"));
+    }
+
+    #[tokio::test]
+    async fn triggers_empty_when_no_match() {
+        let app = router(test_state(None));
+        let resp = app.oneshot(
+            Request::builder()
+                .uri("/triggers/nonexistent-action")
+                .header("Authorization", "Bearer test-key")
+                .body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert_eq!(j["count"], 0);
     }
 }
