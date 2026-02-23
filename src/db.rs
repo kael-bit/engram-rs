@@ -814,6 +814,31 @@ impl MemoryDB {
         Ok(rows)
     }
 
+    /// List memories that have a specific tag (exact match).
+    pub fn list_by_tag(&self, tag: &str, ns: Option<&str>) -> Result<Vec<Memory>, EngramError> {
+        let pattern = format!("%\"{}\"%", tag.replace('"', ""));
+        let conn = self.conn()?;
+        if let Some(ns) = ns {
+            let mut stmt = conn.prepare(
+                "SELECT * FROM memories WHERE tags LIKE ?1 AND namespace = ?2 \
+                 ORDER BY created_at DESC",
+            )?;
+            let rows = stmt.query_map(params![pattern, ns], row_to_memory)?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT * FROM memories WHERE tags LIKE ?1 \
+                 ORDER BY created_at DESC",
+            )?;
+            let rows = stmt.query_map(params![pattern], row_to_memory)?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        }
+    }
+
     /// Find memories whose decay score has fallen below a threshold.
     pub fn get_decayed(&self, threshold: f64) -> Vec<Memory> {
         let now = now_ms();
