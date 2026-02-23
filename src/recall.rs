@@ -192,16 +192,18 @@ pub fn recall(
         let semantic_results = db.search_semantic_ns(qemb, limit * 3, req.namespace.as_deref());
         if !semantic_results.is_empty() {
             search_mode = "semantic+fts".to_string();
-            let max_sim = semantic_results
-                .iter()
-                .map(|r| r.1)
-                .fold(0.001_f64, f64::max);
+            // Apply min_score as cosine similarity floor.
+            // Default 0.3 filters noise from short/vague queries.
+            let sim_floor = req.min_score.unwrap_or(0.3);
             for (id, sim) in &semantic_results {
+                if *sim < sim_floor {
+                    continue;
+                }
                 if let Ok(Some(mem)) = db.get(id) {
                     if !passes_filters(&mem) {
                         continue;
                     }
-                    let relevance = sim / max_sim;
+                    let relevance = *sim;
                     seen.insert(id.clone());
                     scored.push(score_memory(&mem, relevance));
                 }
@@ -257,19 +259,7 @@ pub fn recall(
         }
     }
 
-    // Pad with unseen core memories when we don't have enough hits.
-    // Low relevance=0.1 means they won't outrank real matches.
-    if scored.len() < limit {
-        for mem in db.list_by_layer(Layer::Core, (limit - scored.len()) * 3, 0) {
-            if seen.contains(&mem.id) {
-                continue;
-            }
-            if !passes_filters(&mem) {
-                continue;
-            }
-            scored.push(score_memory(&mem, 0.1));
-        }
-    }
+    // Don't pad with unrelated core memories — they add noise.
 
     // Fact-based recall: query the facts table for matching entities,
     // then pull linked memories at high relevance (exact knowledge match)
