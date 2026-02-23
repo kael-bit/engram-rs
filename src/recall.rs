@@ -86,6 +86,17 @@ fn recency_score(last_accessed: i64, decay_rate: f64) -> f64 {
     (-decay_rate * hours / 168.0).exp()
 }
 
+fn score_combined(importance: f64, relevance: f64, last_accessed: i64) -> f64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let age_hours = ((now - last_accessed) as f64 / 3_600_000.0).max(0.0);
+    // simplified recency for rescore — uses default decay
+    let recency = (-0.1 * age_hours).exp();
+    WEIGHT_IMPORTANCE * importance + WEIGHT_RECENCY * recency + WEIGHT_RELEVANCE * relevance
+}
+
 fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {
     let recency = recency_score(mem.last_accessed, mem.decay_rate);
     let bonus = mem.layer.score_bonus();
@@ -196,16 +207,21 @@ pub fn recall(
     let max_bm25 = fts.iter().map(|r| r.1).fold(0.001_f64, f64::max);
 
     for (id, bm25) in &fts {
+        let fts_rel = bm25 / max_bm25;
         if seen.contains(id) {
+            // Boost: found by both semantic AND keyword — very likely relevant.
+            if let Some(sm) = scored.iter_mut().find(|s| s.memory.id == *id) {
+                sm.relevance = (sm.relevance + fts_rel * 0.3).min(1.0);
+                sm.score = score_combined(sm.memory.importance, sm.relevance, sm.memory.created_at);
+            }
             continue;
         }
         if let Ok(Some(mem)) = db.get(id) {
             if !passes_filters(&mem) {
                 continue;
             }
-            let relevance = bm25 / max_bm25;
             seen.insert(id.clone());
-            scored.push(score_memory(&mem, relevance));
+            scored.push(score_memory(&mem, fts_rel));
         }
     }
 
@@ -655,5 +671,18 @@ mod tests {
         let result = recall(&db, &req, None, None);
         assert_eq!(result.memories.len(), 1);
         assert!(result.memories[0].memory.content.contains("rust"));
+    }
+
+    #[test]
+    fn score_combined_recalc() {
+        // Verify the standalone score_combined function produces reasonable values
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        let recent = score_combined(0.8, 0.9, now);
+        let old = score_combined(0.8, 0.9, now - 72 * 3_600_000);
+        assert!(recent > old, "recent memory should score higher");
+        assert!(recent > 0.0);
     }
 }
