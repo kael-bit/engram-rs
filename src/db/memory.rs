@@ -1515,7 +1515,7 @@ mod tests {
     fn dedup_reinforces_existing_memory() {
         let db = test_db();
         let original = db.insert(MemoryInput::new(
-            "user prefers dark mode for all user interface applications and code editors"
+            "alice prefers dark mode for all user interface applications and code editors"
         )).unwrap();
         assert_eq!(original.access_count, 0);
         assert_eq!(original.repetition_count, 0);
@@ -1523,7 +1523,7 @@ mod tests {
 
         // Write near-duplicate — should reinforce via repetition, not create new
         let updated = db.insert(MemoryInput::new(
-            "user prefers dark mode for all user interface applications and text editors"
+            "alice prefers dark mode for all user interface applications and text editors"
         )).unwrap();
         assert_eq!(updated.id, original.id, "should update existing, not create new");
         assert_eq!(updated.access_count, 0, "recall counter should stay at 0");
@@ -1532,7 +1532,7 @@ mod tests {
 
         // Third repetition — repetition_count keeps climbing
         let again = db.insert(MemoryInput::new(
-            "user prefers dark mode for all user interface applications and code editors"
+            "alice prefers dark mode for all user interface applications and code editors"
         )).unwrap();
         assert_eq!(again.id, original.id, "third repetition should still match");
         assert_eq!(again.repetition_count, 2, "third rep should increment again");

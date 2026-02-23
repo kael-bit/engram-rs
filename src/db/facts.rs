@@ -269,9 +269,9 @@ mod tests {
     fn test_fact_conflict_detection() {
         let db = test_db();
         let m1 = db.insert(MemoryInput::new("alice lives in Portland")).unwrap();
-        let m2 = db.insert(MemoryInput::new("alice lives in Beijing")).unwrap();
+        let m2 = db.insert(MemoryInput::new("alice lives in Tokyo")).unwrap();
 
-        let (shanghai, _) = db.insert_fact(FactInput {
+        let (portland, _) = db.insert_fact(FactInput {
             subject: "alice".into(),
             predicate: "location".into(),
             object: "Portland".into(),
@@ -279,7 +279,7 @@ mod tests {
             valid_from: None,
         }, "default").unwrap();
 
-        let (beijing, superseded) = db.insert_fact(FactInput {
+        let (tokyo, superseded) = db.insert_fact(FactInput {
             subject: "alice".into(),
             predicate: "location".into(),
             object: "Tokyo".into(),
@@ -289,11 +289,11 @@ mod tests {
 
         // Portland should have been auto-superseded
         assert_eq!(superseded.len(), 1);
-        assert_eq!(superseded[0].id, shanghai.id);
+        assert_eq!(superseded[0].id, portland.id);
         assert!(superseded[0].valid_until.is_some());
-        assert_eq!(superseded[0].superseded_by.as_deref(), Some(beijing.id.as_str()));
+        assert_eq!(superseded[0].superseded_by.as_deref(), Some(tokyo.id.as_str()));
 
-        // get_conflicts returns all (including superseded), but only Beijing is active
+        // get_conflicts returns all (including superseded), but only Tokyo is active
         let all = db.get_conflicts("alice", "location", "default").unwrap();
         assert_eq!(all.len(), 2);
         let active: Vec<_> = all.iter().filter(|f| f.valid_until.is_none()).collect();
@@ -337,7 +337,7 @@ mod tests {
         db.insert_fact(FactInput {
             subject: "Alice".into(),
             predicate: "timezone".into(),
-            object: "Asia/Portland".into(),
+            object: "America/New_York".into(),
             memory_id: Some(mem.id.clone()),
             valid_from: None,
         }, "default").unwrap();
@@ -349,8 +349,8 @@ mod tests {
         let r2 = db.query_facts("ALICE", "default", false).unwrap();
         assert_eq!(r2.len(), 1, "'ALICE' should match 'Alice'");
 
-        let r3 = db.query_facts("asia/shanghai", "default", false).unwrap();
-        assert_eq!(r3.len(), 1, "'asia/shanghai' should match 'Asia/Portland'");
+        let r3 = db.query_facts("america/new_york", "default", false).unwrap();
+        assert_eq!(r3.len(), 1, "'america/new_york' should match 'America/New_York'");
 
         // Conflict detection is also case-insensitive
         let conflicts = db.get_conflicts("alice", "Timezone", "default").unwrap();

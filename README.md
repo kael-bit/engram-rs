@@ -74,7 +74,7 @@ Here's what a typical agent session looks like with engram:
 $ curl -s localhost:3917/resume?hours=6&compact=true | jq .
 
 core: [
-  {"content": "I'm Atlas, a memory-augmented assistant."},
+  {"content": "I'm Atlas, a memory-augmented assistant"},
   {"content": "Lesson: never commit internal docs to public repos"},
   {"content": "Lesson: deployment must be atomic — stop && cp && start in one command"}
 ]

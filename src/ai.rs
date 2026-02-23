@@ -231,7 +231,7 @@ Each triple has:
 - "subject": the entity (person, system, concept)
 - "predicate": the relationship or property
 - "object": the value or target entity
-Example: {"subject": "alice", "predicate": "timezone", "object": "Asia/Portland"}
+Example: {"subject": "alice", "predicate": "timezone", "object": "America/New_York"}
 Only include facts for concrete, stable relationships — NOT transient states.
 
 You may also include a "kind" field: "semantic" (facts/knowledge, default), "episodic" (events, time-bound), or "procedural" (how-to, instructions, workflows — these persist indefinitely)."#;
