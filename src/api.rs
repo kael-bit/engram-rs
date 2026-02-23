@@ -178,7 +178,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /resume?hours=4&workspace=tags&limit=100": "full memory bootstrap (core + working + buffer + recent + sessions)",
             "GET /triggers/:action": "pre-action recall (e.g. /triggers/git-push)",
             "POST /consolidate": "run maintenance cycle",
-            "POST /audit": "LLM-review Core memories, demote unworthy ones",
+            "POST /audit": "list all memories grouped by layer for review",
             "POST /repair": "auto-repair FTS index (remove orphans, rebuild missing)",
             "POST /vacuum": "reclaim disk space (?full=true for full vacuum)",
             "POST /extract": "LLM-extract memories from text",
@@ -371,7 +371,10 @@ async fn get_memory(
     Path(id): Path<String>,
 ) -> Result<Json<db::Memory>, EngramError> {
     let db = state.db.clone();
-    let mem = blocking(move || db.get(&id))
+    let mem = blocking(move || {
+        let full_id = db.resolve_prefix(&id)?;
+        db.get(&full_id)
+    })
         .await??;
     mem.ok_or(EngramError::NotFound).map(Json)
 }
@@ -391,8 +394,9 @@ async fn update_memory(
 ) -> Result<Json<db::Memory>, EngramError> {
     let db = state.db.clone();
     let mem = blocking(move || {
+        let full_id = db.resolve_prefix(&id)?;
         db.update_fields(
-            &id,
+            &full_id,
             body.content.as_deref(),
             body.layer,
             body.importance,
@@ -409,7 +413,10 @@ async fn delete_memory(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
-    let deleted = blocking(move || db.delete(&id))
+    let deleted = blocking(move || {
+        let full_id = db.resolve_prefix(&id)?;
+        db.delete(&full_id)
+    })
         .await??;
 
     if deleted {

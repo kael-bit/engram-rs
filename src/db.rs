@@ -699,6 +699,26 @@ impl MemoryDB {
         }
     }
 
+    /// Resolve a short ID prefix to a full UUID.
+    /// If the input is already a full UUID (36+ chars), returns it as-is.
+    /// Returns NotFound if no match, Validation error if ambiguous.
+    pub fn resolve_prefix(&self, prefix: &str) -> Result<String, EngramError> {
+        if prefix.len() >= 36 {
+            return Ok(prefix.to_string());
+        }
+        let conn = self.conn()?;
+        let pattern = format!("{}%", prefix);
+        let mut stmt = conn.prepare("SELECT id FROM memories WHERE id LIKE ?1 LIMIT 2")?;
+        let ids: Vec<String> = stmt.query_map(params![pattern], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        match ids.len() {
+            0 => Err(EngramError::NotFound),
+            1 => Ok(ids.into_iter().next().unwrap()),
+            _ => Err(EngramError::Validation(format!("prefix '{}' matches multiple memories", prefix))),
+        }
+    }
+
     pub fn delete(&self, id: &str) -> Result<bool, EngramError> {
         let n = self.conn()?.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
         if n > 0 {
@@ -2258,5 +2278,21 @@ mod tests {
         // Default (no importance) → Buffer
         let def = db.insert(MemoryInput::new("default importance test")).unwrap();
         assert_eq!(def.layer, Layer::Buffer);
+    }
+
+    #[test]
+    fn resolve_prefix_works() {
+        let db = test_db();
+        let m = db.insert(MemoryInput::new("prefix test")).unwrap();
+        let prefix = &m.id[..8];
+
+        // Exact match
+        assert_eq!(db.resolve_prefix(&m.id).unwrap(), m.id);
+
+        // Prefix match
+        assert_eq!(db.resolve_prefix(prefix).unwrap(), m.id);
+
+        // No match
+        assert!(db.resolve_prefix("zzzzz").is_err());
     }
 }
