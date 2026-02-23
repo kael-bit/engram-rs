@@ -608,6 +608,7 @@ mod tests {
             namespace: "default".into(),
             embedding: None,
             risk_score: 0.0,
+            kind: "semantic".into(),
         };
         let recent = Memory {
             id: "new-one".into(),
@@ -624,6 +625,7 @@ mod tests {
             namespace: "default".into(),
             embedding: None,
             risk_score: 0.0,
+            kind: "semantic".into(),
         };
         db.import(&[old, recent]).unwrap();
 

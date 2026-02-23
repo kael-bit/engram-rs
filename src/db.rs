@@ -86,6 +86,16 @@ pub struct Memory {
     pub embedding: Option<Vec<f64>>,
     #[serde(skip)]
     pub risk_score: f64,
+    #[serde(default = "default_kind", skip_serializing_if = "is_default_kind")]
+    pub kind: String,
+}
+
+fn is_default_kind(k: &str) -> bool {
+    k == "semantic"
+}
+
+fn default_kind() -> String {
+    "semantic".into()
 }
 
 fn is_default_ns(ns: &str) -> bool {
@@ -116,6 +126,9 @@ pub struct MemoryInput {
     /// Wait for embedding to be generated before returning (default: false/async).
     #[serde(default)]
     pub sync_embed: Option<bool>,
+    /// Memory kind: "semantic" (default), "episodic", or "procedural".
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 impl MemoryInput {
@@ -158,6 +171,11 @@ impl MemoryInput {
 
     pub fn namespace(mut self, ns: impl Into<String>) -> Self {
         self.namespace = Some(ns.into());
+        self
+    }
+
+    pub fn kind(mut self, k: impl Into<String>) -> Self {
+        self.kind = Some(k.into());
         self
     }
 }
@@ -223,6 +241,14 @@ pub struct Stats {
     pub buffer: usize,
     pub working: usize,
     pub core: usize,
+    pub by_kind: KindStats,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct KindStats {
+    pub semantic: usize,
+    pub episodic: usize,
+    pub procedural: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -322,7 +348,8 @@ CREATE TABLE IF NOT EXISTS memories (
     tags TEXT NOT NULL DEFAULT '[]',
     namespace TEXT NOT NULL DEFAULT 'default',
     embedding BLOB,
-    risk_score REAL NOT NULL DEFAULT 0.0
+    risk_score REAL NOT NULL DEFAULT 0.0,
+    kind TEXT NOT NULL DEFAULT 'semantic'
 );
 
 CREATE INDEX IF NOT EXISTS idx_layer ON memories(layer);
@@ -425,6 +452,9 @@ impl MemoryDB {
             conn.execute("ALTER TABLE facts ADD COLUMN valid_from INTEGER", [])?;
             conn.execute("ALTER TABLE facts ADD COLUMN valid_until INTEGER", [])?;
             conn.execute("ALTER TABLE facts ADD COLUMN superseded_by TEXT", [])?;
+        }
+        if conn.prepare("SELECT kind FROM memories LIMIT 0").is_err() {
+            conn.execute("ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'semantic'", [])?;
         }
         drop(conn);
         let db = Self { pool, vec_index: RwLock::new(HashMap::new()) };
@@ -642,6 +672,9 @@ impl MemoryDB {
         let mut tags = input.tags.unwrap_or_default();
 
         let namespace = input.namespace.unwrap_or_else(|| "default".into());
+        let kind = input.kind.unwrap_or_else(|| "semantic".into());
+
+        let decay = if kind == "procedural" { 0.01 } else { layer.default_decay() };
 
         let risk_score = crate::safety::assess_injection_risk(&input.content);
         if risk_score >= 0.7 && !tags.contains(&"suspicious".to_string()) {
@@ -652,8 +685,8 @@ impl MemoryDB {
         self.conn()?.execute(
             "INSERT INTO memories \
              (id, content, layer, importance, created_at, last_accessed, \
-              access_count, decay_rate, source, tags, namespace, risk_score) \
-             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11)",
+              access_count, decay_rate, source, tags, namespace, risk_score, kind) \
+             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11,?12)",
             params![
                 id,
                 input.content,
@@ -661,11 +694,12 @@ impl MemoryDB {
                 importance,
                 now,
                 now,
-                layer.default_decay(),
+                decay,
                 source,
                 tags_json,
                 namespace,
-                risk_score
+                risk_score,
+                kind,
             ],
         )?;
 
@@ -689,12 +723,13 @@ impl MemoryDB {
             last_accessed: now,
             access_count: 0,
             repetition_count: 0,
-            decay_rate: layer.default_decay(),
+            decay_rate: decay,
             source,
             tags,
             namespace,
             embedding: None,
             risk_score,
+            kind,
         })
     }
 
@@ -727,6 +762,9 @@ impl MemoryDB {
                 let source = input.source.unwrap_or_else(|| "api".into());
                 let mut tags = input.tags.unwrap_or_default();
                 let namespace = input.namespace.unwrap_or_else(|| "default".into());
+                let kind = input.kind.unwrap_or_else(|| "semantic".into());
+
+                let decay = if kind == "procedural" { 0.01 } else { layer.default_decay() };
 
                 let risk_score = crate::safety::assess_injection_risk(&input.content);
                 if risk_score >= 0.7 && !tags.contains(&"suspicious".to_string()) {
@@ -737,11 +775,11 @@ impl MemoryDB {
                 conn.execute(
                     "INSERT INTO memories \
                      (id, content, layer, importance, created_at, last_accessed, \
-                      access_count, decay_rate, source, tags, namespace, risk_score) \
-                     VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11)",
+                      access_count, decay_rate, source, tags, namespace, risk_score, kind) \
+                     VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11,?12)",
                     params![
                         id, input.content, layer_val, importance, now, now,
-                        layer.default_decay(), source, tags_json, namespace, risk_score
+                        decay, source, tags_json, namespace, risk_score, kind
                     ],
                 )?;
                 let processed = append_cjk_bigrams(&input.content);
@@ -759,12 +797,13 @@ impl MemoryDB {
                     last_accessed: now,
                     access_count: 0,
                     repetition_count: 0,
-                    decay_rate: layer.default_decay(),
+                    decay_rate: decay,
                     source,
                     tags,
                     namespace,
                     embedding: None,
                     risk_score,
+                    kind,
                 });
             }
             Ok(())
@@ -1161,7 +1200,7 @@ impl MemoryDB {
         let Ok(conn) = self.conn() else { return vec![]; };
         let Ok(mut stmt) = conn.prepare(
             "SELECT id, content, layer, importance, created_at, last_accessed, \
-             access_count, decay_rate, source, tags, namespace \
+             access_count, decay_rate, source, tags, namespace, kind \
              FROM memories WHERE layer = ?1 ORDER BY importance DESC LIMIT ?2 OFFSET ?3",
         ) else {
             return vec![];
@@ -1178,7 +1217,7 @@ impl MemoryDB {
         let Ok(conn) = self.conn() else { return vec![]; };
         let Ok(mut stmt) = conn.prepare(
             "SELECT id, content, layer, importance, created_at, last_accessed, \
-             access_count, decay_rate, source, tags, namespace \
+             access_count, decay_rate, source, tags, namespace, kind \
              FROM memories WHERE layer < 3",
         ) else {
             return vec![];
@@ -1328,6 +1367,7 @@ impl MemoryDB {
             buffer: 0,
             working: 0,
             core: 0,
+            by_kind: KindStats::default(),
         };
         let Ok(conn) = self.conn() else { return s; };
         let Ok(mut stmt) = conn
@@ -1350,11 +1390,27 @@ impl MemoryDB {
                 _ => {}
             }
         }
+
+        if let Ok(mut stmt) = conn.prepare("SELECT kind, COUNT(*) FROM memories GROUP BY kind") {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+            }) {
+                for r in rows.flatten() {
+                    match r.0.as_str() {
+                        "semantic" => s.by_kind.semantic = r.1,
+                        "episodic" => s.by_kind.episodic = r.1,
+                        "procedural" => s.by_kind.procedural = r.1,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         s
     }
 
     pub fn stats_ns(&self, ns: &str) -> Stats {
-        let mut s = Stats { total: 0, buffer: 0, working: 0, core: 0 };
+        let mut s = Stats { total: 0, buffer: 0, working: 0, core: 0, by_kind: KindStats::default() };
         let Ok(conn) = self.conn() else { return s; };
         let Ok(mut stmt) = conn.prepare(
             "SELECT layer, COUNT(*) FROM memories WHERE namespace = ?1 GROUP BY layer",
@@ -1375,6 +1431,24 @@ impl MemoryDB {
                 _ => {}
             }
         }
+
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT kind, COUNT(*) FROM memories WHERE namespace = ?1 GROUP BY kind",
+        ) {
+            if let Ok(rows) = stmt.query_map(params![ns], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+            }) {
+                for r in rows.flatten() {
+                    match r.0.as_str() {
+                        "semantic" => s.by_kind.semantic = r.1,
+                        "episodic" => s.by_kind.episodic = r.1,
+                        "procedural" => s.by_kind.procedural = r.1,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         s
     }
 
@@ -1767,8 +1841,8 @@ impl MemoryDB {
                 conn.execute(
                     "INSERT INTO memories \
                      (id, content, layer, importance, created_at, last_accessed, \
-                      access_count, repetition_count, decay_rate, source, tags, namespace, embedding, risk_score) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                      access_count, repetition_count, decay_rate, source, tags, namespace, embedding, risk_score, kind) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
                     params![
                         actual_id,
                         m.content,
@@ -1784,6 +1858,7 @@ impl MemoryDB {
                         m.namespace,
                         m.embedding.as_ref().map(|e| crate::ai::embedding_to_bytes(e)),
                         m.risk_score,
+                        m.kind,
                     ],
                 )?;
                 let processed = append_cjk_bigrams(&m.content);
@@ -1841,7 +1916,7 @@ fn row_to_memory_with_embedding(row: &rusqlite::Row) -> rusqlite::Result<Memory>
 
 /// Row mapper for queries that select explicit columns without `embedding`.
 /// Column order: id, content, layer, importance, created_at, last_accessed,
-/// access_count, decay_rate, source, tags, namespace
+/// access_count, decay_rate, source, tags, namespace, kind
 fn row_to_memory_meta(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
     let layer_val: u8 = row.get("layer")?;
     let tags_str: String = row.get("tags")?;
@@ -1860,6 +1935,7 @@ fn row_to_memory_meta(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
         namespace: row.get::<_, String>("namespace").unwrap_or_else(|_| "default".into()),
         embedding: None,
         risk_score: row.get::<_, f64>("risk_score").unwrap_or(0.0),
+        kind: row.get::<_, String>("kind").unwrap_or_else(|_| "semantic".into()),
     })
 }
 
@@ -1887,6 +1963,7 @@ fn row_to_memory_impl(row: &rusqlite::Row, include_embedding: bool) -> rusqlite:
         namespace: row.get::<_, String>("namespace").unwrap_or_else(|_| "default".into()),
         embedding,
         risk_score: row.get::<_, f64>("risk_score").unwrap_or(0.0),
+        kind: row.get::<_, String>("kind").unwrap_or_else(|_| "semantic".into()),
     })
 }
 
@@ -2887,5 +2964,43 @@ mod tests {
         // Chronological order
         assert!(history[0].created_at <= history[1].created_at);
         assert!(history[1].created_at <= history[2].created_at);
+    }
+
+    #[test]
+    fn test_procedural_low_decay() {
+        let db = test_db();
+        let mem = db.insert(
+            MemoryInput::new("how to deploy: run cargo build --release")
+                .kind("procedural")
+        ).unwrap();
+        assert_eq!(mem.kind, "procedural");
+        assert!((mem.decay_rate - 0.01).abs() < f64::EPSILON);
+
+        let got = db.get(&mem.id).unwrap().unwrap();
+        assert!((got.decay_rate - 0.01).abs() < f64::EPSILON);
+        assert_eq!(got.kind, "procedural");
+    }
+
+    #[test]
+    fn test_kind_default_semantic() {
+        let db = test_db();
+        let mem = db.insert(MemoryInput::new("the sky is blue")).unwrap();
+        assert_eq!(mem.kind, "semantic");
+        assert!((mem.decay_rate - Layer::Buffer.default_decay()).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_kind_in_output() {
+        let db = test_db();
+        db.insert(MemoryInput::new("episodic event happened").kind("episodic")).unwrap();
+        db.insert(MemoryInput::new("procedural steps to follow").kind("procedural")).unwrap();
+        db.insert(MemoryInput::new("semantic fact")).unwrap();
+
+        let all = db.list_all(100, 0).unwrap();
+        assert_eq!(all.len(), 3);
+        let kinds: Vec<&str> = all.iter().map(|m| m.kind.as_str()).collect();
+        assert!(kinds.contains(&"episodic"));
+        assert!(kinds.contains(&"procedural"));
+        assert!(kinds.contains(&"semantic"));
     }
 }

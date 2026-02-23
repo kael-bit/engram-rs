@@ -439,6 +439,7 @@ async fn extract_from_context(state: AppState, context: &str) {
             importance: entry.importance,
             source: Some("proxy".into()),
             tags: Some(tags),
+            kind: entry.kind,
             ..Default::default()
         };
 
@@ -624,4 +625,6 @@ struct ExtractionEntry {
     importance: Option<f64>,
     #[serde(default)]
     facts: Option<Vec<db::FactInput>>,
+    #[serde(default)]
+    kind: Option<String>,
 }

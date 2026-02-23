@@ -180,8 +180,9 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Buffer TTL — old L1 entries that weren't accessed enough get dropped.
     // Only rescue to Working if accessed at least half the promote threshold,
     // otherwise it wasn't important enough to keep.
+    // Procedural memories are exempt — they persist indefinitely.
     for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0) {
-        if promoted_ids.contains(&mem.id) {
+        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" {
             continue;
         }
         let age = now - mem.created_at;
@@ -201,8 +202,9 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     }
 
     // Drop decayed Buffer/Working entries — but skip anything we just promoted
+    // or procedural memories (they don't decay).
     for mem in db.get_decayed_meta(decay_threshold) {
-        if promoted_ids.contains(&mem.id) {
+        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" {
             continue;
         }
         if db.delete(&mem.id).unwrap_or(false) {
@@ -776,6 +778,7 @@ mod tests {
                 namespace: "default".into(),
                 embedding: None,
                 risk_score: 0.0,
+                kind: "semantic".into(),
             },
             emb,
         )
@@ -861,6 +864,7 @@ mod tests {
             namespace: "default".into(),
             embedding: None,
             risk_score: 0.0,
+            kind: "semantic".into(),
         }
     }
 

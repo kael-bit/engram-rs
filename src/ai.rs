@@ -232,7 +232,9 @@ Each triple has:
 - "predicate": the relationship or property
 - "object": the value or target entity
 Example: {"subject": "alice", "predicate": "timezone", "object": "Asia/Portland"}
-Only include facts for concrete, stable relationships — NOT transient states."#;
+Only include facts for concrete, stable relationships — NOT transient states.
+
+You may also include a "kind" field: "semantic" (facts/knowledge, default), "episodic" (events, time-bound), or "procedural" (how-to, instructions, workflows — these persist indefinitely)."#;
 
 /// Extract structured memories from raw text using an LLM.
 pub async fn extract_memories(
@@ -269,6 +271,7 @@ pub struct ExtractedMemory {
     pub tags: Option<Vec<String>>,
     pub layer: Option<u8>,
     pub facts: Option<Vec<crate::db::FactInput>>,
+    pub kind: Option<String>,
 }
 
 

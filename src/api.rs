@@ -140,7 +140,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let (s, integrity) = blocking(move || (db.stats(), db.integrity()))
         .await
         .unwrap_or((
-            db::Stats { total: 0, buffer: 0, working: 0, core: 0 },
+            db::Stats { total: 0, buffer: 0, working: 0, core: 0, by_kind: db::KindStats::default() },
             db::IntegrityReport::default(),
         ));
 
@@ -207,7 +207,7 @@ async fn stats(
         }
     })
     .await
-    .unwrap_or(db::Stats { total: 0, buffer: 0, working: 0, core: 0 });
+    .unwrap_or(db::Stats { total: 0, buffer: 0, working: 0, core: 0, by_kind: db::KindStats::default() });
     Json(s)
 }
 
@@ -1112,6 +1112,7 @@ async fn do_extract(
         skip_dedup: None,
         namespace: None,
         sync_embed: None,
+        kind: em.kind,
         };
 
         let db = state.db.clone();
