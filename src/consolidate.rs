@@ -146,6 +146,25 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
             }
     }
 
+    // Core capacity cap — if Core grows too large, demote the weakest
+    // memories back to Working. Core is "always loaded on resume", so
+    // it must stay small enough to fit in context.
+    let core_cap: usize = std::env::var("ENGRAM_CORE_CAP")
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(100);
+    let mut core_mems = db.list_by_layer_meta(Layer::Core, 10000, 0);
+    if core_mems.len() > core_cap {
+        // Sort by importance ascending — weakest first
+        core_mems.sort_by(|a, b| a.importance.partial_cmp(&b.importance).unwrap_or(std::cmp::Ordering::Equal));
+        let to_demote = core_mems.len() - core_cap;
+        for mem in core_mems.iter().take(to_demote) {
+            if db.demote(&mem.id, Layer::Working).is_ok() {
+                demoted += 1;
+                tracing::info!(id = %mem.id, importance = mem.importance,
+                    "core cap exceeded, demoted to Working");
+            }
+        }
+    }
+
     // Working → Core: collect candidates for LLM gate review.
     // Reinforcement score = access_count + repetition_count * 2.5
     // Repetition weighs 2.5x because restating > incidental recall hit.
