@@ -858,6 +858,25 @@ impl MemoryDB {
         }
     }
 
+    /// List memories missing embeddings, for backfill.
+    pub fn list_missing_embeddings(&self, limit: usize) -> Vec<(String, String)> {
+        let conn = match self.conn() {
+            Ok(c) => c,
+            Err(_) => return vec![],
+        };
+        let mut stmt = match conn.prepare(
+            "SELECT id, content FROM memories WHERE embedding IS NULL LIMIT ?1"
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map(params![limit as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    }
+
     /// Auto-repair FTS index: remove orphans and rebuild missing entries.
     /// Returns (orphans_removed, missing_rebuilt).
     pub fn repair_fts(&self) -> Result<(usize, usize), EngramError> {

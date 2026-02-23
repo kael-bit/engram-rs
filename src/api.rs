@@ -186,17 +186,29 @@ async fn stats(
 /// Fire-and-forget: generate embedding for a memory in the background.
 fn spawn_embed(db: crate::SharedDB, cfg: ai::AiConfig, id: String, content: String) {
     tokio::spawn(async move {
-        match ai::get_embeddings(&cfg, &[content]).await {
-            Ok(embs) if !embs.is_empty() => {
-                if let Some(emb) = embs.into_iter().next() {
-                    let _ = tokio::task::spawn_blocking(move || {
-                        db.set_embedding(&id, &emb)
-                    })
-                    .await;
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            match ai::get_embeddings(&cfg, std::slice::from_ref(&content)).await {
+                Ok(embs) if !embs.is_empty() => {
+                    if let Some(emb) = embs.into_iter().next() {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            db.set_embedding(&id, &emb)
+                        })
+                        .await;
+                    }
+                    return;
                 }
+                Err(e) if attempts < 3 => {
+                    warn!(error = %e, attempt = attempts, "embedding failed, retrying");
+                    tokio::time::sleep(std::time::Duration::from_secs(attempts * 2)).await;
+                }
+                Err(e) => {
+                    warn!(error = %e, id = %id, "embedding failed after 3 attempts");
+                    return;
+                }
+                _ => return,
             }
-            Err(e) => warn!(error = %e, "embedding generation failed"),
-            _ => {}
         }
     });
 }
@@ -208,18 +220,30 @@ fn spawn_embed_batch(db: crate::SharedDB, cfg: ai::AiConfig, items: Vec<(String,
     }
     tokio::spawn(async move {
         let texts: Vec<String> = items.iter().map(|(_, c)| c.clone()).collect();
-        match ai::get_embeddings(&cfg, &texts).await {
-            Ok(embs) => {
-                for (emb, (id, _)) in embs.into_iter().zip(items.iter()) {
-                    let db = db.clone();
-                    let id = id.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        db.set_embedding(&id, &emb)
-                    })
-                    .await;
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            match ai::get_embeddings(&cfg, &texts).await {
+                Ok(embs) => {
+                    for (emb, (id, _)) in embs.into_iter().zip(items.iter()) {
+                        let db = db.clone();
+                        let id = id.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            db.set_embedding(&id, &emb)
+                        })
+                        .await;
+                    }
+                    return;
+                }
+                Err(e) if attempts < 3 => {
+                    warn!(error = %e, attempt = attempts, "batch embedding failed, retrying");
+                    tokio::time::sleep(std::time::Duration::from_secs(attempts * 2)).await;
+                }
+                Err(e) => {
+                    warn!(error = %e, "batch embedding failed after 3 attempts");
+                    return;
                 }
             }
-            Err(e) => warn!(error = %e, "batch embedding failed"),
         }
     });
 }
@@ -836,9 +860,24 @@ async fn do_repair(
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
     let (orphans, rebuilt) = blocking(move || db.repair_fts()).await??;
+
+    // Backfill missing embeddings
+    let mut embed_backfilled = 0;
+    if let Some(cfg) = &state.ai {
+        let db2 = state.db.clone();
+        let missing: Vec<(String, String)> = blocking(move || {
+            Ok::<_, EngramError>(db2.list_missing_embeddings(500))
+        }).await??;
+        if !missing.is_empty() {
+            embed_backfilled = missing.len();
+            spawn_embed_batch(state.db.clone(), cfg.clone(), missing);
+        }
+    }
+
     Ok(Json(serde_json::json!({
         "orphans_removed": orphans,
         "fts_rebuilt": rebuilt,
+        "embed_backfill_queued": embed_backfilled,
     })))
 }
 
