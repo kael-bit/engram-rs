@@ -248,7 +248,12 @@ Tools: `engram_store`, `engram_recall`, `engram_recent`, `engram_resume`, `engra
 | `ENGRAM_API_KEY` | — | Bearer token auth (optional) |
 | `ENGRAM_LLM_URL` | — | Chat completions endpoint |
 | `ENGRAM_LLM_KEY` | — | LLM API key |
-| `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | Extraction model |
+| `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | Default LLM model (used by all components unless overridden) |
+| `ENGRAM_MERGE_MODEL` | *(LLM_MODEL)* | Model for memory merge during consolidation |
+| `ENGRAM_EXTRACT_MODEL` | *(LLM_MODEL)* | Model for `/extract` endpoint |
+| `ENGRAM_RERANK_MODEL` | *(LLM_MODEL)* | Model for recall re-ranking |
+| `ENGRAM_EXPAND_MODEL` | *(LLM_MODEL)* | Model for query expansion |
+| `ENGRAM_PROXY_MODEL` | *(LLM_MODEL)* | Model for proxy auto-extraction |
 | `ENGRAM_EMBED_URL` | *(derived from LLM)* | Embeddings endpoint |
 | `ENGRAM_EMBED_KEY` | *(same as LLM)* | Embeddings API key |
 | `ENGRAM_EMBED_MODEL` | `text-embedding-3-small` | Embedding model |
