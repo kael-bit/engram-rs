@@ -721,6 +721,48 @@ impl MemoryDB {
             .unwrap_or_default()
     }
 
+    /// Like `list_by_layer` but excludes the embedding blob.
+    /// Use this when you only need metadata — saves significant memory when
+    /// the DB has thousands of entries with 1536-dim embeddings.
+    pub fn list_by_layer_meta(&self, layer: Layer, limit: usize, offset: usize) -> Vec<Memory> {
+        let Ok(conn) = self.conn() else { return vec![]; };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT id, content, layer, importance, created_at, last_accessed, \
+             access_count, decay_rate, source, tags, namespace \
+             FROM memories WHERE layer = ?1 ORDER BY importance DESC LIMIT ?2 OFFSET ?3",
+        ) else {
+            return vec![];
+        };
+
+        stmt.query_map(params![layer as u8, limit as i64, offset as i64], row_to_memory_meta)
+            .map(|iter| iter.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Like `get_decayed` but excludes the embedding blob.
+    pub(crate) fn get_decayed_meta(&self, threshold: f64) -> Vec<Memory> {
+        let now = now_ms();
+        let Ok(conn) = self.conn() else { return vec![]; };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT id, content, layer, importance, created_at, last_accessed, \
+             access_count, decay_rate, source, tags, namespace \
+             FROM memories WHERE layer < 3",
+        ) else {
+            return vec![];
+        };
+        stmt.query_map([], row_to_memory_meta)
+            .map(|iter| {
+                iter.filter_map(|r| r.ok())
+                    .filter(|m| {
+                        let hours = (now - m.last_accessed) as f64 / 3_600_000.0;
+                        let score = m.importance * (-m.decay_rate * hours / 168.0).exp();
+                        score < threshold
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// List all memories with pagination.
     pub fn list_all(&self, limit: usize, offset: usize) -> Result<Vec<Memory>, EngramError> {
         self.list_all_ns(limit, offset, None)
@@ -1295,6 +1337,28 @@ fn row_to_memory(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
 
 fn row_to_memory_with_embedding(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
     row_to_memory_impl(row, true)
+}
+
+/// Row mapper for queries that select explicit columns without `embedding`.
+/// Column order: id, content, layer, importance, created_at, last_accessed,
+/// access_count, decay_rate, source, tags, namespace
+fn row_to_memory_meta(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
+    let layer_val: u8 = row.get("layer")?;
+    let tags_str: String = row.get("tags")?;
+    Ok(Memory {
+        id: row.get("id")?,
+        content: row.get("content")?,
+        layer: layer_val.try_into().unwrap_or(Layer::Buffer),
+        importance: row.get("importance")?,
+        created_at: row.get("created_at")?,
+        last_accessed: row.get("last_accessed")?,
+        access_count: row.get("access_count")?,
+        decay_rate: row.get("decay_rate")?,
+        source: row.get("source")?,
+        tags: serde_json::from_str(&tags_str).unwrap_or_default(),
+        namespace: row.get::<_, String>("namespace").unwrap_or_else(|_| "default".into()),
+        embedding: None,
+    })
 }
 
 fn row_to_memory_impl(row: &rusqlite::Row, include_embedding: bool) -> rusqlite::Result<Memory> {

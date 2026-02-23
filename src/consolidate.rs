@@ -89,7 +89,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Demote session notes that shouldn't be in Core.
     // Session logs are episodic — they belong in Working at most.
     let mut demoted = 0_usize;
-    for mem in db.list_by_layer(Layer::Core, 10000, 0) {
+    for mem in db.list_by_layer_meta(Layer::Core, 10000, 0) {
         if (mem.source == "session" || mem.tags.iter().any(|t| t == "ephemeral"))
             && db.demote(&mem.id, Layer::Working).is_ok() {
                 demoted += 1;
@@ -99,7 +99,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Working → Core: access-based or age-based (single pass)
     // Session notes (source="session") are capped at Working — they're
     // episodic work logs, not core knowledge.
-    for mem in db.list_by_layer(Layer::Working, 10000, 0) {
+    for mem in db.list_by_layer_meta(Layer::Working, 10000, 0) {
         if mem.source == "session" || mem.tags.iter().any(|t| t == "ephemeral") {
             continue;
         }
@@ -117,7 +117,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
 
     // Buffer → Working when accessed enough (reinforcement-based)
     let buffer_promote_count = promote_threshold.max(2);
-    for mem in db.list_by_layer(Layer::Buffer, 10000, 0) {
+    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0) {
         if mem.access_count >= buffer_promote_count
             && db.promote(&mem.id, Layer::Working).is_ok() {
                 promoted_ids.push(mem.id.clone());
@@ -130,7 +130,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // get one more chance via Working, the rest expire.
     // Must run BEFORE the decay pass so TTL-rescued entries are in promoted_ids
     // and won't be deleted by the decay loop.
-    for mem in db.list_by_layer(Layer::Buffer, 10000, 0) {
+    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0) {
         if promoted_ids.contains(&mem.id) {
             continue;
         }
@@ -151,7 +151,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     }
 
     // Drop decayed Buffer/Working entries — but skip anything we just promoted
-    for mem in db.get_decayed(decay_threshold) {
+    for mem in db.get_decayed_meta(decay_threshold) {
         if promoted_ids.contains(&mem.id) {
             continue;
         }
