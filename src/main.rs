@@ -140,7 +140,10 @@ async fn main() {
         proxy::ProxyConfig {
             upstream,
             default_key: std::env::var("ENGRAM_PROXY_KEY").ok(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("failed to build proxy client"),
         }
     });
 
@@ -165,7 +168,7 @@ async fn main() {
     if consolidate_mins > 0 {
         let bg_state = state.clone();
         tokio::spawn(async move {
-            let interval = std::time::Duration::from_secs(consolidate_mins * 60);
+            let interval = std::time::Duration::from_secs(consolidate_mins.saturating_mul(60));
             // wait a bit before first run so startup isn't slowed
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             loop {
@@ -231,6 +234,12 @@ async fn main() {
 }
 
 async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = sigterm.recv() => {}
+    }
     info!("shutting down");
 }
