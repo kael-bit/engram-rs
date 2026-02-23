@@ -118,6 +118,7 @@ label { font-size:11px; color:#888; }
     <ul class="nav" id="nav2">
       <li data-v="recall"><span class="nl">Recall</span></li>
       <li data-v="search"><span class="nl">Search</span></li>
+      <li data-v="resume"><span class="nl">Resume</span></li>
     </ul>
     <div class="nav-group-label">Manage</div>
     <ul class="nav" id="nav3">
@@ -363,6 +364,62 @@ function renderSearch(){
         <button class="btn" onclick="doSearch()">Search</button></div>
     </div>
     <div id="sRes"><div class="empty">Full-text search</div></div>`;
+}
+
+function renderResume(){
+  document.getElementById('main').innerHTML=`
+    <h2>Resume</h2>
+    <div class="card">
+      <div class="row" style="margin:0">
+        <label>Hours <input type="number" id="resHours" value="6" min="1" max="168" style="width:55px"></label>
+        <label><input type="checkbox" id="resCompact"> compact</label>
+        <label>Budget <input type="number" id="resBudget" value="0" min="0" style="width:70px" placeholder="0=unlimited"></label>
+        <button class="btn" onclick="doResume()">Resume</button>
+      </div>
+    </div>
+    <div id="resResult"><div class="empty">Hit Resume to see what an agent gets on wake-up</div></div>`;
+}
+
+async function doResume(){
+  const hours=parseInt(document.getElementById('resHours').value)||6;
+  const compact=document.getElementById('resCompact').checked;
+  const budget=parseInt(document.getElementById('resBudget').value)||0;
+  let url='/resume?hours='+hours;
+  if(compact) url+='&compact=true';
+  if(budget>0) url+='&budget='+budget;
+  document.getElementById('resResult').innerHTML='<div class="empty">Loading...</div>';
+  const t0=performance.now();
+  const r=await api(url);
+  const ms=Math.round(performance.now()-t0);
+
+  function memCard(m,label){
+    const tags=(m.tags||[]).map(t=>'<span class="tag">'+esc(t)+'</span>').join(' ');
+    const layer=m.layer?('<span class="lb l'+m.layer+'">'+ln(m.layer)+'</span>'):'';
+    const ts=m.created_at?new Date(m.created_at).toLocaleString():'';
+    return '<div class="mc" style="cursor:default"><div class="ct">'+esc(m.content||'')+'</div>'+
+      '<div class="meta">'+layer+' <span>'+ts+'</span> '+tags+'</div></div>';
+  }
+
+  function section(title,items,key){
+    if(!items||!items.length) return '';
+    return '<div style="margin-bottom:16px"><b style="font-size:12px;color:#888">'+title+' ('+items.length+')</b>'+
+      '<div class="ml" style="margin-top:6px">'+items.map(m=>memCard(m,key)).join('')+'</div></div>';
+  }
+
+  const countLine='core: '+(r.core_count||0)+', working: '+(r.working_count||0)+
+    ', buffer: '+(r.buffer_count||0)+', recent: '+(r.recent_count||0)+
+    ', sessions: '+(r.session_count||0)+', next: '+(r.next_action_count||0);
+
+  let html='<div style="font-size:11px;color:#555;margin:10px 0 12px">'+ms+'ms — '+countLine+'</div>';
+  html+=section('Next Actions',r.next_actions,'next');
+  html+=section('Core',r.core,'core');
+  html+=section('Working',r.working,'working');
+  html+=section('Sessions',r.sessions,'session');
+  html+=section('Recent',r.recent,'recent');
+  html+=section('Buffer',r.buffer,'buffer');
+
+  if(!html.includes('ml')) html='<div class="empty">Empty resume</div>';
+  document.getElementById('resResult').innerHTML=html;
 }
 
 async function doSearch(){
@@ -698,18 +755,23 @@ async function testSearch(){
 
 async function testFactsCrud(){
   const subj='_test_'+Date.now();
-  // create
-  const f=await api('/facts',{method:'POST',body:JSON.stringify({subject:subj,predicate:'is',object:'a test'})});
-  assert(f.id,'create: no id');
+  // create — facts API expects {facts: [...]}
+  const f=await api('/facts',{method:'POST',body:JSON.stringify({facts:[{subject:subj,predicate:'is',object:'a test'}]})});
+  const fact=(f.facts&&f.facts[0]);
+  const fid=fact?fact.id:null;
+  const mid=fact?fact.memory_id:null;
+  assert(fid,'create: no id');
   try{
     // query
-    const q=await api('/facts?subject='+encodeURIComponent(subj));
+    const q=await api('/facts?entity='+encodeURIComponent(subj));
     const facts=q.facts||q||[];
     assert(facts.length>0,'query: no facts found');
-    // delete
-    await api('/facts/'+f.id,{method:'DELETE'});
+    // delete fact + cleanup auto-created memory
+    await api('/facts/'+fid,{method:'DELETE'});
+    if(mid) try{await api('/memories/'+mid,{method:'DELETE'});}catch(_){}
   }catch(e){
-    try{await api('/facts/'+f.id,{method:'DELETE'});}catch(_){}
+    try{await api('/facts/'+fid,{method:'DELETE'});}catch(_){}
+    if(mid) try{await api('/memories/'+mid,{method:'DELETE'});}catch(_){}
     throw e;
   }
 }
@@ -727,7 +789,7 @@ async function testSortOrder(){
 function switchView(v){
   curView=v;page=0;
   document.querySelectorAll('.nav li').forEach(li=>li.classList.toggle('active',li.dataset.v===v));
-  if(v==='recall')renderRecall();else if(v==='search')renderSearch();else if(v==='create')renderCreate();
+  if(v==='recall')renderRecall();else if(v==='search')renderSearch();else if(v==='resume')renderResume();else if(v==='create')renderCreate();
   else if(v==='facts')renderFacts();else if(v==='proxy')renderProxy();else if(v==='health')renderHealth();
   else if(v==='tools')renderTools();else if(v==='tests')renderTests();else renderList(getMem());
 }

@@ -423,7 +423,7 @@ impl MemoryDB {
                 let conn = self.conn()?;
                 let mut stmt = conn.prepare(
                     "SELECT * FROM memories WHERE namespace = ?3 \
-                     ORDER BY last_accessed DESC LIMIT ?1 OFFSET ?2",
+                     ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
                 )?;
                 let rows: Vec<Memory> = stmt
                     .query_map(params![limit as i64, offset as i64, ns], row_to_memory)?
@@ -434,7 +434,7 @@ impl MemoryDB {
             None => {
                 let conn = self.conn()?;
                 let mut stmt = conn.prepare(
-                    "SELECT * FROM memories ORDER BY last_accessed DESC LIMIT ?1 OFFSET ?2",
+                    "SELECT * FROM memories ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
                 )?;
                 let rows: Vec<Memory> = stmt
                     .query_map(params![limit as i64, offset as i64], row_to_memory)?
