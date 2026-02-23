@@ -334,4 +334,37 @@ mod tests {
         let result = unwrap_json(raw);
         assert_eq!(result, raw);
     }
+
+    #[test]
+    fn unwrap_json_with_leading_text() {
+        let raw = "Here are the results:\n```json\n[1, 2, 3]\n```\nDone!";
+        let result = unwrap_json(raw);
+        assert_eq!(result, "[1, 2, 3]");
+    }
+
+    #[test]
+    fn unwrap_json_no_array() {
+        // Without brackets, returns trimmed input
+        let raw = "  {\"key\": \"value\"}  ";
+        let result = unwrap_json(raw);
+        assert_eq!(result, "{\"key\": \"value\"}");
+    }
+
+    #[test]
+    fn expand_output_parsing() {
+        // Simulates what expand_query does to LLM output
+        let raw = "连接池实现方案\nr2d2 SQLite pool\n\nab\n数据库并发访问\n";
+        let parsed: Vec<String> = raw
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty() && l.len() > 2)
+            .take(5)
+            .collect();
+        assert_eq!(parsed, vec![
+            "连接池实现方案",
+            "r2d2 SQLite pool",
+            "数据库并发访问",
+        ]);
+        // "ab" filtered out (len <= 2)
+    }
 }
