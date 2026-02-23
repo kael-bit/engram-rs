@@ -277,7 +277,7 @@ pub fn recall(
             // Boost: found by both semantic AND keyword — strong relevance signal.
             if let Some(sm) = scored.iter_mut().find(|s| &s.memory.id == id) {
                 let boost = 1.0 + fts_rel * 0.3;  // 1.0 to 1.3x multiplier
-                sm.relevance = (sm.relevance * boost).min(1.5);
+                sm.relevance = (sm.relevance * boost).min(1.0);
                 let rescored = score_memory(&sm.memory, sm.relevance);
                 sm.score = rescored.score;
                 sm.recency = rescored.recency;
