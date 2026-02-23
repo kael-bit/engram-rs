@@ -125,9 +125,9 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     }
 }
 
-const MERGE_SYSTEM: &str = "Merge these memories into one concise entry. \
-    Keep all important information, remove redundancy. \
-    If they describe the same thing at different points in time, keep only the latest state. \
+const MERGE_SYSTEM: &str = "Merge these memories into one concise entry (max 500 chars). \
+    Distill to key facts only — drop details that can be re-derived. \
+    If they describe the same thing at different times, keep only the latest state. \
     Use the same language as the originals. Output only the merged text.";
 
 async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
@@ -191,6 +191,14 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> usize {
             if merged_content.is_empty() {
                 continue;
             }
+
+            // Hard cap: if the LLM ignored the length instruction, truncate
+            let merged_content = if merged_content.chars().count() > 2000 {
+                warn!("merge output too long ({}), truncating", merged_content.chars().count());
+                merged_content.chars().take(2000).collect::<String>()
+            } else {
+                merged_content
+            };
 
             // keep the most recently created entry as the winner —
             // if two memories conflict, the newer one is more likely correct
