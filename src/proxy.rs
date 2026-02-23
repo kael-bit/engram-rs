@@ -16,7 +16,7 @@ static PROXY_EXTRACTED: AtomicU64 = AtomicU64::new(0);
 
 pub fn proxy_stats() -> (u64, u64, usize) {
     let buffered = {
-        let guard = WINDOWS.lock().unwrap();
+        let guard = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
         guard.as_ref().map(|m| m.values().map(|w| w.turns.len()).sum()).unwrap_or(0)
     };
     (
@@ -70,14 +70,14 @@ fn with_window<F, R>(key: &str, f: F) -> R
 where
     F: FnOnce(&mut ConversationWindow) -> R,
 {
-    let mut guard = WINDOWS.lock().unwrap();
+    let mut guard = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
     let map = guard.get_or_insert_with(HashMap::new);
     let w = map.entry(key.to_string()).or_insert_with(ConversationWindow::new);
     f(w)
 }
 
 fn drain_all_windows() -> Vec<(String, String)> {
-    let mut guard = WINDOWS.lock().unwrap();
+    let mut guard = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
     let Some(map) = guard.as_mut() else { return vec![] };
     let mut results = Vec::new();
     let keys: Vec<String> = map.keys().cloned().collect();
