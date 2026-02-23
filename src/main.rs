@@ -131,6 +131,7 @@ async fn main() {
         proxy::ProxyConfig {
             upstream,
             default_key: std::env::var("ENGRAM_PROXY_KEY").ok(),
+            client: reqwest::Client::new(),
         }
     });
 

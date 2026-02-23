@@ -94,6 +94,7 @@ fn drain_all_windows() -> Vec<(String, String)> {
 pub struct ProxyConfig {
     pub upstream: String,
     pub default_key: Option<String>,
+    pub client: reqwest::Client,
 }
 
 pub async fn handle(
@@ -125,8 +126,7 @@ pub async fn handle(
     };
     let req_capture = req_bytes.to_vec();
 
-    let client = reqwest::Client::new();
-    let mut upstream_req = client.request(
+    let mut upstream_req = proxy.client.request(
         reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::POST),
         &upstream_url,
     );
