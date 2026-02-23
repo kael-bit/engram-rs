@@ -4,10 +4,14 @@
 
 ### Post-release fixes
 
+- **Recall scoring rebalance**: relevance weight 0.45→0.6, importance 0.3→0.2, core bonus 1.3→1.1. Fixes high-importance memories dominating unrelated queries. Top-1 accuracy up significantly.
+- **POST /repair endpoint**: auto-fixes FTS index (orphan cleanup + missing entry rebuild). Idempotent, safe to run anytime.
+- **Merge observability**: logs winner ID, absorbed content previews, skip reasons. `ConsolidateResponse.merged_ids` returns winner IDs.
+- **Merge length fix**: comparison changed from max→sum of inputs, fixing false rejections where combined input was shorter than individual max.
 - **conn() returns Result**: database pool exhaustion returns errors instead of panicking. Non-Result methods (search_fts, search_semantic, etc.) gracefully degrade with empty results.
 - **Merge hard cap 800 chars**: prevents information-dense mega-memories that hurt recall precision. Bloat detection rejects merges that expand beyond the longest input.
 - **Recall quality test suite**: regression tests covering Top-1/Top-3 accuracy, time-windowed recall, and min_score filtering.
-- **Test coverage**: error.rs status codes, builder chain, namespace delete, import roundtrip. 73 tests total.
+- **Test coverage**: 91 tests total (error.rs, builder chain, namespace delete, import roundtrip, export embeddings, FTS repair, scoring rebalance).
 
 ### Release
 

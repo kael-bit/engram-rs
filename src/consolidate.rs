@@ -142,11 +142,11 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
 }
 
 const MERGE_SYSTEM: &str = "Merge these related memory entries into a single concise note. Rules:\n\
-    - Preserve all important facts from both entries.\n\
+    - Preserve ALL specific names, tools, libraries, versions, and technical terms.\n\
     - If one entry updates or supersedes the other, keep the latest state.\n\
-    - Remove redundant/repeated information.\n\
-    - Be specific: names, numbers, versions, dates > vague summaries.\n\
-    - Output must be shorter than the combined length of the inputs.\n\
+    - Remove only truly redundant/repeated sentences.\n\
+    - Names, numbers, versions, dates, tool names > vague summaries. Never drop specific terms.\n\
+    - Keep it under 400 characters if possible.\n\
     - Same language as originals. Output only the merged text, nothing else.";
 
 async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
@@ -185,9 +185,10 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
                 ns_indices.iter().map(|&i| layer_mems[i]).collect();
 
         // text-embedding-3-small produces lower cosine scores for short CJK text,
-        // so 0.75 was too aggressive. 0.68 catches real semantic duplicates without
-        // merging unrelated memories (validated on actual CJK memory pairs).
-        let clusters = find_clusters(&ns_mems, 0.68);
+        // but 0.68 was too aggressive — it merged related-but-distinct memories
+        // (e.g. two v0.6.0 progress notes), destroying specific terms like "r2d2".
+        // 0.78 limits merging to near-duplicates with high content overlap.
+        let clusters = find_clusters(&ns_mems, 0.78);
 
         for cluster in clusters {
             if cluster.len() < 2 {
@@ -215,9 +216,9 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
             // Hard cap: if the LLM ignored the length instruction, truncate.
             // Also warn on outputs > 500 chars.
             let merged_len = merged_content.chars().count();
-            let merged_content = if merged_len > 800 {
-                warn!("merge output too long ({merged_len}), truncating to 800");
-                merged_content.chars().take(800).collect::<String>()
+            let merged_content = if merged_len > 600 {
+                warn!("merge output too long ({merged_len}), truncating to 600");
+                merged_content.chars().take(600).collect::<String>()
             } else {
                 merged_content
             };
