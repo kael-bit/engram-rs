@@ -416,20 +416,30 @@ fn parse_rerank_response(raw: &str, count: usize) -> Vec<usize> {
         .collect()
 }
 
-/// Check if content is semantically duplicate of an existing memory.
-/// Uses embedding cosine similarity (threshold 0.78).
 /// Check if content is semantically similar to an existing memory.
 /// Returns the ID of the duplicate if found, None otherwise.
+#[allow(dead_code)]
 pub async fn quick_semantic_dup(
     ai_cfg: &AiConfig,
     db: &MemoryDB,
     content: &str,
 ) -> Result<Option<String>, String> {
+    quick_semantic_dup_threshold(ai_cfg, db, content, 0.78).await
+}
+
+/// Like `quick_semantic_dup` but with a custom cosine threshold.
+/// Proxy extraction uses a lower threshold (0.72) to catch cross-language dupes.
+pub async fn quick_semantic_dup_threshold(
+    ai_cfg: &AiConfig,
+    db: &MemoryDB,
+    content: &str,
+    threshold: f64,
+) -> Result<Option<String>, String> {
     let embeddings = ai::get_embeddings(ai_cfg, &[content.to_string()]).await?;
     let emb = embeddings.first().ok_or("no embedding returned")?;
-    let candidates = db.search_semantic(emb, 3);
+    let candidates = db.search_semantic(emb, 5);
     for (id, score) in &candidates {
-        if *score > 0.78 {
+        if *score > threshold {
             return Ok(Some(id.clone()));
         }
     }

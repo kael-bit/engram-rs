@@ -195,7 +195,7 @@ Rules:
 - Extract 0-3 entries per input. Zero is fine if nothing is worth remembering.
 - Each entry must be self-contained (understandable without context)
 - Prefer concise entries (under 200 chars) over verbose ones
-- Write content in the same language as the input
+- Write content in the same language as the input. NEVER translate — if the conversation is in Chinese, output Chinese. If mixed, use the dominant language.
 - importance MUST reflect user intent — if they say "记住" or "remember", it's 0.9+
 
 EXTRACT these (worth remembering):

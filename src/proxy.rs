@@ -406,7 +406,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         }
 
         let dup_id: Option<String> =
-            match crate::recall::quick_semantic_dup(ai_cfg, &state.db, &entry.content).await {
+            match crate::recall::quick_semantic_dup_threshold(ai_cfg, &state.db, &entry.content, 0.72).await {
                 Ok(id) => id,
                 Err(_) => {
                     // Fallback to Jaccard — can't get ID from this path
