@@ -1311,4 +1311,21 @@ mod tests {
                 || m["namespace"].as_str().is_none()
         }), "should only return ns-a memories");
     }
+
+    #[tokio::test]
+    async fn export_excludes_embeddings_by_default() {
+        let app = router(test_state(None));
+        let body = serde_json::json!({"content": "export test"});
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        let resp = app.oneshot(
+            Request::builder().uri("/export").body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        assert!(j["count"].as_u64().unwrap() >= 1);
+        // no embedding field in default export
+        let first = &j["memories"][0];
+        assert!(first.get("embedding").is_none(), "embedding should be omitted by default");
+    }
 }
