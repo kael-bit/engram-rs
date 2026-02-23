@@ -16,12 +16,12 @@ engram uses a three-layer model based on [Atkinson-Shiffrin memory theory](https
 
 Memories promote upward through access frequency (Ebbinghaus-style reinforcement), and decay naturally when neglected. You don't manage layers — store everything as buffer, and the system promotes what sticks:
 
-- **Buffer → Working**: reinforcement score ≥ 5.0 (access + repetition × 2.5)
+- **Buffer → Working**: reinforcement score ≥ 5.0 (access + repetition × 2.5), OR lesson/procedural memories auto-promote after 2h cooldown
 - **Working → Core**: reinforcement score ≥ 3.0, importance ≥ 0.6, passes LLM quality gate
 - **Buffer TTL**: 24 hours — unaccessed buffer entries are dropped; half-threshold entries rescue to Working
 - **Procedural** memories and **lessons** (`tag=lesson`) are exempt from TTL — they persist indefinitely
 - **Session notes** (`source=session`) and `ephemeral`-tagged memories never promote to Core
-- Each recall bumps importance by 0.02 (capped at 1.0)
+- Each recall bumps importance by 0.02 (capped at 1.0); `/resume` touches Core/Working memories
 - Near-duplicate insertions count as repetition (2.5× weight)
 
 ## Quick Start
@@ -317,10 +317,24 @@ For editors without MCP, use the proxy approach — set the editor's LLM API end
 ### systemd (Production)
 
 ```ini
+# /etc/systemd/system/engram.socket
+[Unit]
+Description=engram memory engine socket
+
+[Socket]
+ListenStream=3917
+NoDelay=true
+
+[Install]
+WantedBy=sockets.target
+```
+
+```ini
 # /etc/systemd/system/engram.service
 [Unit]
 Description=engram memory engine
 After=network.target
+Requires=engram.socket
 
 [Service]
 ExecStart=/usr/local/bin/engram
@@ -330,14 +344,16 @@ Environment=ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions
 Environment=ENGRAM_LLM_KEY=sk-xxx
 Environment=ENGRAM_PROXY_UPSTREAM=https://api.anthropic.com
 Restart=always
-RestartSec=3
+RestartSec=1
 
 [Install]
 WantedBy=multi-user.target
 ```
 
+Socket activation gives zero-downtime deploys — the socket stays open during restarts, queuing connections in the kernel.
+
 ```bash
-sudo systemctl enable --now engram
+sudo systemctl enable --now engram.socket engram
 ```
 
 ## Features
