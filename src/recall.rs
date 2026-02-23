@@ -275,9 +275,12 @@ pub fn recall(
         let fts_rel = bm25 / max_bm25;
         if seen.contains(id) {
             // Boost: found by both semantic AND keyword — strong relevance signal.
+            // Use the higher of: boosted semantic, or FTS-derived relevance floor.
+            // This prevents CJK embedding weakness from burying keyword-confirmed results.
             if let Some(sm) = scored.iter_mut().find(|s| &s.memory.id == id) {
-                let boost = 1.0 + fts_rel * 0.3;  // 1.0 to 1.3x multiplier
-                sm.relevance = (sm.relevance * boost).min(1.0);
+                let semantic_boosted = sm.relevance * (1.0 + fts_rel * 0.3);
+                let fts_floor = 0.5 + fts_rel * 0.4; // top FTS hit → 0.9 relevance
+                sm.relevance = semantic_boosted.max(fts_floor).min(1.0);
                 let rescored = score_memory(&sm.memory, sm.relevance);
                 sm.score = rescored.score;
                 sm.recency = rescored.recency;
