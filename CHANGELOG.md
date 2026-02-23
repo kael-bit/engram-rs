@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0
+
+- **Sync embedding**: `sync_embed: true` on store blocks until embedding is generated. Eliminates 1.2s async race window for critical memories.
+- **Export with embeddings**: `GET /export?embed=true` includes 1536-dim vectors. Import preserves them — full migration without re-embedding.
+- **Recall min_score**: `min_score: 0.3` drops results below a relevance threshold.
+- **Dual-hit boost**: memories found by both semantic AND keyword search get a 30% relevance boost, improving precision for specific-term queries.
+- **Improved merge prompt**: enforces conciseness (500 char target, 2k hard cap), avoids vague summaries.
+- **Import fixes**: namespace override, id reminting on collision, serde defaults for forward compatibility.
+- **Batch store sync_embed**: works on batch endpoint too.
+- **Body limit raised to 32MB** for embedding-rich imports.
+- **API refactor**: `blocking()` helper replaces 14 spawn_blocking boilerplate chains.
+- **Stats/batch-delete namespace filtering**: `?ns=` param and `X-Namespace` header support.
+- **73 tests total** (up from 61), 0 clippy warnings. 24/24 smoke tests passing.
+
 ## 0.5.0
 
 - **Connection pool**: replaced `Mutex<Connection>` with r2d2 pool (8 connections). Concurrent reads no longer block each other. 702 recalls/s, 956 stats/s under load.
