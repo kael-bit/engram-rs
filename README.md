@@ -156,6 +156,7 @@ Call `engram_resume` with hours=6 to restore context. Read the core and working 
 
 ### During conversation
 - Decisions, preferences, lessons learned → `engram_store` immediately. Don't wait.
+- Workflows, procedures, how-to steps → `engram_store` with kind="procedural" (these never decay).
 - "Remember this" from the user → `engram_store` with importance=0.9.
 - Need context → `engram_recall` with the question as query.
 - Before risky operations (git push, deploy, send message) → `engram_triggers` with the action name.

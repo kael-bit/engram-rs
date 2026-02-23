@@ -320,19 +320,7 @@ HARD REJECT — NEVER extract these as memories (they are scaffolding, not knowl
 - Meta-instructions about how to behave, respond, or format output
 - Heartbeat checks, health status pings, routine monitoring output
 - Anything that reads like a rule/playbook for an agent rather than a human-stated fact or preference
-- Framework-injected context that appears in every conversation
-
-Output ONLY the JSON array, no other text. Return [] if nothing is worth extracting.
-
-For each memory, you may also include a "facts" field: an array of factual triples extracted from this memory.
-Each triple has:
-- "subject": the entity (person, system, concept)
-- "predicate": the relationship or property
-- "object": the value or target entity
-Example: {"subject": "alice", "predicate": "timezone", "object": "America/New_York"}
-Only include facts for concrete, stable relationships — NOT transient states.
-
-You may also include a "kind" field: "semantic" (facts/knowledge, default), "episodic" (events, time-bound), or "procedural" (how-to, instructions, workflows — these persist indefinitely)."#;
+- Framework-injected context that appears in every conversation"#;
 
 /// Extract structured memories from raw text using an LLM.
 pub async fn extract_memories(
