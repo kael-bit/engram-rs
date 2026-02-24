@@ -450,9 +450,9 @@ pub fn recall(
 const RERANK_SYSTEM: &str = "\
 You rerank memory search results by relevance to the user's query.
 Think about what the user is actually asking — identity questions need identity answers,
-technical questions need technical answers, etc.
-Return ONLY the numbers of relevant results, most relevant first, comma-separated.
-Omit results that don't meaningfully answer the query.
+how-to questions need practical/actionable answers, not opinions or meta-commentary.
+Prefer specific, directly useful results over tangential mentions.
+Return ONLY the numbers, most relevant first, comma-separated.
 Example: 3,1,5,2";
 
 /// Re-rank recall results using an LLM. Falls back to original order on failure.
