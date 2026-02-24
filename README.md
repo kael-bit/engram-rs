@@ -83,10 +83,18 @@ ExecStart=/usr/local/bin/engram
 Environment=ENGRAM_DB=/var/lib/engram/engram.db
 # Optional: enable auth for remote/shared deployments
 # Environment=ENGRAM_API_KEY=your-secret-key
-Environment=ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions
-Environment=ENGRAM_LLM_KEY=sk-xxx
+
+# Embeddings
 Environment=ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings
 Environment=ENGRAM_EMBED_KEY=sk-xxx
+
+# LLM — default model (text processing: merge, rerank, expand)
+Environment=ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions
+Environment=ENGRAM_LLM_KEY=sk-xxx
+Environment=ENGRAM_LLM_MODEL=gpt-4o-mini
+
+# Judgment — Core promotion gate + audit (needs strong model)
+Environment=ENGRAM_GATE_MODEL=claude-sonnet-4-6
 Restart=always
 RestartSec=1
 
@@ -296,34 +304,50 @@ engram runs autonomously — no cron or external scheduler needed:
 
 ## Configuration
 
+### Core
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENGRAM_PORT` | `3917` | Server port |
 | `ENGRAM_DB` | `engram.db` | SQLite database path |
-| `ENGRAM_API_KEY` | — | Bearer token auth (optional) |
+| `ENGRAM_API_KEY` | — | Bearer token auth (optional, for remote/shared) |
+| `ENGRAM_WORKSPACE` | — | Default workspace tag for `/resume` |
+| `RUST_LOG` | `info` | Log level (`debug` for verbose) |
+
+### LLM & Embeddings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `ENGRAM_LLM_URL` | — | Chat completions endpoint (enables AI features) |
 | `ENGRAM_LLM_KEY` | — | LLM API key |
-| `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | Default LLM model |
-| `ENGRAM_MERGE_MODEL` | *(LLM_MODEL)* | Model for consolidation merge |
-| `ENGRAM_EXTRACT_MODEL` | *(LLM_MODEL)* | Model for `/extract` |
-| `ENGRAM_RERANK_MODEL` | *(LLM_MODEL)* | Model for recall re-ranking |
-| `ENGRAM_EXPAND_MODEL` | *(LLM_MODEL)* | Model for query expansion |
-| `ENGRAM_PROXY_MODEL` | *(LLM_MODEL)* | Model for proxy extraction |
-| `ENGRAM_GATE_MODEL` | *(LLM_MODEL)* | Model for Core promotion gate + audit |
+| `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | Default model (used as fallback for all components) |
 | `ENGRAM_EMBED_URL` | *(from LLM_URL)* | Embeddings endpoint |
 | `ENGRAM_EMBED_KEY` | *(LLM_KEY)* | Embeddings API key |
 | `ENGRAM_EMBED_MODEL` | `text-embedding-3-small` | Embedding model |
+
+### Model Routing
+
+Engram uses LLMs for several tasks with different requirements. You can assign a model per role:
+
+| Role | Env var(s) | Needs | Recommended |
+|------|-----------|-------|-------------|
+| **Judgment** — Core promotion gate, memory audit | `ENGRAM_GATE_MODEL` | Distinguishing lessons from changelogs, deciding what's permanent | Claude Sonnet, GPT-4o |
+| **Light judgment** — Proxy extraction | `ENGRAM_PROXY_MODEL` | Spotting decisions/constraints in conversation, skipping noise | Gemini Flash, Claude Haiku |
+| **Text processing** — Merge, rerank, query expansion, triage | `ENGRAM_MERGE_MODEL`, `ENGRAM_RERANK_MODEL`, `ENGRAM_EXPAND_MODEL`, `ENGRAM_EXTRACT_MODEL` | Text transformation, no judgment calls | GPT-4o-mini, GPT-5-mini |
+
+All default to `ENGRAM_LLM_MODEL` if not set. If you only set one model, everything works — but separating roles lets you save cost without sacrificing quality where it matters.
+
+### Consolidation & Proxy
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `ENGRAM_CONSOLIDATE_MINS` | `30` | Auto-consolidation interval (0 = off) |
 | `ENGRAM_AUTO_MERGE` | `false` | Enable LLM merge in auto-consolidation |
 | `ENGRAM_AUTO_RERANK` | `false` | Auto-rerank all recall results via LLM |
+| `ENGRAM_AUDIT_HOURS` | `24` | Background audit interval (0 = off) |
 | `ENGRAM_PROXY_UPSTREAM` | — | Upstream LLM URL (enables proxy) |
 | `ENGRAM_PROXY_KEY` | — | Fallback API key for proxy |
-| `ENGRAM_STRIP_MARKERS` | *(generic LLM tokens)* | Comma-separated boilerplate markers to strip from proxy context before extraction. Default: common LLM control tokens. Set this to your framework's system prompt headers. |
-| `ENGRAM_WORKSPACE` | — | Default workspace tag for `/resume` |
-| `ENGRAM_AUDIT_HOURS` | `24` | Background audit interval (0 = off) |
-| `RUST_LOG` | `info` | Log level (`debug` for verbose) |
-
-Per-component model overrides let you use cheap models for high-volume operations (proxy extraction, query expansion) while keeping stronger models for consolidation and audit.
+| `ENGRAM_STRIP_MARKERS` | *(generic)* | Comma-separated boilerplate markers to strip from proxy context |
 
 ## License
 

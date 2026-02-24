@@ -44,16 +44,42 @@ cargo build --release
 ## Step 2: Start engram
 
 ```bash
-# Minimal — just memory engine
+# Minimal — just memory engine, no AI features
 ./engram
+```
 
-# With LLM features (consolidation, extraction, reranking)
+With LLM features, engram needs three classes of models:
+
+| Role | What it does | Env var | Budget pick | Quality pick |
+|------|-------------|---------|-------------|-------------|
+| **Judgment** | Decides what memories are permanent (gate, audit) | `ENGRAM_GATE_MODEL` | Claude Haiku | Claude Sonnet |
+| **Light judgment** | Extracts memories from conversations (proxy) | `ENGRAM_PROXY_MODEL` | GPT-4o-mini | Gemini Flash |
+| **Text processing** | Merges text, expands queries, reranks (merge, rerank, expand) | `ENGRAM_LLM_MODEL` | GPT-4o-mini | GPT-4o-mini |
+
+You can use one model for everything, or split by role to save cost:
+
+```bash
+# Single model (simple, works fine)
 ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions \
 ENGRAM_LLM_KEY=sk-xxx \
 ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings \
 ENGRAM_EMBED_KEY=sk-xxx \
 ./engram
 
+# Split by role (recommended — saves cost, better quality where it matters)
+ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions \
+ENGRAM_LLM_KEY=sk-xxx \
+ENGRAM_LLM_MODEL=gpt-4o-mini \
+ENGRAM_GATE_MODEL=claude-sonnet-4-6 \
+ENGRAM_PROXY_MODEL=gemini-3-flash \
+ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings \
+ENGRAM_EMBED_KEY=sk-xxx \
+./engram
+```
+
+> **Why split?** The gate decides what gets promoted to permanent Core memory — it needs to distinguish "never force-push to main" (lesson, keep forever) from "fixed the build, 198 tests pass" (changelog, don't keep). Cheap models fail at this. Text merging and query expansion don't need that judgment.
+
+```bash
 # Optional: enable auth (for remote/shared deployments)
 ENGRAM_API_KEY=your-secret-key ./engram
 ```
@@ -362,10 +388,24 @@ After=network.target
 ExecStart=/usr/local/bin/engram
 # Optional: enable auth for remote/shared deployments
 # Environment=ENGRAM_API_KEY=your-secret-key
-Environment=ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions
-Environment=ENGRAM_LLM_KEY=sk-xxx
+
+# Embeddings
 Environment=ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings
 Environment=ENGRAM_EMBED_KEY=sk-xxx
+
+# LLM — default model (text processing: merge, rerank, expand)
+Environment=ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions
+Environment=ENGRAM_LLM_KEY=sk-xxx
+Environment=ENGRAM_LLM_MODEL=gpt-4o-mini
+
+# Judgment — Core promotion gate + audit (needs strong model)
+Environment=ENGRAM_GATE_MODEL=claude-sonnet-4-6
+
+# Light judgment — proxy extraction (if using LLM proxy)
+# Environment=ENGRAM_PROXY_MODEL=gemini-3-flash
+# Environment=ENGRAM_PROXY_UPSTREAM=https://api.anthropic.com
+# Environment=ENGRAM_PROXY_KEY=sk-xxx
+
 Restart=always
 RestartSec=1
 
