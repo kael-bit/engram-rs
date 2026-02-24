@@ -44,6 +44,8 @@ pub struct SandboxResult {
     pub grades: Vec<OpGrade>,
     pub score: f64,           // 0.0 - 1.0
     pub safe_to_apply: bool,  // score >= threshold
+    pub applied: usize,       // ops actually executed (0 in dry-run)
+    pub skipped: usize,       // Bad ops skipped during auto-apply
     pub summary: String,
 }
 
@@ -256,9 +258,10 @@ impl<'a> RuleChecker<'a> {
     }
 }
 
-/// Run audit in sandbox mode: snapshot → audit → grade → return verdict.
-/// Nothing is modified in the database.
-pub async fn sandbox_audit(cfg: &AiConfig, db: &SharedDB) -> Result<SandboxResult, EngramError> {
+/// Run audit in sandbox mode: snapshot → audit → grade → optionally apply.
+/// When `auto_apply` is true and score >= threshold, executes Good+Marginal ops,
+/// skips Bad ops. When false, nothing is modified (dry-run).
+pub async fn sandbox_audit(cfg: &AiConfig, db: &SharedDB, auto_apply: bool) -> Result<SandboxResult, EngramError> {
     let db2 = db.clone();
     let (core, working) = tokio::task::spawn_blocking(move || {
         let c = db2.list_by_layer_meta(Layer::Core, 500, 0).unwrap_or_default();
@@ -300,6 +303,31 @@ pub async fn sandbox_audit(cfg: &AiConfig, db: &SharedDB) -> Result<SandboxResul
         (good as f64 + marginal as f64 * 0.5) / total_ops
     };
 
+    let safe = score >= SAFETY_THRESHOLD;
+
+    // Auto-apply: execute Good+Marginal ops, skip Bad
+    let (mut applied, mut skipped) = (0usize, 0usize);
+    if safe && auto_apply {
+        let safe_ops: Vec<AuditOp> = grades.iter()
+            .filter(|g| g.grade != Grade::Bad)
+            .map(|g| g.op.clone())
+            .collect();
+        let bad_count = grades.iter().filter(|g| g.grade == Grade::Bad).count();
+        skipped = bad_count;
+
+        if !safe_ops.is_empty() {
+            let db3 = db.clone();
+            let op_count = safe_ops.len();
+            let actual = tokio::task::spawn_blocking(move || {
+                let mut r = super::audit::AuditResult::default();
+                super::audit::apply_audit_ops_pub(&db3, safe_ops, &mut r);
+                r
+            }).await.map_err(|e| EngramError::Internal(format!("spawn: {e}")))?;
+            applied = actual.promoted + actual.demoted + actual.deleted + actual.merged;
+            info!(applied, skipped, op_count, "audit sandbox: auto-applied ops");
+        }
+    }
+
     let summary = format!(
         "Reviewed {} memories ({} Core + {} Working). \
          Audit proposed {} ops: {} good, {} marginal, {} bad. \
@@ -307,7 +335,13 @@ pub async fn sandbox_audit(cfg: &AiConfig, db: &SharedDB) -> Result<SandboxResul
         total, core.len(), working.len(),
         grades.len(), good, marginal, bad,
         score * 100.0, SAFETY_THRESHOLD * 100.0,
-        if score >= SAFETY_THRESHOLD { "Safe to apply." } else { "NOT safe — review manually." }
+        if !safe {
+            "NOT safe — no changes applied.".to_string()
+        } else if auto_apply {
+            format!("Applied {} ops, skipped {} bad.", applied, skipped)
+        } else {
+            "Safe to apply (dry-run).".to_string()
+        }
     );
 
     Ok(SandboxResult {
@@ -315,7 +349,9 @@ pub async fn sandbox_audit(cfg: &AiConfig, db: &SharedDB) -> Result<SandboxResul
         ops_proposed: grades.len(),
         grades,
         score,
-        safe_to_apply: score >= SAFETY_THRESHOLD,
+        safe_to_apply: safe,
+        applied,
+        skipped,
         summary,
     })
 }

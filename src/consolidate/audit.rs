@@ -226,6 +226,10 @@ pub(crate) fn parse_audit_ops_pub(
     parse_audit_ops(response, core, working)
 }
 
+pub(crate) fn apply_audit_ops_pub(db: &crate::SharedDB, ops: Vec<AuditOp>, result: &mut AuditResult) {
+    apply_audit_ops(db, ops, result);
+}
+
 fn parse_audit_ops(
     response: &str,
     core: &[Memory],

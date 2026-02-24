@@ -158,18 +158,25 @@ async fn main() {
                 }
 
                 loop {
-                    match consolidate::audit_memories(&audit_ai, &audit_db).await {
-                        Ok(r) if r.promoted + r.demoted + r.deleted + r.merged > 0 => {
+                    match consolidate::sandbox_audit(&audit_ai, &audit_db, true).await {
+                        Ok(r) if r.applied > 0 => {
                             info!(
                                 reviewed = r.total_reviewed,
-                                promoted = r.promoted,
-                                demoted = r.demoted,
-                                deleted = r.deleted,
-                                merged = r.merged,
+                                proposed = r.ops_proposed,
+                                applied = r.applied,
+                                skipped = r.skipped,
+                                score = format!("{:.0}%", r.score * 100.0),
                                 "auto-audit"
                             );
                         }
-                        Ok(_) => { /* no changes, stay quiet */ }
+                        Ok(r) if !r.safe_to_apply && r.ops_proposed > 0 => {
+                            warn!(
+                                proposed = r.ops_proposed,
+                                score = format!("{:.0}%", r.score * 100.0),
+                                "auto-audit: score below threshold, nothing applied"
+                            );
+                        }
+                        Ok(_) => { /* no changes or no ops, stay quiet */ }
                         Err(e) => {
                             warn!("auto-audit failed: {e}");
                         }

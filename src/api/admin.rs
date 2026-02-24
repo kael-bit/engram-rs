@@ -25,14 +25,13 @@ pub(super) async fn do_consolidate(
     Ok(Json(result))
 }
 
-/// LLM-powered memory audit. Reviews Core+Working, reorganizes via gate model.
-/// Configure a capable model with ENGRAM_GATE_MODEL (e.g. claude-sonnet-4-5-20250514).
+/// LLM-powered memory audit. Runs sandbox grading first — only applies ops
+/// that score above the safety threshold. Bad ops are automatically skipped.
 pub(super) async fn do_audit(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let ai = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
-    let result = consolidate::audit_memories(ai, &state.db).await
-        ?;
+    let result = consolidate::sandbox_audit(ai, &state.db, true).await?;
     Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
 }
 
@@ -41,7 +40,7 @@ pub(super) async fn do_audit_sandbox(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let ai = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
-    let result = consolidate::sandbox_audit(ai, &state.db).await?;
+    let result = consolidate::sandbox_audit(ai, &state.db, false).await?;
     Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
 }
 
