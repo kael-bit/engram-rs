@@ -506,7 +506,7 @@ function resumeToPrompt(r){
 
   if(r.next_actions&&r.next_actions.length){
     lines.push('--- Next Actions ---');
-    r.next_actions.forEach(m=>lines.push('  '+m.content));
+    r.next_actions.forEach(a=>lines.push('  '+(typeof a==='string'?a:a.content||JSON.stringify(a))));
     lines.push('');
   }
   if(r.core&&r.core.length){
@@ -570,7 +570,12 @@ function renderResumeResult(r,ms){
   }
 
   let html='<div style="font-size:11px;color:#555;margin:10px 0 12px">'+ms+'ms — '+countLine+'</div>';
-  html+=section('Next Actions',r.next_actions);
+  if(r.next_actions&&r.next_actions.length){
+    html+='<div style="margin-bottom:16px"><b style="font-size:12px;color:#888">Next Actions ('+r.next_actions.length+')</b>'+
+      '<ul style="margin:6px 0 0 16px;color:#ccc;font-size:13px">'+
+      r.next_actions.map(a=>'<li>'+(typeof a==='string'?a:(a.content||JSON.stringify(a)))+'</li>').join('')+
+      '</ul></div>';
+  }
   html+=section('Core',r.core);
   html+=section('Working',r.working);
   html+=section('Sessions',r.sessions);
