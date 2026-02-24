@@ -447,8 +447,13 @@ pub fn recall(
     }
 }
 
-const RERANK_SYSTEM: &str = "Given a query and numbered memories, return the numbers \
-    sorted by relevance (most relevant first). Output only comma-separated numbers.";
+const RERANK_SYSTEM: &str = "\
+You rerank memory search results by relevance to the user's query.
+Think about what the user is actually asking — identity questions need identity answers,
+technical questions need technical answers, etc.
+Return ONLY the numbers of relevant results, most relevant first, comma-separated.
+Omit results that don't meaningfully answer the query.
+Example: 3,1,5,2";
 
 /// Re-rank recall results using an LLM. Falls back to original order on failure.
 pub async fn rerank_results(
@@ -464,10 +469,14 @@ pub async fn rerank_results(
     let mut numbered = String::new();
     for (i, sm) in response.memories.iter().enumerate() {
         use std::fmt::Write;
-        let _ = writeln!(numbered, "{}. {}", i + 1, sm.memory.content);
+        // Truncate long memories to save tokens
+        let content = &sm.memory.content;
+        let preview: String = content.chars().take(150).collect();
+        let suffix = if content.chars().count() > 150 { "…" } else { "" };
+        let _ = writeln!(numbered, "{}. {}{}", i + 1, preview, suffix);
     }
 
-    let user = format!("Query: {query}\n\nMemories:\n{numbered}");
+    let user = format!("Query: {query}\n\nResults:\n{numbered}");
 
     match ai::llm_chat_as(cfg, "rerank", RERANK_SYSTEM, &user).await {
         Ok(raw) => {
