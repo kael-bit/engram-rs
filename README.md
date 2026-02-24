@@ -197,12 +197,12 @@ One call to restore agent context on wake-up:
 curl http://localhost:3917/resume?hours=4
 
 # Token-efficient (recommended for agents)
-curl 'http://localhost:3917/resume?hours=4&compact=true&budget=8000'
+curl 'http://localhost:3917/resume?hours=4&compact=true&budget=16000'
 ```
 
 Returns structured sections: `core` (identity/permanent), `working` (active context), `recent` (time-windowed), `sessions` (session notes), `next_actions` (tagged next-action).
 
-`compact=true` strips metadata, `budget=N` caps total output characters with priority-based truncation (core first, buffer last).
+`compact=true` strips metadata, `budget=N` caps total output characters (default 16000, ~4K tokens). When budget is tight, top items stay full-length while lower-priority items compress to one-line summaries. Core memories are relevance-filtered against current session context — identity and constraints always included, unrelated knowledge is omitted.
 
 ### Namespace Isolation
 
@@ -258,7 +258,7 @@ engram runs autonomously — no cron or external scheduler needed:
 | `POST` | `/recall` | Hybrid search (semantic + keyword + facts) |
 | `GET` | `/search` | Quick keyword search (`?q=term&limit=10`) |
 | `GET` | `/recent` | Recent memories (`?hours=2&limit=20`) |
-| `GET` | `/resume` | Session recovery (`?hours=4&compact=true&budget=8000`) |
+| `GET` | `/resume` | Session recovery (`?hours=4&compact=true&budget=16000`) |
 | `GET` | `/triggers/:action` | Pre-action recall |
 | `POST` | `/consolidate` | Maintenance cycle (`{"merge": true}` for LLM merge) |
 | `POST` | `/audit` | LLM-powered memory reorganization (requires AI) |
