@@ -44,11 +44,11 @@ use std::num::NonZeroUsize;
 
 #[derive(Clone)]
 pub struct EmbedCache {
-    inner: std::sync::Arc<std::sync::Mutex<EmbedCacheInner>>,
+    inner: std::sync::Arc<parking_lot::Mutex<EmbedCacheInner>>,
 }
 
 struct EmbedCacheInner {
-    cache: LruCache<String, Vec<f64>>,
+    cache: LruCache<String, Vec<f32>>,
     hits: u64,
     misses: u64,
 }
@@ -56,7 +56,7 @@ struct EmbedCacheInner {
 impl EmbedCache {
     pub fn new(capacity: usize) -> Self {
         Self {
-            inner: std::sync::Arc::new(std::sync::Mutex::new(EmbedCacheInner {
+            inner: std::sync::Arc::new(parking_lot::Mutex::new(EmbedCacheInner {
                 cache: LruCache::new(
                     NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(128).unwrap()),
                 ),
@@ -66,8 +66,8 @@ impl EmbedCache {
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<Vec<f64>> {
-        let mut inner = self.inner.lock().unwrap();
+    pub fn get(&self, key: &str) -> Option<Vec<f32>> {
+        let mut inner = self.inner.lock();
         let val = inner.cache.get(key).cloned();
         if val.is_some() {
             inner.hits += 1;
@@ -77,13 +77,13 @@ impl EmbedCache {
         val
     }
 
-    pub fn insert(&self, key: String, value: Vec<f64>) {
-        let mut inner = self.inner.lock().unwrap();
+    pub fn insert(&self, key: String, value: Vec<f32>) {
+        let mut inner = self.inner.lock();
         inner.cache.put(key, value);
     }
 
     pub fn stats(&self) -> (usize, usize, u64, u64) {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         (inner.cache.len(), inner.cache.cap().get(), inner.hits, inner.misses)
     }
 }

@@ -621,34 +621,29 @@ async fn extract_from_context(state: AppState, context: &str) {
 fn extract_assistant_msg(raw: &[u8]) -> String {
     let text = String::from_utf8_lossy(raw);
 
-    // Try SSE stream format first (collect all content deltas).
-    // SSE streams may start with "data: " or "event: " lines.
-    let first_line = text.lines().next().unwrap_or("");
-    let looks_like_sse = first_line.starts_with("data: ") || first_line.starts_with("event:");
-    if looks_like_sse {
-        let mut assembled = String::new();
-        for line in text.lines() {
-            let data = line.strip_prefix("data: ").unwrap_or("");
-            if data == "[DONE]" || data.is_empty() {
-                continue;
+    // Try SSE: scan all lines for data: prefixes (don't rely on first line).
+    let mut assembled = String::new();
+    let mut saw_data = false;
+    for line in text.lines() {
+        let Some(data) = line.strip_prefix("data: ") else { continue };
+        saw_data = true;
+        if data == "[DONE]" { continue; }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+            // OpenAI streaming
+            if let Some(delta) = v
+                .pointer("/choices/0/delta/content")
+                .and_then(|c| c.as_str())
+            {
+                assembled.push_str(delta);
             }
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                // OpenAI streaming
-                if let Some(delta) = v
-                    .pointer("/choices/0/delta/content")
-                    .and_then(|c| c.as_str())
-                {
-                    assembled.push_str(delta);
-                }
-                // Anthropic streaming
-                if let Some(delta) = v.pointer("/delta/text").and_then(|c| c.as_str()) {
-                    assembled.push_str(delta);
-                }
+            // Anthropic streaming
+            if let Some(delta) = v.pointer("/delta/text").and_then(|c| c.as_str()) {
+                assembled.push_str(delta);
             }
         }
-        if !assembled.is_empty() {
-            return truncate_chars(&assembled, 6000);
-        }
+    }
+    if saw_data && !assembled.is_empty() {
+        return truncate_chars(&assembled, 6000);
     }
 
     // Non-streaming JSON response

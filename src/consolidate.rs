@@ -702,7 +702,7 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
             vec![]
         });
 
-    let wc: Vec<&(Memory, Vec<f64>)> = all
+    let wc: Vec<&(Memory, Vec<f32>)> = all
         .iter()
         .filter(|(m, e)| !e.is_empty() && (m.layer == Layer::Working || m.layer == Layer::Core))
         .collect();
@@ -730,7 +730,7 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
     }
 
     // Pass 2: Buffer → Working/Core — buffer item updates a higher-layer memory.
-    let buffers: Vec<&(Memory, Vec<f64>)> = all
+    let buffers: Vec<&(Memory, Vec<f32>)> = all
         .iter()
         .filter(|(m, e)| !e.is_empty() && m.layer == Layer::Buffer && !removed_ids.contains(&m.id))
         .collect();
@@ -765,7 +765,7 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
 #[allow(clippy::too_many_arguments)]
 async fn try_reconcile_pair(
     db: &SharedDB, cfg: &AiConfig,
-    a: &Memory, a_emb: &[f64], b: &Memory, b_emb: &[f64],
+    a: &Memory, a_emb: &[f32], b: &Memory, b_emb: &[f32],
     promote_newer_to: Option<Layer>,
     already_removed: &std::collections::HashSet<String>,
 ) -> Option<String> {
@@ -1023,7 +1023,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
     let mut merged_ids = Vec::new();
 
     for layer in [Layer::Buffer, Layer::Working, Layer::Core] {
-        let layer_mems: Vec<&(Memory, Vec<f64>)> =
+        let layer_mems: Vec<&(Memory, Vec<f32>)> =
             all.iter().filter(|(m, _)| m.layer == layer).collect();
 
         if layer_mems.len() < 2 {
@@ -1041,7 +1041,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
             if ns_indices.len() < 2 {
                 continue;
             }
-            let ns_mems: Vec<&(Memory, Vec<f64>)> =
+            let ns_mems: Vec<&(Memory, Vec<f32>)> =
                 ns_indices.iter().map(|&i| layer_mems[i]).collect();
 
         // text-embedding-3-small produces lower cosine scores for short CJK text,
@@ -1211,7 +1211,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
     (merged_total, merged_ids)
 }
 
-fn find_clusters(mems: &[&(Memory, Vec<f64>)], threshold: f64) -> Vec<Vec<usize>> {
+fn find_clusters(mems: &[&(Memory, Vec<f32>)], threshold: f64) -> Vec<Vec<usize>> {
     let n = mems.len();
     let mut used = vec![false; n];
     let mut clusters = Vec::new();

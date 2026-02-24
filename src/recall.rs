@@ -147,7 +147,7 @@ fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {
 pub fn recall(
     db: &MemoryDB,
     req: &RecallRequest,
-    query_emb: Option<&[f64]>,
+    query_emb: Option<&[f32]>,
     extra_queries: Option<&[String]>,
 ) -> RecallResponse {
     let budget = req.budget_tokens.unwrap_or(2000);

@@ -537,7 +537,7 @@ fn prefilter_restricts_semantic_search() {
     // but doesn't match any FTS keywords. With prefiltering, it should NOT appear.
     let hidden = db.insert(MemoryInput::new("completely unrelated topic about gardening")).unwrap();
     // Give it a high-similarity embedding (will match query embedding perfectly)
-    let query_emb = vec![1.0, 0.0, 0.0];
+    let query_emb: Vec<f32> = vec![1.0, 0.0, 0.0];
     db.set_embedding(&hidden.id, &query_emb).unwrap();
 
     // Create enough FTS-matching memories to trigger prefiltering.
@@ -549,7 +549,7 @@ fn prefilter_restricts_semantic_search() {
                 .skip_dedup()
         ).unwrap();
         // Give them partial similarity to the query so semantic search returns them
-        db.set_embedding(&mem.id, &vec![0.6, 0.8, (i as f64) * 0.1]).unwrap();
+        db.set_embedding(&mem.id, &vec![0.6f32, 0.8, (i as f32) * 0.1]).unwrap();
         fts_ids.push(mem.id);
     }
 
@@ -585,12 +585,12 @@ fn prefilter_falls_back_when_few_candidates() {
 
     // Only 1 FTS match — not enough for prefiltering with limit=2
     let mem = db.insert(MemoryInput::new("rare keyword xylophone")).unwrap();
-    let query_emb = vec![1.0, 0.0, 0.0];
+    let query_emb: Vec<f32> = vec![1.0, 0.0, 0.0];
     db.set_embedding(&mem.id, &query_emb).unwrap();
 
     // A memory that only matches semantically (no FTS match)
     let semantic_only = db.insert(MemoryInput::new("something about music instruments")).unwrap();
-    db.set_embedding(&semantic_only.id, &vec![0.9, 0.1, 0.0]).unwrap();
+    db.set_embedding(&semantic_only.id, &vec![0.9f32, 0.1, 0.0]).unwrap();
 
     let req = RecallRequest {
         query: "xylophone".into(),

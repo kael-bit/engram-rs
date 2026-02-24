@@ -1,6 +1,6 @@
 use super::*;
 
-fn make_mem(id: &str, layer: Layer, importance: f64, emb: Vec<f64>) -> (Memory, Vec<f64>) {
+fn make_mem(id: &str, layer: Layer, importance: f64, emb: Vec<f32>) -> (Memory, Vec<f32>) {
     (
         Memory {
             id: id.into(),
@@ -25,11 +25,11 @@ fn make_mem(id: &str, layer: Layer, importance: f64, emb: Vec<f64>) -> (Memory, 
 #[test]
 fn cluster_similar_vectors() {
     let mems = [
-        make_mem("a", Layer::Working, 0.5, vec![1.0, 0.0, 0.0]),
-        make_mem("b", Layer::Working, 0.5, vec![0.999, 0.01, 0.0]),
-        make_mem("c", Layer::Working, 0.5, vec![0.0, 1.0, 0.0]),
+        make_mem("a", Layer::Working, 0.5, vec![1.0f32, 0.0, 0.0]),
+        make_mem("b", Layer::Working, 0.5, vec![0.999f32, 0.01, 0.0]),
+        make_mem("c", Layer::Working, 0.5, vec![0.0f32, 1.0, 0.0]),
     ];
-    let refs: Vec<&(Memory, Vec<f64>)> = mems.iter().collect();
+    let refs: Vec<&(Memory, Vec<f32>)> = mems.iter().collect();
     let clusters = find_clusters(&refs, 0.85);
 
     assert_eq!(clusters.len(), 2);
@@ -40,11 +40,11 @@ fn cluster_similar_vectors() {
 #[test]
 fn cluster_all_different() {
     let mems = [
-        make_mem("a", Layer::Working, 0.5, vec![1.0, 0.0, 0.0]),
-        make_mem("b", Layer::Working, 0.5, vec![0.0, 1.0, 0.0]),
-        make_mem("c", Layer::Working, 0.5, vec![0.0, 0.0, 1.0]),
+        make_mem("a", Layer::Working, 0.5, vec![1.0f32, 0.0, 0.0]),
+        make_mem("b", Layer::Working, 0.5, vec![0.0f32, 1.0, 0.0]),
+        make_mem("c", Layer::Working, 0.5, vec![0.0f32, 0.0, 1.0]),
     ];
-    let refs: Vec<&(Memory, Vec<f64>)> = mems.iter().collect();
+    let refs: Vec<&(Memory, Vec<f32>)> = mems.iter().collect();
     let clusters = find_clusters(&refs, 0.85);
 
     assert_eq!(clusters.len(), 3);
@@ -54,11 +54,11 @@ fn cluster_all_different() {
 #[test]
 fn cluster_all_identical() {
     let mems = [
-        make_mem("a", Layer::Working, 0.5, vec![1.0, 0.0]),
-        make_mem("b", Layer::Working, 0.5, vec![1.0, 0.0]),
-        make_mem("c", Layer::Working, 0.5, vec![1.0, 0.0]),
+        make_mem("a", Layer::Working, 0.5, vec![1.0f32, 0.0]),
+        make_mem("b", Layer::Working, 0.5, vec![1.0f32, 0.0]),
+        make_mem("c", Layer::Working, 0.5, vec![1.0f32, 0.0]),
     ];
-    let refs: Vec<&(Memory, Vec<f64>)> = mems.iter().collect();
+    let refs: Vec<&(Memory, Vec<f32>)> = mems.iter().collect();
     let clusters = find_clusters(&refs, 0.85);
 
     assert_eq!(clusters.len(), 1);
@@ -67,7 +67,7 @@ fn cluster_all_identical() {
 
 #[test]
 fn cluster_empty_input() {
-    let mems: Vec<&(Memory, Vec<f64>)> = vec![];
+    let mems: Vec<&(Memory, Vec<f32>)> = vec![];
     let clusters = find_clusters(&mems, 0.85);
     assert!(clusters.is_empty());
 }

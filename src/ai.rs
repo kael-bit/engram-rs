@@ -431,14 +431,14 @@ struct EmbedResponse {
 
 #[derive(Deserialize)]
 struct EmbedData {
-    embedding: Vec<f64>,
+    embedding: Vec<f32>,
 }
 
 /// Generate embeddings for one or more texts.
 pub async fn get_embeddings(
     cfg: &AiConfig,
     texts: &[String],
-) -> Result<Vec<Vec<f64>>, EngramError> {
+) -> Result<Vec<Vec<f32>>, EngramError> {
     if texts.is_empty() {
         return Ok(vec![]);
     }
@@ -468,7 +468,7 @@ pub async fn get_embeddings(
         .await
         .map_err(|e| ai_err(format!("embedding response parse failed: {e}")))?;
 
-    let embeddings: Vec<Vec<f64>> = embed_resp.data.into_iter().map(|d| d.embedding).collect();
+    let embeddings: Vec<Vec<f32>> = embed_resp.data.into_iter().map(|d| d.embedding).collect();
     if embeddings.len() != texts.len() {
         return Err(ai_err(format!(
             "embedding count mismatch: sent {} texts, got {} embeddings",
@@ -481,15 +481,16 @@ pub async fn get_embeddings(
 
 
 /// Cosine similarity between two vectors.
-pub fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
-    let (mut dot, mut na, mut nb) = (0.0_f64, 0.0_f64, 0.0_f64);
+    let (mut dot, mut na, mut nb) = (0.0f64, 0.0f64, 0.0f64);
     for i in 0..a.len() {
-        dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
+        let (ai, bi) = (a[i] as f64, b[i] as f64);
+        dot += ai * bi;
+        na += ai * ai;
+        nb += bi * bi;
     }
     let denom = na.sqrt() * nb.sqrt();
     if denom == 0.0 {
@@ -499,21 +500,31 @@ pub fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
     }
 }
 
-/// Serialize an f64 vector to bytes (little-endian) for SQLite BLOB storage.
-pub fn embedding_to_bytes(v: &[f64]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(v.len() * 8);
+/// Serialize an f32 vector to bytes (little-endian) for SQLite BLOB storage.
+pub fn embedding_to_bytes(v: &[f32]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(v.len() * 4);
     for &f in v {
         buf.extend_from_slice(&f.to_le_bytes());
     }
     buf
 }
 
-/// Deserialize bytes back to an f64 vector.
-pub fn bytes_to_embedding(b: &[u8]) -> Vec<f64> {
-    b.chunks_exact(8)
+/// Deserialize bytes back to an f32 vector.
+/// Handles legacy f64 blobs (8 bytes per dim) by down-converting automatically.
+pub fn bytes_to_embedding(b: &[u8]) -> Vec<f32> {
+    // Legacy f64 blobs are exactly 12288 bytes (1536 × 8). New f32 blobs are 6144 (1536 × 4).
+    if b.len() == 1536 * 8 {
+        return b.chunks_exact(8)
+            .map(|chunk| {
+                let arr: [u8; 8] = chunk.try_into().expect("8 bytes");
+                f64::from_le_bytes(arr) as f32
+            })
+            .collect();
+    }
+    b.chunks_exact(4)
         .map(|chunk| {
-            let arr: [u8; 8] = chunk.try_into().expect("chunks_exact guarantees 8 bytes");
-            f64::from_le_bytes(arr)
+            let arr: [u8; 4] = chunk.try_into().expect("4 bytes");
+            f32::from_le_bytes(arr)
         })
         .collect()
 }
@@ -525,15 +536,15 @@ mod tests {
 
     #[test]
     fn cosine_same_vec() {
-        let v = vec![1.0, 2.0, 3.0];
+        let v: Vec<f32> = vec![1.0, 2.0, 3.0];
         let sim = cosine_similarity(&v, &v);
         assert!((sim - 1.0).abs() < 1e-10);
     }
 
     #[test]
     fn cosine_perpendicular() {
-        let a = vec![1.0, 0.0];
-        let b = vec![0.0, 1.0];
+        let a: Vec<f32> = vec![1.0, 0.0];
+        let b: Vec<f32> = vec![0.0, 1.0];
         let sim = cosine_similarity(&a, &b);
         assert!(sim.abs() < 1e-10);
     }
@@ -545,7 +556,7 @@ mod tests {
 
     #[test]
     fn embedding_roundtrip() {
-        let original = vec![1.0, -2.5, 3.125, 0.0, f64::MAX];
+        let original: Vec<f32> = vec![1.0, -2.5, 3.125, 0.0, f32::MAX];
         let bytes = embedding_to_bytes(&original);
         let decoded = bytes_to_embedding(&bytes);
         assert_eq!(original, decoded);

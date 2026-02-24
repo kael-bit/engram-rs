@@ -47,21 +47,21 @@ impl MemoryDB {
                 .unwrap_or(false);
 
             if has_cjk_content {
-                // If there's CJK content, check if FTS has longer content (bigrams appended)
-                let sample: Option<(i64, i64)> = self
-                    .conn()?
-                    .query_row(
-                        "SELECT LENGTH(m.content), LENGTH(f.content) \
-                         FROM memories m JOIN memories_fts f ON m.id = f.id \
-                         WHERE m.content GLOB '*[一-龥]*' LIMIT 1",
-                        [],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .ok();
+                // Check if FTS has jieba segments appended (indicated by longer content).
+                // Sample multiple CJK memories to avoid single-entry false positives.
+                let samples: Vec<(i64, i64)> = self.conn()?.prepare(
+                    "SELECT LENGTH(m.content), LENGTH(f.content) \
+                     FROM memories m JOIN memories_fts f ON m.id = f.id \
+                     WHERE m.content GLOB '*[一-龥]*' LIMIT 5"
+                )?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .filter_map(|r| r.ok())
+                    .collect();
 
-                match sample {
-                    Some((mem_len, fts_len)) => fts_len <= mem_len, // no bigrams appended
-                    None => true, // can't check, rebuild to be safe
+                if samples.is_empty() {
+                    true // can't check, rebuild to be safe
+                } else {
+                    // If ALL samples have fts_len <= mem_len, segments are missing
+                    samples.iter().all(|(mem_len, fts_len)| *fts_len <= *mem_len)
                 }
             } else {
                 false // no CJK content, no rebuild needed

@@ -18,6 +18,17 @@ use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use serde::{Deserialize, Serialize};
 
+/// Set busy_timeout on every connection handed out by the pool.
+/// Prevents SQLITE_BUSY under concurrent write pressure (consolidation + API).
+#[derive(Debug)]
+struct BusyTimeoutCustomizer;
+impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for BusyTimeoutCustomizer {
+    fn on_acquire(&self, conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        Ok(())
+    }
+}
+
 type PooledConn = r2d2::PooledConnection<SqliteConnectionManager>;
 
 use crate::error::EngramError;
@@ -92,7 +103,7 @@ pub struct Memory {
     #[serde(default = "default_ns", skip_serializing_if = "is_default_ns")]
     pub namespace: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub embedding: Option<Vec<f64>>,
+    pub embedding: Option<Vec<f32>>,
     #[serde(default = "default_kind", skip_serializing_if = "is_default_kind")]
     pub kind: String,
 }
@@ -557,11 +568,13 @@ impl MemoryDB {
         };
         let pool = Pool::builder()
             .max_size(pool_size)
+            .connection_customizer(Box::new(BusyTimeoutCustomizer))
             .build(manager)
             .map_err(|e| EngramError::Internal(format!("pool: {e}")))?;
 
         // initialize schema on a fresh connection
         let conn = pool.get().map_err(|e| EngramError::Internal(e.to_string()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA auto_vacuum=INCREMENTAL;")?;
         conn.execute_batch(SCHEMA)?;
         conn.execute(FTS_SCHEMA, [])?;

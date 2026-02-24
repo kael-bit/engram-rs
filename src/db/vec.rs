@@ -14,7 +14,7 @@ fn top_k(scored: &mut Vec<(String, f64)>, limit: usize) {
 /// In-memory vector entry: embedding + namespace for filtering without DB lookup.
 #[derive(Clone)]
 pub(crate) struct VecEntry {
-    emb: Vec<f64>,
+    emb: Vec<f32>,
     namespace: String,
 }
 
@@ -46,7 +46,7 @@ impl MemoryDB {
     }
 
     /// Add or update an embedding in the vector index.
-    pub(super) fn vec_index_put(&self, id: &str, emb: Vec<f64>) {
+    pub(super) fn vec_index_put(&self, id: &str, emb: Vec<f32>) {
         // Look up namespace from DB; fall back to "default".
         let namespace = self.get(id).ok().flatten()
             .map(|m| m.namespace)
@@ -64,7 +64,7 @@ impl MemoryDB {
     }
 
     /// Get embeddings for a set of IDs from the in-memory vec index.
-    pub fn get_embeddings_by_ids(&self, ids: &[String]) -> Vec<(String, Vec<f64>)> {
+    pub fn get_embeddings_by_ids(&self, ids: &[String]) -> Vec<(String, Vec<f32>)> {
         let idx = match self.vec_index.read() {
             Ok(idx) => idx,
             Err(_) => return vec![],
@@ -74,7 +74,7 @@ impl MemoryDB {
             .collect()
     }
 
-    pub fn set_embedding(&self, id: &str, embedding: &[f64]) -> Result<(), EngramError> {
+    pub fn set_embedding(&self, id: &str, embedding: &[f32]) -> Result<(), EngramError> {
         let bytes = crate::ai::embedding_to_bytes(embedding);
         self.conn()?.execute(
             "UPDATE memories SET embedding = ?1 WHERE id = ?2",
@@ -84,7 +84,7 @@ impl MemoryDB {
         Ok(())
     }
 
-    pub fn get_all_with_embeddings(&self) -> Result<Vec<(Memory, Vec<f64>)>, EngramError> {
+    pub fn get_all_with_embeddings(&self) -> Result<Vec<(Memory, Vec<f32>)>, EngramError> {
         let conn = self.conn()?;
         let mut stmt = conn
             .prepare("SELECT * FROM memories WHERE embedding IS NOT NULL")?;
@@ -110,12 +110,12 @@ impl MemoryDB {
     /// For larger datasets, consider an external vector index.
     /// Brute-force cosine similarity search. O(n) over all embeddings.
     /// Fine for <10k memories; for larger scales, consider IVF or HNSW indexing.
-    pub fn search_semantic(&self, query_emb: &[f64], limit: usize) -> Vec<(String, f64)> {
+    pub fn search_semantic(&self, query_emb: &[f32], limit: usize) -> Vec<(String, f64)> {
         self.search_semantic_ns(query_emb, limit, None)
     }
 
     pub fn search_semantic_ns(
-        &self, query_emb: &[f64], limit: usize, ns: Option<&str>,
+        &self, query_emb: &[f32], limit: usize, ns: Option<&str>,
     ) -> Vec<(String, f64)> {
         // Try in-memory index first (much faster — no SQL + no blob deser)
         if let Ok(idx) = self.vec_index.read() {
@@ -154,7 +154,7 @@ impl MemoryDB {
     /// Only computes cosine similarity for the given IDs, skipping everything else.
     /// Used when FTS/facts already produced enough candidates to avoid a full scan.
     pub fn search_semantic_by_ids(
-        &self, query_emb: &[f64], ids: &HashSet<String>, limit: usize,
+        &self, query_emb: &[f32], ids: &HashSet<String>, limit: usize,
     ) -> Vec<(String, f64)> {
         if let Ok(idx) = self.vec_index.read() {
             let mut scored: Vec<(String, f64)> = ids

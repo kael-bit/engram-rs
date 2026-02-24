@@ -327,20 +327,20 @@ pub(super) async fn do_resume(
             } else {
                 // Compute centroid of context embeddings
                 let dim = context_embeds[0].1.len();
-                let mut centroid = vec![0.0f64; dim];
+                let mut centroid = vec![0.0f32; dim];
                 for (_, emb) in &context_embeds {
                     for (i, v) in emb.iter().enumerate() {
                         if i < dim { centroid[i] += v; }
                     }
                 }
-                let n = context_embeds.len() as f64;
+                let n = context_embeds.len() as f32;
                 for v in &mut centroid {
                     *v /= n;
                 }
 
                 let core_ids: Vec<String> = core.iter().map(|m| m.id.clone()).collect();
                 let core_embeds = d.get_embeddings_by_ids(&core_ids);
-                let core_embed_map: std::collections::HashMap<&str, &Vec<f64>> = core_embeds.iter()
+                let core_embed_map: std::collections::HashMap<&str, &Vec<f32>> = core_embeds.iter()
                     .map(|(id, emb)| (id.as_str(), emb))
                     .collect();
 

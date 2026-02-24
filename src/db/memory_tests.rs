@@ -405,7 +405,7 @@ fn row_to_memory_skips_embedding_by_default() {
         })
         .unwrap();
 
-    db.set_embedding(&mem.id, &[1.0, 2.0, 3.0]).unwrap();
+    db.set_embedding(&mem.id, &[1.0f32, 2.0, 3.0]).unwrap();
 
     // Normal get() should not deserialize the embedding
     let got = db.get(&mem.id).unwrap().unwrap();

@@ -5,11 +5,11 @@ fn test_db() -> MemoryDB {
     MemoryDB::open(":memory:").unwrap()
 }
 
-fn dummy_emb(seed: f64) -> Vec<f64> {
+fn dummy_emb(seed: f32) -> Vec<f32> {
     // 1536-dim dummy embedding with seed value
-    let mut v = vec![0.0; 1536];
+    let mut v = vec![0.0f32; 1536];
     v[0] = seed;
-    v[1] = 1.0 - seed;
+    v[1] = 1.0f32 - seed;
     v
 }
 
