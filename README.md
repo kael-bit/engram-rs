@@ -17,7 +17,7 @@ engram uses a three-layer model based on [Atkinson-Shiffrin memory theory](https
 Memories promote upward through access frequency (Ebbinghaus-style reinforcement), and decay naturally when neglected. You don't manage layers — store everything as buffer, and the system promotes what sticks:
 
 - **Buffer → Working**: reinforcement score ≥ 5.0 (access + repetition × 2.5), OR lesson/procedural memories auto-promote after 2h cooldown
-- **Working → Core**: reinforcement score ≥ 3.0, importance ≥ 0.6, passes LLM quality gate
+- **Working → Core**: reinforcement score ≥ 3.0, importance ≥ 0.6, passes LLM quality gate (also auto-classifies kind)
 - **Buffer TTL**: 24 hours — unaccessed buffer entries are dropped; half-threshold entries rescue to Working
 - **Procedural** memories and **lessons** (`tag=lesson`) are exempt from TTL — they persist indefinitely
 - **Session notes** (`source=session`) and `ephemeral`-tagged memories never promote to Core
