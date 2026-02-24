@@ -44,6 +44,8 @@ pub struct RecallRequest {
     /// Useful for automated/background queries that shouldn't inflate access counts.
     #[serde(default)]
     pub dry: bool,
+    /// Offset into the result set (applied after scoring/sorting). For pagination.
+    pub offset: Option<usize>,
 }
 
 /// Recall response with scored memories and metadata.
@@ -53,6 +55,12 @@ pub struct RecallResponse {
     pub total_tokens: usize,
     pub layer_breakdown: HashMap<u8, usize>,
     pub search_mode: String,
+    /// Total results available (before offset/limit pagination).
+    pub total: usize,
+    /// Offset applied to the result set.
+    pub offset: usize,
+    /// Limit applied to the result set.
+    pub limit: usize,
     /// Applied time filter, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_filter: Option<TimeFilter>,
@@ -133,6 +141,9 @@ pub fn recall(
 ) -> RecallResponse {
     let budget = req.budget_tokens.unwrap_or(2000);
     let limit = req.limit.unwrap_or(20).min(100);
+    let offset = req.offset.unwrap_or(0);
+    // Fetch enough candidates to fill the page even after skipping offset rows
+    let fetch_limit = (offset + limit).max(limit);
     let min_imp = req.min_importance.unwrap_or(0.0);
     let sort_by = req.sort_by.as_deref().unwrap_or("score");
     let layer_filter: Option<Vec<Layer>> = req.layers.as_ref().map(|ls| {
@@ -195,7 +206,7 @@ pub fn recall(
     // score the memories that FTS/facts already surfaced.
 
     let ns = req.namespace.as_deref();
-    let fts = db.search_fts_ns(&req.query, limit * 3, ns);
+    let fts = db.search_fts_ns(&req.query, fetch_limit * 3, ns);
 
     let mut extra_fts_results: Vec<Vec<(String, f64)>> = Vec::new();
     if let Some(queries) = extra_queries {
@@ -238,15 +249,15 @@ pub fn recall(
     // Semantic search — restrict to candidates when we have enough,
     // otherwise fall back to full scan so we don't miss anything.
     if let Some(qemb) = query_emb {
-        let enough_candidates = candidate_ids.len() >= limit * 2;
+        let enough_candidates = candidate_ids.len() >= fetch_limit * 2;
         let semantic_results = if enough_candidates {
             debug!(
                 candidates = candidate_ids.len(),
                 limit, "prefiltering semantic search to FTS+fact candidates"
             );
-            db.search_semantic_by_ids(qemb, &candidate_ids, limit * 3)
+            db.search_semantic_by_ids(qemb, &candidate_ids, fetch_limit * 3)
         } else {
-            db.search_semantic_ns(qemb, limit * 3, req.namespace.as_deref())
+            db.search_semantic_ns(qemb, fetch_limit * 3, req.namespace.as_deref())
         };
         if !semantic_results.is_empty() {
             search_mode = if enough_candidates {
@@ -393,16 +404,23 @@ pub fn recall(
         }),
     }
 
+    // Filter by min_score first so we can count the total eligible set
+    let min_score = req.min_score.unwrap_or(0.0);
+    let eligible: Vec<ScoredMemory> = scored
+        .into_iter()
+        .filter(|sm| sm.score >= min_score)
+        .collect();
+    let total = eligible.len();
+
+    // Apply offset for pagination (skip into the sorted result set)
+    let paginated = eligible.into_iter().skip(offset);
+
     // Budget-aware selection
     let mut selected = Vec::new();
     let mut total_tokens = 0;
     let mut breakdown = HashMap::new();
-    let min_score = req.min_score.unwrap_or(0.0);
 
-    for sm in scored {
-        if sm.score < min_score {
-            continue;
-        }
+    for sm in paginated {
         let tokens = estimate_tokens(&sm.memory.content);
         if total_tokens + tokens > budget && (budget == 0 || !selected.is_empty()) {
             break;
@@ -442,6 +460,9 @@ pub fn recall(
         total_tokens,
         layer_breakdown: breakdown,
         search_mode,
+        total,
+        offset,
+        limit,
         time_filter,
         expanded_queries: None,
     }
@@ -1245,5 +1266,103 @@ mod tests {
     #[test]
     fn estimate_tokens_empty() {
         assert_eq!(super::estimate_tokens(""), 1); // min 1
+    }
+
+    // --- pagination tests ---
+
+    fn db_with_numbered_entries(n: usize) -> MemoryDB {
+        let db = MemoryDB::open(":memory:").expect("in-memory db");
+        for i in 0..n {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            db.insert(MemoryInput {
+                content: format!("searchable entry number {i}"),
+                importance: Some(0.5 + (i as f64) * 0.01),
+                ..Default::default()
+            }).unwrap();
+        }
+        db
+    }
+
+    #[test]
+    fn pagination_offset_zero_returns_first_page() {
+        let db = db_with_numbered_entries(10);
+        let req = RecallRequest {
+            query: "searchable entry".into(),
+            limit: Some(5),
+            offset: Some(0),
+            ..Default::default()
+        };
+        let result = recall(&db, &req, None, None);
+        assert_eq!(result.memories.len(), 5);
+        assert_eq!(result.offset, 0);
+        assert_eq!(result.limit, 5);
+        assert_eq!(result.total, 10);
+    }
+
+    #[test]
+    fn pagination_second_page() {
+        let db = db_with_numbered_entries(12);
+        let first_page = recall(&db, &RecallRequest {
+            query: "searchable entry".into(),
+            limit: Some(5),
+            offset: Some(0),
+            dry: true,
+            ..Default::default()
+        }, None, None);
+        let second_page = recall(&db, &RecallRequest {
+            query: "searchable entry".into(),
+            limit: Some(5),
+            offset: Some(5),
+            dry: true,
+            ..Default::default()
+        }, None, None);
+
+        assert_eq!(first_page.memories.len(), 5);
+        assert_eq!(second_page.memories.len(), 5);
+        assert_eq!(first_page.total, 12);
+        assert_eq!(second_page.total, 12);
+
+        // Pages shouldn't overlap
+        let first_ids: HashSet<String> = first_page.memories.iter().map(|m| m.memory.id.clone()).collect();
+        for m in &second_page.memories {
+            assert!(!first_ids.contains(&m.memory.id), "pages should not overlap");
+        }
+    }
+
+    #[test]
+    fn pagination_offset_beyond_total() {
+        let db = db_with_numbered_entries(5);
+        let result = recall(&db, &RecallRequest {
+            query: "searchable entry".into(),
+            limit: Some(10),
+            offset: Some(100),
+            ..Default::default()
+        }, None, None);
+        assert!(result.memories.is_empty());
+        assert_eq!(result.total, 5);
+        assert_eq!(result.offset, 100);
+    }
+
+    #[test]
+    fn pagination_no_offset_defaults_to_zero() {
+        let db = db_with_numbered_entries(8);
+        let with_offset = recall(&db, &RecallRequest {
+            query: "searchable entry".into(),
+            limit: Some(5),
+            offset: Some(0),
+            dry: true,
+            ..Default::default()
+        }, None, None);
+        let without_offset = recall(&db, &RecallRequest {
+            query: "searchable entry".into(),
+            limit: Some(5),
+            dry: true,
+            ..Default::default()
+        }, None, None);
+
+        assert_eq!(with_offset.memories.len(), without_offset.memories.len());
+        assert_eq!(with_offset.offset, 0);
+        assert_eq!(without_offset.offset, 0);
+        assert_eq!(with_offset.total, without_offset.total);
     }
 }
