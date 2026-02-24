@@ -1178,4 +1178,36 @@ mod tests {
             "single CJK char '用' should be excluded from affinity terms"
         );
     }
+
+    #[test]
+    fn estimate_tokens_ascii() {
+        // Pure ASCII: ~4 bytes per token
+        let text = "hello world this is a test";
+        let tokens = super::estimate_tokens(text);
+        // 26 bytes / 4 = 6.5 → ceil = 7
+        assert!(tokens >= 5 && tokens <= 10, "got {tokens}");
+    }
+
+    #[test]
+    fn estimate_tokens_cjk() {
+        // Pure CJK: ~1.5 chars per token
+        let text = "你好世界测试";
+        let tokens = super::estimate_tokens(text);
+        // 6 chars / 1.5 = 4
+        assert_eq!(tokens, 4);
+    }
+
+    #[test]
+    fn estimate_tokens_mixed() {
+        // Mixed: "hello 世界" = 6 ascii bytes + 2 CJK chars
+        let text = "hello 世界";
+        let tokens = super::estimate_tokens(text);
+        // 6/4 + 2/1.5 = 1.5 + 1.33 = 2.83 → 3
+        assert!(tokens >= 2 && tokens <= 4, "got {tokens}");
+    }
+
+    #[test]
+    fn estimate_tokens_empty() {
+        assert_eq!(super::estimate_tokens(""), 1); // min 1
+    }
 }
