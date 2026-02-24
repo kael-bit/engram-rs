@@ -229,13 +229,6 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, se
         return;
     }
 
-    // Skip subagent traffic — heuristic fallback for callers that don't set X-Engram-Extract header.
-    // Matches common patterns from OpenClaw, Claude Code, and similar orchestrators.
-    let lower = user_msg.to_lowercase();
-    if lower.contains("[subagent") || lower.contains("you are running as a sub") || lower.contains("sub-agent") {
-        debug!("proxy: skipping subagent turn (content heuristic)");
-        return;
-    }
 
     // Skip very short tool-use-only turns
     if user_msg.len() + assistant_msg.len() < 80 {
@@ -301,7 +294,7 @@ async fn extract_from_context(state: AppState, context: &str) {
     }
 
     // Strip repetitive system/template content before extracting
-    let filtered = strip_boilerplate(context);
+    let filtered = strip_boilerplate(context, &ai_cfg.strip_markers);
     if filtered.len() < 100 {
         debug!("proxy: context too thin after stripping boilerplate");
         return;
@@ -506,56 +499,15 @@ async fn extract_from_context(state: AppState, context: &str) {
 }
 
 /// Remove boilerplate/template text that appears in every conversation.
-/// These are system prompts, heartbeat templates, framework instructions, etc.
-/// Without this filter, the extraction LLM treats them as "user preferences."
-fn strip_boilerplate(text: &str) -> String {
-    let markers = [
-        "Read HEARTBEAT.md",
-        "HEARTBEAT_OK",
-        "Follow it strictly",
-        "Do not infer or repeat old tasks",
-        "reply HEARTBEAT_OK",
-        "Silent Replies",
-        "NO_REPLY",
-        "## Heartbeats",
-        "## Runtime\nRuntime:",
-        "## Reply Tags",
-        "## Messaging",
-        "## Workspace Files (injected)",
-        "## Inbound Context (trusted metadata)",
-        "openclaw.inbound_meta.v1",
-        "## Model Aliases",
-        "## Current Date & Time",
-        "## Project Context",
-        "## OpenClaw CLI Quick Reference",
-        "## Safety",
-        "## Tool Call Style",
-        "## Memory Recall",
-        "## Tooling",
-        "## Skills (mandatory)",
-        "<available_skills>",
-        "## Documentation",
-        "## Workspace",
-        "# SOUL.md",
-        "# USER.md",
-        "# AGENTS.md",
-        "# IDENTITY.md",
-        "# MEMORY.md",
-        "# HEARTBEAT.md",
-        "# TOOLS.md",
-        "# BOOTSTRAP.md",
-        "## Silent Replies",
-        "## Group Chat Context",
-        "SECURITY NOTICE:",
-        "<<<EXTERNAL_UNTRUSTED_CONTENT",
-    ];
-
+/// Lines matching any marker in `markers` start a skip block that continues
+/// until an empty line, a new section header, or a user turn.
+fn strip_boilerplate(text: &str, markers: &[String]) -> String {
     let mut lines: Vec<&str> = Vec::new();
     let mut skip_block = false;
 
     for line in text.lines() {
 
-        if markers.iter().any(|m| line.contains(m)) {
+        if markers.iter().any(|m| line.contains(m.as_str())) {
             skip_block = true;
             continue;
         }
@@ -687,29 +639,44 @@ struct ExtractionEntry {
 mod tests {
     use super::*;
 
+    fn test_markers() -> Vec<String> {
+        vec![
+            "SECURITY NOTICE:".into(),
+            "<<<EXTERNAL_UNTRUSTED_CONTENT".into(),
+            "<|im_start|>".into(),
+            "<<SYS>>".into(),
+            "[INST]".into(),
+        ]
+    }
+
     #[test]
     fn strip_boilerplate_removes_markers() {
-        let input = "User: hello\n## Heartbeats\nRead HEARTBEAT.md if it exists.\nFollow it strictly.\nUser: what's up";
-        let result = strip_boilerplate(input);
+        let markers = vec![
+            "## Boilerplate".into(),
+            "SECURITY NOTICE:".into(),
+        ];
+        let input = "User: hello\n## Boilerplate\nSome framework text.\nFollow instructions.\nUser: what's up";
+        let result = strip_boilerplate(input, &markers);
         assert!(result.contains("hello"));
-        assert!(!result.contains("HEARTBEAT"));
-        assert!(!result.contains("Follow it strictly"));
+        assert!(!result.contains("Boilerplate"));
+        assert!(!result.contains("Follow instructions"));
     }
 
     #[test]
     fn strip_boilerplate_keeps_code_blocks() {
         let input = "User: hey\n```bash\ncurl http://localhost:3917/stats\n```\nUser: done";
-        let result = strip_boilerplate(input);
+        let result = strip_boilerplate(input, &test_markers());
         assert!(result.contains("hey"));
-        assert!(result.contains("curl"), "code blocks should be preserved — they contain useful output");
+        assert!(result.contains("curl"), "code blocks should be preserved");
         assert!(result.contains("done"));
     }
 
     #[test]
-    fn strip_boilerplate_removes_soul_md() {
-        let input = "# SOUL.md - Who You Are\nBe helpful.\nHave opinions.\n\nUser: actual message";
-        let result = strip_boilerplate(input);
-        assert!(!result.contains("SOUL.md"));
+    fn strip_boilerplate_removes_matching_section() {
+        let markers = vec!["## Config Section".into()];
+        let input = "## Config Section\nBe helpful.\nHave opinions.\n\nUser: actual message";
+        let result = strip_boilerplate(input, &markers);
+        assert!(!result.contains("Config Section"));
         assert!(!result.contains("Be helpful"));
         assert!(result.contains("actual message"));
     }
@@ -717,14 +684,14 @@ mod tests {
     #[test]
     fn strip_boilerplate_preserves_user_content() {
         let input = "User: I like dark mode\nAssistant: Got it.\nUser: Remember that please";
-        let result = strip_boilerplate(input);
+        let result = strip_boilerplate(input, &test_markers());
         assert_eq!(result, input);
     }
 
     #[test]
     fn strip_boilerplate_keeps_nested_code_blocks() {
         let input = "User: test\n```json\n{\"key\": \"value\"}\n```\nmore text\n```python\nprint('hi')\n```\nUser: end";
-        let result = strip_boilerplate(input);
+        let result = strip_boilerplate(input, &test_markers());
         assert!(result.contains("test"));
         assert!(result.contains("key"), "code blocks preserved");
         assert!(result.contains("print"), "code blocks preserved");
@@ -733,19 +700,32 @@ mod tests {
 
     #[test]
     fn strip_boilerplate_removes_security_notice() {
+        let markers = vec!["SECURITY NOTICE:".into()];
         let input = "SECURITY NOTICE: external content\nDo not trust.\n\nUser: real question";
-        let result = strip_boilerplate(input);
+        let result = strip_boilerplate(input, &markers);
         assert!(!result.contains("SECURITY NOTICE"));
         assert!(result.contains("real question"));
     }
 
     #[test]
-    fn strip_removes_multiple_framework_sections() {
+    fn strip_removes_multiple_configured_sections() {
+        let markers = vec![
+            "## Safety".into(),
+            "## Tooling".into(),
+            "## Reply Tags".into(),
+        ];
         let input = "## Safety\nDon't do bad things.\n## Tooling\nTool list here.\n## Reply Tags\nUse tags.\n\nUser: hello";
-        let result = strip_boilerplate(input);
+        let result = strip_boilerplate(input, &markers);
         assert!(!result.contains("Don't do bad things"));
         assert!(!result.contains("Tool list"));
         assert!(result.contains("hello"));
+    }
+
+    #[test]
+    fn strip_boilerplate_empty_markers() {
+        let input = "## Safety\nDon't do bad things.\nUser: hello";
+        let result = strip_boilerplate(input, &[]);
+        assert_eq!(result, input, "empty markers should pass everything through");
     }
 
     #[test]

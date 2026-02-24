@@ -323,6 +323,7 @@ engram runs autonomously — no cron or external scheduler needed:
 | `ENGRAM_AUTO_RERANK` | `false` | Auto-rerank all recall results via LLM |
 | `ENGRAM_PROXY_UPSTREAM` | — | Upstream LLM URL (enables proxy) |
 | `ENGRAM_PROXY_KEY` | — | Fallback API key for proxy |
+| `ENGRAM_STRIP_MARKERS` | *(generic LLM tokens)* | Comma-separated boilerplate markers to strip from proxy context before extraction. Default: common LLM control tokens. Set this to your framework's system prompt headers. |
 | `ENGRAM_WORKSPACE` | — | Default workspace tag for `/resume` |
 | `ENGRAM_AUDIT_HOURS` | `24` | Background audit interval (0 = off) |
 | `RUST_LOG` | `info` | Log level (`debug` for verbose) |
