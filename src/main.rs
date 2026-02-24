@@ -247,7 +247,9 @@ async fn main() {
                             warn!("auto-audit failed: {e}");
                         }
                     }
-                    audit_db.set_meta("last_audit_ms", &crate::db::now_ms().to_string());
+                    if let Err(e) = audit_db.set_meta("last_audit_ms", &crate::db::now_ms().to_string()) {
+                        warn!("failed to update last_audit_ms: {e}");
+                    }
                     tokio::time::sleep(interval).await;
                 }
             });

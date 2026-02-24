@@ -531,13 +531,13 @@ impl MemoryDB {
         })
     }
 
-    pub fn set_meta(&self, key: &str, value: &str) {
-        if let Ok(c) = self.conn() {
-            let _ = c.execute(
-                "INSERT OR REPLACE INTO engram_meta (key, value) VALUES (?1, ?2)",
-                rusqlite::params![key, value],
-            );
-        }
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<(), EngramError> {
+        let c = self.conn()?;
+        c.execute(
+            "INSERT OR REPLACE INTO engram_meta (key, value) VALUES (?1, ?2)",
+            rusqlite::params![key, value],
+        )?;
+        Ok(())
     }
 
     /// Open (or create) a database at the given path.
@@ -715,9 +715,9 @@ mod meta_tests {
     fn meta_get_set() {
         let db = MemoryDB::open(":memory:").unwrap();
         assert_eq!(db.get_meta("nonexistent"), None);
-        db.set_meta("last_audit_ms", "1234567890");
+        db.set_meta("last_audit_ms", "1234567890").unwrap();
         assert_eq!(db.get_meta("last_audit_ms"), Some("1234567890".to_string()));
-        db.set_meta("last_audit_ms", "9999999999");
+        db.set_meta("last_audit_ms", "9999999999").unwrap();
         assert_eq!(db.get_meta("last_audit_ms"), Some("9999999999".to_string()));
     }
 }

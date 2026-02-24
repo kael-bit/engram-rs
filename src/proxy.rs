@@ -115,15 +115,14 @@ pub async fn handle(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|ct| ct.contains("text/event-stream"));
 
-    // Hash auth token to separate conversation windows per caller
+    // Deterministic session key from auth token suffix
     let session_key = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .map(|s| {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            s.hash(&mut h);
-            format!("{:016x}", h.finish())
+            let token = s.strip_prefix("Bearer ").unwrap_or(s).trim();
+            if token.len() > 16 { token[token.len()-16..].to_string() }
+            else { token.to_string() }
         })
         .unwrap_or_else(|| "default".into());
 

@@ -29,7 +29,7 @@ impl MemoryDB {
         )?;
         let turns: Vec<String> = stmt
             .query_map(params![session_key], |row| row.get(0))?
-            .filter_map(std::result::Result::ok)
+            .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
         if !turns.is_empty() {
             conn.execute("DELETE FROM proxy_turns WHERE session_key = ?1", params![session_key])?;
@@ -45,7 +45,7 @@ impl MemoryDB {
         )?;
         let keys: Vec<String> = stmt
             .query_map([], |row| row.get(0))?
-            .filter_map(std::result::Result::ok)
+            .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
         let mut results = Vec::new();
         for key in keys {
@@ -54,7 +54,7 @@ impl MemoryDB {
             )?;
             let turns: Vec<String> = turn_stmt
                 .query_map(params![&key], |row| row.get(0))?
-                .filter_map(std::result::Result::ok)
+                .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
                 .collect();
             if !turns.is_empty() {
                 results.push((key, turns.join("\n---\n")));
@@ -119,7 +119,7 @@ impl MemoryDB {
         )?;
         let rows: Vec<(String, String, i64)> = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-            .filter_map(std::result::Result::ok)
+            .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
 
         let mut map: std::collections::BTreeMap<String, Vec<(String, i64)>> = std::collections::BTreeMap::new();

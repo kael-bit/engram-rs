@@ -248,7 +248,7 @@ impl MemoryDB {
         let pattern = format!("{}%", prefix);
         let mut stmt = conn.prepare("SELECT id FROM memories WHERE id LIKE ?1 LIMIT 2")?;
         let ids: Vec<String> = stmt.query_map(params![pattern], |row| row.get(0))?
-            .filter_map(std::result::Result::ok)
+            .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
         match ids.len() {
             0 => Err(EngramError::NotFound),
@@ -282,7 +282,7 @@ impl MemoryDB {
         // Collect IDs to remove from vec index
         let mut stmt = conn.prepare("SELECT id FROM memories WHERE namespace = ?1")?;
         let ids: Vec<String> = stmt.query_map(params![ns], |row| row.get(0))?
-            .filter_map(std::result::Result::ok)
+            .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
         drop(stmt);
 
@@ -329,7 +329,7 @@ impl MemoryDB {
                 source: row.get(8)?,
                 kind: row.get(9)?,
             })
-        })?.filter_map(std::result::Result::ok).collect();
+        })?.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok()).collect();
         Ok(rows)
     }
 
@@ -450,7 +450,7 @@ impl MemoryDB {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(std::convert::AsRef::as_ref).collect();
         let Ok(mut stmt) = conn.prepare(&sql) else { return vec![]; };
         stmt.query_map(param_refs.as_slice(), row_to_memory_meta)
-            .map(|iter| iter.filter_map(std::result::Result::ok).collect())
+            .map(|iter| iter.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok()).collect())
             .unwrap_or_default()
     }
 
@@ -465,7 +465,7 @@ impl MemoryDB {
         };
         stmt.query_map([], row_to_memory_meta)
             .map(|iter| {
-                iter.filter_map(std::result::Result::ok)
+                iter.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
                     .filter(|m| {
                         let hours = (now - m.last_accessed) as f64 / 3_600_000.0;
                         let score = m.importance * (-m.decay_rate * hours / 168.0).exp();
@@ -535,7 +535,7 @@ impl MemoryDB {
             params_vec.iter().map(std::convert::AsRef::as_ref).collect();
         let rows: Vec<Memory> = stmt
             .query_map(param_refs.as_slice(), row_to_memory)?
-            .filter_map(std::result::Result::ok)
+            .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
         Ok(rows)
     }
@@ -592,7 +592,7 @@ impl MemoryDB {
             params_vec.iter().map(std::convert::AsRef::as_ref).collect();
         let rows = stmt
             .query_map(param_refs.as_slice(), row_to_memory)?
-            .filter_map(std::result::Result::ok)
+            .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
         Ok(rows)
     }
@@ -607,7 +607,7 @@ impl MemoryDB {
                  ORDER BY created_at DESC",
             )?;
             let rows = stmt.query_map(params![pattern, ns], row_to_memory)?
-                .filter_map(std::result::Result::ok)
+                .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
                 .collect();
             Ok(rows)
         } else {
@@ -616,7 +616,7 @@ impl MemoryDB {
                  ORDER BY created_at DESC",
             )?;
             let rows = stmt.query_map(params![pattern], row_to_memory)?
-                .filter_map(std::result::Result::ok)
+                .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
                 .collect();
             Ok(rows)
         }
@@ -845,7 +845,7 @@ impl MemoryDB {
         let mapper = if include { row_to_memory_with_embedding } else { row_to_memory };
         let rows = stmt
             .query_map([], mapper)?
-            .filter_map(std::result::Result::ok)
+            .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
         Ok(rows)
     }

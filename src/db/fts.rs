@@ -85,7 +85,7 @@ impl MemoryDB {
                     row.get::<_, String>(2)?,
                 ))
             })?
-            .filter_map(std::result::Result::ok)
+            .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
 
         for (id, content, tags) in &rows {
@@ -146,7 +146,7 @@ impl MemoryDB {
             stmt.query_map(params![fts_query, limit as i64, ns], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
             })
-            .map(|iter| iter.filter_map(std::result::Result::ok).map(|(id, rank)| (id, -rank)).collect())
+            .map(|iter| iter.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok()).map(|(id, rank)| (id, -rank)).collect())
             .unwrap_or_default()
         } else {
             let Ok(mut stmt) = conn.prepare(
@@ -158,7 +158,7 @@ impl MemoryDB {
             stmt.query_map(params![fts_query, limit as i64], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
             })
-            .map(|iter| iter.filter_map(std::result::Result::ok).map(|(id, rank)| (id, -rank)).collect())
+            .map(|iter| iter.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok()).map(|(id, rank)| (id, -rank)).collect())
             .unwrap_or_default()
         }
     }
@@ -177,7 +177,7 @@ impl MemoryDB {
         )?;
         let missing: Vec<(String, String, String)> = stmt.query_map([], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })?.filter_map(std::result::Result::ok).collect();
+        })?.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok()).collect();
 
         let rebuilt = missing.len();
         for (id, content, tags_json) in &missing {
@@ -200,7 +200,7 @@ impl MemoryDB {
         let mut stmt = conn.prepare("SELECT id, content, tags FROM memories")?;
         let rows: Vec<(String, String, String)> = stmt.query_map([], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })?.filter_map(std::result::Result::ok).collect();
+        })?.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok()).collect();
 
         let rebuilt = rows.len();
         for (id, content, tags_json) in &rows {
