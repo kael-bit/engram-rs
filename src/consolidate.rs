@@ -208,9 +208,24 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Reinforcement score = access_count + repetition_count * 2.5
     // Repetition weighs 2.5x because restating > incidental recall hit.
     // Session notes and ephemeral tags are always blocked.
+    // gate-rejected memories get a retry after 7 days — the gate prompt evolves,
+    // and a rejection from an older prompt shouldn't be permanent.
+    let gate_retry_ms: i64 = 7 * 24 * 3600 * 1000; // 7 days
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0) {
-        if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral" || t == "gate-rejected") {
+        if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral") {
             continue;
+        }
+        // gate-rejected: skip unless cooldown expired
+        if mem.tags.iter().any(|t| t == "gate-rejected") {
+            if now - mem.last_accessed < gate_retry_ms {
+                continue;
+            }
+            // Cooldown expired — remove tag and let it re-evaluate
+            let cleaned: Vec<String> = mem.tags.iter()
+                .filter(|t| t.as_str() != "gate-rejected")
+                .cloned().collect();
+            let _ = db.update_fields(&mem.id, None, None, None, Some(&cleaned));
+            info!(id = %mem.id, "gate-rejected cooldown expired, retrying promotion");
         }
         let score = mem.access_count as f64 + mem.repetition_count as f64 * 2.5;
         let by_score = score >= promote_threshold as f64
@@ -1489,6 +1504,30 @@ mod tests {
         let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
         assert!(!candidate_ids.contains(&"gate-rej"), "gate-rejected must not be a promotion candidate");
         assert!(candidate_ids.contains(&"eligible"), "eligible should be a promotion candidate");
+    }
+
+    #[test]
+    fn gate_rejected_retries_after_cooldown() {
+        let db = test_db();
+        let old = crate::db::now_ms() - 14 * 86_400_000; // 14 days ago
+        let stale_access = crate::db::now_ms() - 8 * 86_400_000; // last accessed 8 days ago
+
+        // gate-rejected but last_accessed > 7 days ago → cooldown expired
+        let mut retry = mem_with_ts("retry-me", Layer::Working, 0.8, 20, old, stale_access);
+        retry.tags = vec!["gate-rejected".into()];
+        retry.repetition_count = 5;
+
+        db.import(&[retry]).unwrap();
+
+        let r = consolidate_sync(&db, None);
+
+        // Should now be a promotion candidate (tag cleared, eligible again)
+        let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(candidate_ids.contains(&"retry-me"), "gate-rejected with expired cooldown should retry");
+
+        // Tag should be removed
+        let mem = db.get("retry-me").unwrap().unwrap();
+        assert!(!mem.tags.contains(&"gate-rejected".to_string()), "gate-rejected tag should be cleared");
     }
 
     #[test]
