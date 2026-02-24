@@ -231,18 +231,25 @@ async fn stats(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Query(q): Query<std::collections::HashMap<String, String>>,
-) -> Json<db::Stats> {
-    let ns = q.get("ns").cloned().or_else(|| get_namespace(&headers));
+) -> Json<serde_json::Value> {
+    let ns = q.get("ns").or_else(|| q.get("namespace")).cloned().or_else(|| get_namespace(&headers));
     let db = state.db.clone();
-    let s = blocking(move || {
-        match ns {
-            Some(n) => db.stats_ns(&n),
+    let is_global = ns.is_none();
+    let result = blocking(move || {
+        let s = match &ns {
+            Some(n) => db.stats_ns(n),
             None => db.stats(),
+        };
+        let mut v = serde_json::to_value(&s).unwrap_or_default();
+        if is_global {
+            let nss = db.list_namespaces();
+            v["namespaces"] = serde_json::json!(nss);
         }
+        v
     })
     .await
-    .unwrap_or(db::Stats { total: 0, buffer: 0, working: 0, core: 0, by_kind: db::KindStats::default() });
-    Json(s)
+    .unwrap_or_else(|_| serde_json::json!({"total":0,"buffer":0,"working":0,"core":0}));
+    Json(result)
 }
 
 /// Fire-and-forget: generate embedding for a memory in the background.

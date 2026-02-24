@@ -215,7 +215,8 @@ function updateNsUI(){
 
 function updateNsList(statsData){
   if(statsData&&statsData.namespaces){
-    const names=Object.keys(statsData.namespaces).sort();
+    const names=Array.isArray(statsData.namespaces)?statsData.namespaces:Object.keys(statsData.namespaces);
+    names.sort();
     if(names.length) knownNs=names;
   }
   const sel=document.getElementById('nsSelect');

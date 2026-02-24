@@ -707,6 +707,17 @@ impl MemoryDB {
         s
     }
 
+    pub fn list_namespaces(&self) -> Vec<String> {
+        let Ok(conn) = self.conn() else { return vec![] };
+        let mut stmt = match conn.prepare("SELECT DISTINCT namespace FROM memories ORDER BY namespace") {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        stmt.query_map([], |r| r.get(0))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     /// Check DB integrity: FTS sync, orphans, missing embeddings.
     pub fn integrity(&self) -> IntegrityReport {
         let conn = match self.conn() {
