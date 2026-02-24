@@ -31,38 +31,6 @@ const RECONCILE_PROMPT: &str = "You are comparing two memory entries about poten
 /// (0.55-0.78) to find topically related but not near-duplicate pairs.
 /// Near-duplicates (>0.78) are handled by merge_similar instead.
 pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
-    // Skip if nothing changed since last reconcile
-    let db_check = db.clone();
-    let should_run = tokio::task::spawn_blocking(move || {
-        let last_run = db_check.get_meta("reconcile_fingerprint").unwrap_or_default();
-        let stats_result: Result<(i64, i64), _> = db_check.conn().and_then(|c| {
-            c.query_row(
-                "SELECT COUNT(*), COALESCE(MAX(modified_at),0) FROM memories WHERE layer IN (2,3)",
-                [], |r| Ok((r.get(0)?, r.get(1)?))
-            ).map_err(Into::into)
-        });
-        match stats_result {
-            Ok((count, max_mod)) => {
-                let fingerprint = format!("{}:{}", count, max_mod);
-                if Some(fingerprint.as_str()) == last_run.as_deref() {
-                    debug!("reconcile: no changes since last run, skipping");
-                    None
-                } else {
-                    Some(fingerprint)
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "reconcile: failed to check fingerprint");
-                Some(String::new())
-            }
-        }
-    }).await.unwrap_or(Some(String::new()));
-
-    let fingerprint = match should_run {
-        Some(fp) => fp,
-        None => return (0, vec![]),
-    };
-
     let db2 = db.clone();
     let all = tokio::task::spawn_blocking(move || db2.get_all_with_embeddings())
         .await
@@ -82,6 +50,23 @@ pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, 
 
     if wc.len() < 2 {
         return (0, vec![]);
+    }
+
+    // Skip if nothing changed since last reconcile
+    let fingerprint = {
+        let count = wc.len();
+        let max_mod = wc.iter().map(|(_m, _)| _m.modified_at).max().unwrap_or(0);
+        format!("{}:{}", count, max_mod)
+    };
+    {
+        let db_fp = db.clone();
+        let fp = fingerprint.clone();
+        let last = tokio::task::spawn_blocking(move || db_fp.get_meta("reconcile_fingerprint"))
+            .await.unwrap_or_default();
+        if last.as_deref() == Some(fp.as_str()) {
+            debug!("reconcile: no changes since last run, skipping");
+            return (0, vec![]);
+        }
     }
 
     let mut reconciled = 0;
@@ -128,6 +113,15 @@ pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, 
     if reconciled > 0 {
         info!(reconciled, "reconciliation complete");
     }
+
+    // Save fingerprint so we skip next time if nothing changed
+    if !fingerprint.is_empty() {
+        let db_save = db.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            db_save.set_meta("reconcile_fingerprint", &fingerprint)
+        }).await;
+    }
+
     (reconciled, removed_ids.into_iter().collect())
 }
 
