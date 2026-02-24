@@ -884,8 +884,11 @@ async function doImport(input){
   }catch(e){toast(e.message,false);}
 }
 async function doAction(path,method,body){
+  toast(path.slice(1)+': running...');
   try{const opts={method};if(body)opts.body=typeof body==='string'?body:JSON.stringify(body);
-    const d=await api(path,opts);toast(path.slice(1)+': '+(typeof d==='string'?d:JSON.stringify(d)).slice(0,80));await refresh();
+    const d=await api(path,opts);
+    const msg=typeof d==='object'&&d.summary?d.summary:(typeof d==='string'?d:JSON.stringify(d)).slice(0,120);
+    toast(path.slice(1)+': '+msg);await refresh();
   }catch(e){toast(e.message,false);}
 }
 
