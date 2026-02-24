@@ -75,46 +75,33 @@ open http://localhost:3917/ui
 
 Single binary, ~9 MB, ~65 MB RSS (includes jieba dictionary for CJK segmentation). No Docker, no Python, no external database.
 
-## Real-World Example
+## How It Works
 
-Here's what a typical agent session looks like with engram:
+```mermaid
+sequenceDiagram
+    participant A as Agent
+    participant E as engram
+    participant LLM as Background
 
+    Note over A,E: Session Start
+    A->>E: GET /resume?hours=6
+    E-->>A: core + working + next_actions
+
+    Note over A,E: During Work
+    A->>E: POST /memories {decision}
+    A->>E: POST /recall {query}
+    E-->>A: ranked results
+    A->>E: GET /triggers/deploy
+    E-->>A: relevant lessons
+
+    Note over A,E: Session End
+    A->>E: POST /memories {summary + next steps}
+
+    Note over E,LLM: Background (every 30min)
+    LLM->>E: consolidate
+    E->>E: Buffer → Working → Core
+    E->>E: decay, dedup, merge
 ```
-# Agent wakes up — first thing, restore context
-$ curl -s localhost:3917/resume?hours=6&compact=true | jq .
-
-core: [
-  {"content": "I'm Atlas, a memory-augmented assistant"},
-  {"content": "Lesson: never commit internal docs to public repos"},
-  {"content": "Lesson: deployment must be atomic — stop && cp && start in one command"}
-]
-working: [
-  {"content": "Currently iterating on engram proxy + recall quality"}
-]
-next_actions: [
-  {"content": "Next: test proxy extraction with real conversations"}
-]
-
-# Agent knows who it is, what it was doing, and what to do next.
-
-# During work — user says something important
-> User: "from now on, always use Rust instead of Python for new projects"
-
-$ curl -sX POST localhost:3917/memories \
-  -H 'Content-Type: application/json' \
-  -d '{"content": "user preference: always use Rust over Python for new projects", "importance": 0.9}'
-
-# Before deploying — check safety triggers
-$ curl -s localhost:3917/triggers/deploy
-[{"content": "Lesson: deployment must be atomic — stop && cp && start in one command"}]
-
-# Session ending — store continuity
-$ curl -sX POST localhost:3917/memories \
-  -H 'Content-Type: application/json' \
-  -d '{"content": "Session: added fact triple API, all tests pass. Next: write contradiction resolution tests.", "tags": ["session"]}'
-```
-
-No setup, no config files, no framework integration. Just HTTP calls.
 
 ## Setup
 
