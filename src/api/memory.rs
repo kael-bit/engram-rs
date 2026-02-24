@@ -56,7 +56,7 @@ pub(super) async fn create_memory(
 
                         if contents_differ && textually_different {
                             let merged_content = if let Some(ref cfg) = state.ai {
-                                merge_memory_contents(cfg, &existing.content, &input.content).await
+                                merge_memory_contents(cfg, &existing.content, &input.content, &state.db).await
                                     .unwrap_or_else(|_| input.content.clone())
                             } else {
                                 // No AI: fall back to longer version
@@ -122,8 +122,12 @@ pub(super) async fn create_memory(
                 let id = mem.id.clone();
                 let content = mem.content.clone();
                 match ai::get_embeddings(&cfg, &[content]).await {
-                    Ok(embs) if !embs.is_empty() => {
-                        if let Some(emb) = embs.into_iter().next() {
+                    Ok(er) if !er.embeddings.is_empty() => {
+                        if let Some(ref u) = er.usage {
+                            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                            let _ = db.log_llm_call("embed_sync", &cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
+                        }
+                        if let Some(emb) = er.embeddings.into_iter().next() {
                             let _ = tokio::task::spawn_blocking(move || {
                                 db.set_embedding(&id, &emb)
                             }).await;
@@ -179,9 +183,13 @@ pub(super) async fn batch_create(
             let any_sync = inputs_had_sync;
             if any_sync {
                 match ai::get_embeddings(cfg, &items.iter().map(|(_, c)| c.clone()).collect::<Vec<_>>()).await {
-                    Ok(embs) => {
+                    Ok(er) => {
+                        if let Some(ref u) = er.usage {
+                            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                            let _ = state.db.log_llm_call("embed_batch", &cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
+                        }
                         let db = state.db.clone();
-                        let pairs: Vec<_> = items.into_iter().zip(embs).collect();
+                        let pairs: Vec<_> = items.into_iter().zip(er.embeddings).collect();
                         let _ = tokio::task::spawn_blocking(move || {
                             for ((id, _), emb) in pairs {
                                 let _ = db.set_embedding(&id, &emb);
@@ -364,10 +372,15 @@ async fn merge_memory_contents(
     cfg: &ai::AiConfig,
     existing: &str,
     new: &str,
+    db: &crate::SharedDB,
 ) -> Result<String, EngramError> {
     let user_msg = format!("EXISTING:\n{}\n\nNEW:\n{}", existing, new);
-    let merged = ai::llm_chat_as(cfg, "gate", MERGE_PROMPT, &user_msg).await?;
-    let trimmed = merged.trim().to_string();
+    let result = ai::llm_chat_as(cfg, "gate", MERGE_PROMPT, &user_msg).await?;
+    if let Some(ref u) = result.usage {
+        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+        let _ = db.log_llm_call("insert_merge", &result.model, u.prompt_tokens, u.completion_tokens, cached, result.duration_ms);
+    }
+    let trimmed = result.content.trim().to_string();
     if trimmed.is_empty() {
         return Err(EngramError::Internal("LLM returned empty merge".into()));
     }

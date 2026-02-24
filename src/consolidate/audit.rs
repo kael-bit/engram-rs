@@ -8,66 +8,45 @@ use serde::Serialize;
 // Re-exported for sandbox use
 pub(crate) const AUDIT_SYSTEM_PUB: &str = AUDIT_SYSTEM;
 
-const AUDIT_SYSTEM: &str = r#"You are reviewing an AI agent's memory store. You see ALL memories organized by layer.
-Your job: reorganize them. Output a JSON array of operations.
+const AUDIT_SYSTEM: &str = r#"Review an AI agent's memory layers. Output a JSON array of operations to clean up.
 
-## Metadata
-- `ac` = access count (how often recalled)
-- `age` = days since creation
-- `mod` = days since last real edit (content/layer/tags change). NOT affected by read/recall.
-- `imp` = importance (0.0-1.0)
-- `kind` = semantic | procedural | episodic
-- `tags` = labels attached to the memory
+Core = permanent, survives total context loss. Working = active context. Buffer = temporary.
+Metadata: ac=access count, age=days old, mod=days since last edit, kind, tags.
 
-## Layers
-- Core (3): Permanent. Identity, values, key relationships, hard-won lessons, strategic constraints, design principles.
-- Working (2): Active project context, recent learnings, operational knowledge, implementation details.
-- Buffer (1): Temporary. Will auto-expire. Session logs, transient notes.
+## Operations
+- {"op":"delete","id":"<8-char>"}
+- {"op":"demote","id":"<8-char>","to":2}
+- {"op":"merge","ids":["a","b"],"content":"combined text","layer":2,"tags":["t"]}
+- {"op":"promote","id":"<8-char>","to":3}
 
-## Operations (output as JSON array)
-- {"op":"promote","id":"<8-char-id>","to":3} — move to Core (only for truly permanent knowledge)
-- {"op":"demote","id":"<8-char-id>","to":2} or {"op":"demote","id":"<8-char-id>","to":1}
-- {"op":"merge","ids":["id1","id2"],"content":"merged text","layer":2,"tags":["tag1"]}
-- {"op":"delete","id":"<8-char-id>"} — remove (duplicate, obsolete, or garbage)
+## Rules
+- mod < 1d → don't touch
+- Never demote to buffer (to:1)
+- Never delete identity or lesson-tagged memories
 
-## HARD RULES (violations = auto-reject)
-1. NEVER delete or merge memories with mod < 1d
-2. NEVER delete identity, constraint, or lesson-tagged memories
-3. NEVER demote directly to Buffer (to:1)
-4. NEVER demote a memory already at the target layer
-5. NEVER demote lesson or constraint tagged memories out of Core
+## What BELONGS in Core (examples)
+- "never force-push to main" — lesson, prevents mistakes
+- "user prefers Chinese, hates verbose replies" — identity/preference
+- "all public output must hide AI identity" — hard constraint
+- "we chose SQLite for zero-dep deployment" — decision rationale (the WHY)
 
-## What to DELETE (Working layer)
-These patterns in Working are garbage — delete them (if mod >= 1d):
-- Completed one-time decisions: "We decided to use X for Y" where X is already implemented
-- Finished refactoring notes: "We decided to split/restructure/rename..."
-- Resolved bugs: "BUG: X happened" where the fix is already deployed
-- Stale build/deploy notes: "clippy fix", "cargo build with flag X"
-- Memories tagged `auto-extract` that describe a single completed action
+## What does NOT belong in Core (demote or delete)
+- Changelogs: "Recall改进: 1) expansion 2) FTS gating 3) evidence" → DEMOTE (lists what was DONE)
+- Implementation notes: "HNSW replaces brute-force search" → DEMOTE (already in the code)
+- Bug reports: "BUG: triage didn't filter namespace" → DELETE if fixed
+- Config snapshots: "cosine 0.78, TTL 24h, threshold 5" → DEMOTE (goes stale)
+- Session logs: "Session: deployed v0.7, 143 tests pass" → DELETE
+- Plans: "TODO: add compression, fix lifecycle" → DELETE (plans, not lessons)
 
-Ask yourself: "If the agent never sees this memory again, does it lose anything?" If no → delete.
+## Decision test
+For each memory ask: "If the agent loses all context and only has this memory, is it useful?"
+- YES: lesson, constraint, identity, decision rationale → keep in Core
+- NO: changelog, implementation detail, resolved bug, session log → demote or delete
 
-## What to MERGE
-Look for groups of 2-3 memories that describe THE SAME topic from different angles:
-- Same deployment procedure described in different words → merge into one
-- Same principle/constraint stated in multiple memories → merge into one
-- A lesson and its detailed example → merge (keep the lesson framing)
-When merging, preserve ALL specific details (commands, thresholds, error messages).
+Changelogs disguised as decisions are the #1 false positive. If it lists numbered changes
+(1) did X 2) did Y), it's a changelog no matter how technical it sounds.
 
-## What to KEEP in Core
-- Lessons from mistakes ("X was wrong because Y") — these prevent repeat failures
-- Strategic constraints ("never do X", "always do Y before Z")
-- Identity and relationship facts
-- Design principles that affect future decisions
-- Memories with content containing: 教训, 原则, principle, lesson, 必须, constraint, 设计错误
-
-## What to DEMOTE from Core → Working
-- Implementation details (library choices, config values, specific API routes)
-- Resolved bugs (the fix is done, the lesson is elsewhere)
-- Operational procedures that might change (deploy steps, config paths)
-
-Output ONLY a valid JSON array. Empty array [] if no changes needed.
-Be aggressive about cleaning Working garbage. Be protective of Core lessons."#;
+Be aggressive cleaning Working garbage. Output [] if nothing to do."#;
 
 /// Full audit: reviews Core+Working memories using the gate model.
 /// Chunks automatically if total prompt would exceed ~100K chars.
@@ -96,8 +75,12 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
     if all.len() <= max_per_batch {
         // single batch
         let prompt = format_audit_prompt(&core, &working);
-        let response = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
-        let ops = parse_audit_ops(&response, &core, &working);
+        let result = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
+        if let Some(ref u) = result.usage {
+            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+            let _ = db.log_llm_call("audit", &result.model, u.prompt_tokens, u.completion_tokens, cached, result.duration_ms);
+        }
+        let ops = parse_audit_ops(&result.content, &core, &working);
         let db3 = db.clone();
         let applied = tokio::task::spawn_blocking(move || {
             let mut r = AuditResult::default();
@@ -122,10 +105,14 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
                     crate::util::short_id(&m.id), m.importance, m.access_count, tags, preview));
             }
 
-            let response = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
+            let result = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
+            if let Some(ref u) = result.usage {
+                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                let _ = db.log_llm_call("audit", &result.model, u.prompt_tokens, u.completion_tokens, cached, result.duration_ms);
+            }
             // for chunked mode, resolve against core + this chunk only
             let chunk_vec: Vec<Memory> = chunk.to_vec();
-            let ops = parse_audit_ops(&response, &core, &chunk_vec);
+            let ops = parse_audit_ops(&result.content, &core, &chunk_vec);
             let db4 = db.clone();
             let applied = tokio::task::spawn_blocking(move || {
                 let mut r = AuditResult::default();

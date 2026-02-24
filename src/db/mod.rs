@@ -312,6 +312,39 @@ pub struct IntegrityReport {
     pub ok: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DailyLlmUsage {
+    pub date: String,
+    pub component: String,
+    pub model: String,
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_tokens: i64,
+    pub avg_duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ComponentUsage {
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cached_tokens: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LlmUsageSummary {
+    pub total_calls: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cached_tokens: i64,
+    pub today_calls: i64,
+    pub today_input_tokens: i64,
+    pub today_output_tokens: i64,
+    pub by_component: std::collections::HashMap<String, ComponentUsage>,
+    pub by_model: std::collections::HashMap<String, ComponentUsage>,
+}
+
 
 fn validate_input(input: &MemoryInput) -> Result<(), EngramError> {
     let content = input.content.trim();
@@ -503,6 +536,19 @@ CREATE TABLE IF NOT EXISTS engram_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    component TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(ts);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_component ON llm_usage(component);
 "#;
 
 // Use content= external content FTS — we manage inserts/deletes ourselves
@@ -555,6 +601,113 @@ impl MemoryDB {
             rusqlite::params![key, value],
         )?;
         Ok(())
+    }
+
+    pub fn log_llm_call(
+        &self, component: &str, model: &str,
+        input_tokens: u32, output_tokens: u32, cached_tokens: u32,
+        duration_ms: u64,
+    ) -> Result<(), EngramError> {
+        let c = self.conn()?;
+        c.execute(
+            "INSERT INTO llm_usage (ts, component, model, input_tokens, output_tokens, cached_tokens, duration_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![now_ms() as i64, component, model, input_tokens, output_tokens, cached_tokens, duration_ms as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn llm_usage_daily(&self, days: u32) -> Result<Vec<DailyLlmUsage>, EngramError> {
+        let c = self.conn()?;
+        let cutoff = now_ms() as i64 - (days as i64 * 86_400_000);
+        let mut stmt = c.prepare(
+            "SELECT date(ts/1000, 'unixepoch') as d, component, model, \
+             COUNT(*) as calls, SUM(input_tokens), SUM(output_tokens), SUM(cached_tokens), \
+             AVG(duration_ms) \
+             FROM llm_usage WHERE ts >= ?1 \
+             GROUP BY d, component, model ORDER BY d DESC, calls DESC"
+        )?;
+        let rows = stmt.query_map([cutoff], |r| {
+            Ok(DailyLlmUsage {
+                date: r.get(0)?,
+                component: r.get(1)?,
+                model: r.get(2)?,
+                calls: r.get(3)?,
+                input_tokens: r.get(4)?,
+                output_tokens: r.get(5)?,
+                cached_tokens: r.get(6)?,
+                avg_duration_ms: r.get::<_, f64>(7)? as u64,
+            })
+        })?.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| EngramError::Internal(e.to_string()))?;
+        Ok(rows)
+    }
+
+    pub fn llm_usage_summary(&self) -> Result<LlmUsageSummary, EngramError> {
+        let c = self.conn()?;
+        let today_start = {
+            let now = now_ms() as i64;
+            // Start of today in UTC
+            now - (now % 86_400_000)
+        };
+
+        let total: (i64, i64, i64, i64) = c.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cached_tokens),0) FROM llm_usage",
+            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        ).unwrap_or((0, 0, 0, 0));
+
+        let today: (i64, i64, i64, i64) = c.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cached_tokens),0) FROM llm_usage WHERE ts >= ?1",
+            [today_start], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        ).unwrap_or((0, 0, 0, 0));
+
+        let mut by_component = std::collections::HashMap::new();
+        {
+            let mut stmt = c.prepare(
+                "SELECT component, COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cached_tokens),0) \
+                 FROM llm_usage GROUP BY component"
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, ComponentUsage {
+                    calls: r.get(1)?,
+                    input_tokens: r.get(2)?,
+                    output_tokens: r.get(3)?,
+                    cached_tokens: r.get(4)?,
+                }))
+            })?.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| EngramError::Internal(e.to_string()))?;
+            for (k, v) in rows { by_component.insert(k, v); }
+        }
+
+        let mut by_model = std::collections::HashMap::new();
+        {
+            let mut stmt = c.prepare(
+                "SELECT model, COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cached_tokens),0) \
+                 FROM llm_usage GROUP BY model"
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, ComponentUsage {
+                    calls: r.get(1)?,
+                    input_tokens: r.get(2)?,
+                    output_tokens: r.get(3)?,
+                    cached_tokens: r.get(4)?,
+                }))
+            })?.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| EngramError::Internal(e.to_string()))?;
+            for (k, v) in rows { by_model.insert(k, v); }
+        }
+
+        Ok(LlmUsageSummary {
+            total_calls: total.0,
+            total_input_tokens: total.1,
+            total_output_tokens: total.2,
+            total_cached_tokens: total.3,
+            today_calls: today.0,
+            today_input_tokens: today.1,
+            today_output_tokens: today.2,
+            by_component,
+            by_model,
+        })
     }
 
     /// Open (or create) a database at the given path.

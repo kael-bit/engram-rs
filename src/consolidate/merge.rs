@@ -153,7 +153,13 @@ async fn try_reconcile_pair(
         "reconcile_decision", "Decide how to reconcile two memories",
         schema,
     ).await {
-        Ok(r) => r,
+        Ok(r) => {
+            if let Some(ref u) = r.usage {
+                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                let _ = db.log_llm_call("reconcile", &r.model, u.prompt_tokens, u.completion_tokens, cached, r.duration_ms);
+            }
+            r.value
+        }
         Err(e) => { warn!(error = %e, "reconcile LLM call failed"); return None; }
     };
 
@@ -254,7 +260,13 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
             }
 
             let merged_content = match ai::llm_chat_as(cfg, "merge", MERGE_SYSTEM, &input).await {
-                Ok(text) => text.trim().to_string(),
+                Ok(r) => {
+                    if let Some(ref u) = r.usage {
+                        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                        let _ = db.log_llm_call("merge", &r.model, u.prompt_tokens, u.completion_tokens, cached, r.duration_ms);
+                    }
+                    r.content.trim().to_string()
+                }
                 Err(e) => {
                     warn!(error = %e, "LLM merge failed, skipping cluster");
                     continue;
@@ -347,8 +359,12 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
             // regenerate embedding for merged content
             let embed_ok = if cfg.has_embed() {
                 match ai::get_embeddings(cfg, &[merged_content]).await {
-                    Ok(embs) if !embs.is_empty() => {
-                        if let Some(emb) = embs.into_iter().next() {
+                    Ok(er) if !er.embeddings.is_empty() => {
+                        if let Some(ref u) = er.usage {
+                            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                            let _ = db.log_llm_call("merge_embed", &cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
+                        }
+                        if let Some(emb) = er.embeddings.into_iter().next() {
                             let db2 = db.clone();
                             let id = best_id.clone();
                             let res = tokio::task::spawn_blocking(move || {

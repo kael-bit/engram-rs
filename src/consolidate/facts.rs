@@ -32,7 +32,7 @@ pub(super) async fn extract_facts_batch(db: &SharedDB, cfg: &AiConfig, limit: us
     let mut total = 0;
     for mem in &mems {
         let content = truncate_chars(&mem.content, 500);
-        let resp = match ai::llm_chat_as(cfg, "extract", FACT_EXTRACT_PROMPT, &content).await {
+        let result = match ai::llm_chat_as(cfg, "extract", FACT_EXTRACT_PROMPT, &content).await {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, id = %mem.id, "fact extraction LLM failed");
@@ -40,7 +40,19 @@ pub(super) async fn extract_facts_batch(db: &SharedDB, cfg: &AiConfig, limit: us
             }
         };
 
-        let json_str = crate::ai::unwrap_json(&resp);
+        if let Some(ref u) = result.usage {
+            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+            let db_log = db.clone();
+            let model = result.model.clone();
+            let dur = result.duration_ms;
+            let inp = u.prompt_tokens;
+            let out = u.completion_tokens;
+            let _ = tokio::task::spawn_blocking(move || {
+                db_log.log_llm_call("facts_extract", &model, inp, out, cached, dur)
+            }).await;
+        }
+
+        let json_str = crate::ai::unwrap_json(&result.content);
         let triples: Vec<serde_json::Value> = match serde_json::from_str(&json_str) {
             Ok(v) => v,
             Err(_) => continue,

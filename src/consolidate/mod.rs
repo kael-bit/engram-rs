@@ -111,7 +111,11 @@ pub async fn consolidate(
             Some(cfg) => {
                 for (id, content, access_count, rep_count) in &candidates {
                     match llm_promotion_gate(cfg, content, *access_count, *rep_count).await {
-                        Ok((true, kind)) => {
+                        Ok((true, kind, usage, model, duration_ms)) => {
+                            if let Some(ref u) = usage {
+                                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                                let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
+                            }
                             let db2 = db.clone();
                             let id2 = id.clone();
                             let promoted = tokio::task::spawn_blocking(move || -> bool {
@@ -134,7 +138,11 @@ pub async fn consolidate(
                                 debug!(id = %id, "promoted to Core");
                             }
                         }
-                        Ok((false, _)) => {
+                        Ok((false, _, usage, model, duration_ms)) => {
+                            if let Some(ref u) = usage {
+                                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                                let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
+                            }
                             result.gate_rejected += 1;
                             let db2 = db.clone();
                             let id2 = id.clone();
@@ -450,45 +458,28 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     }
 }
 
-const GATE_SYSTEM: &str = "You are a memory curator for an AI agent's long-term memory system.\n\
-    The agent has a three-layer memory: Buffer (temporary), Working (useful), Core (permanent identity-level knowledge).\n\
-    \n\
-    A memory is being considered for promotion to Core (permanent). Decide if it belongs there.\n\
-    \n\
-    APPROVE for Core if it is:\n\
-    - Identity: who the agent/user is, preferences, principles, personal constraints\n\
-    - Strategic: long-term goals, key decisions\n\
-    - Lessons learned: hard-won insights, mistakes to never repeat, behavioral patterns to change\n\
-    - Relational: important facts about people, relationships\n\
-    - Constraints: financial limits, payment rules, security policies, behavioral boundaries\n\
-    - Architectural: fundamental design decisions that shape the project\n\
-    - High-utility operational knowledge: if the context note says this memory has been recalled many times (50+), \
-    it has proven its practical value. Consider APPROVE for heavily-used memories \
-    — but still REJECT if the content is a TODO list, roadmap, plan, or temporal snapshot, \
-    regardless of recall count.\n\
-    \n\
-    REJECT (keep in Working) if it is:\n\
-    - Operational: bug fixes, code changes, version bumps, deployment logs (UNLESS heavily recalled)\n\
-    - Ephemeral: session summaries, daily progress, temporary status\n\
-    - Temporal snapshot: contains specific numbers, version strings, counts, percentages, or describes 'current state' \
-    — these go stale and don't belong in permanent memory\n\
-    - Plans and proposals: numbered lists of things TO DO, improvement proposals, design plans with bullet points \
-    — these are transient and will be outdated soon. Core stores lessons LEARNED, not plans MADE.\n\
-    - Technical detail: specific code patterns, API signatures, config values, tech stack specs\n\
-    - System documentation: descriptions of how a system works, feature lists, implementation summaries, \
-    TODO/roadmap lists — these belong in docs/README, not in Core memory. \
-    Core is for WHY decisions were made, not WHAT was built.\n\
-    - Duplicate: restates something that's obviously already known\n\
-    - Research notes: survey results, market analysis, feature lists\n\
-    \n\
-    Reply with ONLY one word: APPROVE or REJECT\n\
-    \n\
-    If APPROVE, also specify the kind on the same line:\n\
-    - APPROVE semantic  (facts, knowledge, preferences, lessons, identity)\n\
-    - APPROVE procedural  (workflows, rules, how-to processes, behavioral directives)\n\
-    - APPROVE episodic  (specific dated events, interactions with context)\n\
-    \n\
-    If unsure about kind, default to semantic.";
+const GATE_SYSTEM: &str = "\
+Core is PERMANENT memory that survives total context loss. The litmus test: \
+if the agent wakes up with zero context, would this memory alone be useful? \
+If it only makes sense alongside the code/docs/conversation it came from, REJECT.\n\
+\n\
+APPROVE:\n\
+- \"never force-push to main\" (lesson — prevents repeating a mistake)\n\
+- \"user prefers Chinese, hates verbose explanations\" (identity/preference — shapes behavior)\n\
+- \"all public output must hide AI identity\" (constraint — hard rule that never changes)\n\
+- \"we chose SQLite over Postgres for zero-dep deployment\" (decision rationale — the WHY)\n\
+\n\
+REJECT:\n\
+- \"Recall quality: 1) bilingual expansion 2) FTS gating 3) gate evidence\" (changelog — lists WHAT was done)\n\
+- \"Fixed bug: triage didn't filter by namespace\" (operational — belongs in git history)\n\
+- \"Session: refactored auth, deployed v0.7, 143 tests pass\" (session log — ephemeral status)\n\
+- \"Improvement plan: add compression, fix lifecycle, batch ops\" (plan — not a lesson)\n\
+- \"cosine threshold 0.78, buffer TTL 24h, promote at 5 accesses\" (config values — will go stale)\n\
+- \"HNSW index replaces brute-force search\" (implementation detail — in the code already)\n\
+\n\
+The pattern: APPROVE captures WHY and NEVER and WHO. REJECT captures WHAT and WHEN and HOW MUCH.\n\
+Numbered lists of changes (1) did X 2) did Y 3) did Z) are almost always changelogs → REJECT.\n\
+If it reads like a commit message or progress report, REJECT.";
 
 /// Gate result: approved (with optional kind) or rejected.
 #[derive(Debug, Deserialize)]
@@ -498,7 +489,7 @@ struct GateResult {
     kind: Option<String>,
 }
 
-async fn llm_promotion_gate(cfg: &AiConfig, content: &str, access_count: i64, rep_count: i64) -> Result<(bool, Option<String>), EngramError> {
+async fn llm_promotion_gate(cfg: &AiConfig, content: &str, access_count: i64, rep_count: i64) -> Result<(bool, Option<String>, Option<ai::Usage>, String, u64), EngramError> {
     let truncated = truncate_chars(content, 500);
 
     let mut context_parts = Vec::new();
@@ -532,15 +523,15 @@ async fn llm_promotion_gate(cfg: &AiConfig, content: &str, access_count: i64, re
         "required": ["decision"]
     });
 
-    let result: GateResult = ai::llm_tool_call(
+    let tcr: ai::ToolCallResult<GateResult> = ai::llm_tool_call(
         cfg, "gate", GATE_SYSTEM, &user_msg,
         "gate_decision", "Decide whether to promote this memory to Core",
         schema,
     ).await?;
 
-    let approved = result.decision == "approve";
-    let kind = if approved { result.kind.or(Some("semantic".into())) } else { None };
-    Ok((approved, kind))
+    let approved = tcr.value.decision == "approve";
+    let kind = if approved { tcr.value.kind.or(Some("semantic".into())) } else { None };
+    Ok((approved, kind, tcr.usage, tcr.model, tcr.duration_ms))
 }
 
 pub(super) fn layer_label(l: Layer) -> &'static str {

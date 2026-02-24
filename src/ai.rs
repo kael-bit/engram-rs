@@ -127,9 +127,48 @@ struct FunctionDef {
     parameters: serde_json::Value,
 }
 
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct Usage {
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens: u32,
+    #[serde(default)]
+    pub total_tokens: u32,
+    #[serde(default)]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct PromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: u32,
+}
+
+pub struct LlmResult {
+    pub content: String,
+    pub usage: Option<Usage>,
+    pub model: String,
+    pub duration_ms: u64,
+}
+
+pub struct ToolCallResult<T> {
+    pub value: T,
+    pub usage: Option<Usage>,
+    pub model: String,
+    pub duration_ms: u64,
+}
+
+pub struct EmbedResult {
+    pub embeddings: Vec<Vec<f32>>,
+    pub usage: Option<Usage>,
+}
+
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
+    #[serde(default)]
+    usage: Option<Usage>,
 }
 
 #[derive(Deserialize)]
@@ -158,14 +197,15 @@ struct ToolCallFunction {
 /// Send a chat completion request, return the response text.
 #[allow(dead_code)]
 pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String, EngramError> {
-    llm_chat_as(cfg, "", system, user).await
+    Ok(llm_chat_as(cfg, "", system, user).await?.content)
 }
 
 /// Like llm_chat but uses a component-specific model if configured.
-pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &str) -> Result<String, EngramError> {
+/// Returns LlmResult with usage stats and model info.
+pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &str) -> Result<LlmResult, EngramError> {
     let model = cfg.model_for(component).to_string();
     let req = ChatRequest {
-        model,
+        model: model.clone(),
         messages: vec![
             ChatMessage { role: "system".into(), content: system.into() },
             ChatMessage { role: "user".into(), content: user.into() },
@@ -180,6 +220,7 @@ pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &s
         builder = builder.header("Authorization", format!("Bearer {}", cfg.llm_key));
     }
 
+    let start = std::time::Instant::now();
     let resp = builder
         .send()
         .await
@@ -194,15 +235,17 @@ pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &s
         .json()
         .await
         .map_err(|e| ai_err(format!("LLM response parse failed: {e}")))?;
-    Ok(chat
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let content = chat
         .choices
         .first()
         .and_then(|c| c.message.content.clone())
-        .unwrap_or_default())
+        .unwrap_or_default();
+    Ok(LlmResult { content, usage: chat.usage, model, duration_ms })
 }
 
 /// Call LLM with a function/tool definition, get back structured JSON.
-/// Forces the model to call the named function, returns the parsed arguments.
+/// Forces the model to call the named function, returns the parsed arguments with usage.
 pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
     cfg: &AiConfig,
     component: &str,
@@ -211,10 +254,10 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
     fn_name: &str,
     fn_desc: &str,
     parameters: serde_json::Value,
-) -> Result<T, EngramError> {
+) -> Result<ToolCallResult<T>, EngramError> {
     let model = cfg.model_for(component).to_string();
     let req = ChatRequest {
-        model,
+        model: model.clone(),
         messages: vec![
             ChatMessage { role: "system".into(), content: system.into() },
             ChatMessage { role: "user".into(), content: user.into() },
@@ -236,6 +279,7 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
         builder = builder.header("Authorization", format!("Bearer {}", cfg.llm_key));
     }
 
+    let start = std::time::Instant::now();
     let resp = builder
         .send()
         .await
@@ -250,6 +294,7 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
         .json()
         .await
         .map_err(|e| ai_err(format!("LLM tool response parse failed: {e}")))?;
+    let duration_ms = start.elapsed().as_millis() as u64;
 
     let args = chat.choices.first()
         .and_then(|c| c.message.tool_calls.as_ref())
@@ -257,8 +302,10 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
         .map(|tc| tc.function.arguments.clone())
         .ok_or_else(|| ai_err("no tool call in response"))?;
 
-    serde_json::from_str(&args)
-        .map_err(|e| ai_err(format!("tool call arguments parse failed: {e}: {args}")))
+    let value: T = serde_json::from_str(&args)
+        .map_err(|e| ai_err(format!("tool call arguments parse failed: {e}: {args}")))?;
+
+    Ok(ToolCallResult { value, usage: chat.usage, model, duration_ms })
 }
 
 const EXPAND_PROMPT: &str = "Given a search query for a PERSONAL knowledge base (notes, decisions, logs), \
@@ -281,7 +328,8 @@ const EXPAND_PROMPT: &str = "Given a search query for a PERSONAL knowledge base 
     Even for very short queries (1-2 words), always produce at least 4 phrases.";
 
 /// Generate alternative query phrasings for better recall coverage.
-pub async fn expand_query(cfg: &AiConfig, query: &str) -> Vec<String> {
+/// Returns (expansions, ToolCallResult metadata) for optional usage logging.
+pub async fn expand_query(cfg: &AiConfig, query: &str) -> (Vec<String>, Option<ToolCallResult<()>>) {
     #[derive(Deserialize)]
     struct ExpandResult { queries: Vec<String> }
 
@@ -302,11 +350,15 @@ pub async fn expand_query(cfg: &AiConfig, query: &str) -> Vec<String> {
         "expanded_queries", "Generate alternative search phrases for the query",
         schema,
     ).await {
-        Ok(r) => r.queries.into_iter()
-            .filter(|q| !q.is_empty() && q.len() > 2)
-            .take(5)
-            .collect(),
-        Err(_) => vec![],
+        Ok(tcr) => {
+            let queries: Vec<String> = tcr.value.queries.into_iter()
+                .filter(|q| !q.is_empty() && q.len() > 2)
+                .take(5)
+                .collect();
+            let meta = ToolCallResult { value: (), usage: tcr.usage, model: tcr.model, duration_ms: tcr.duration_ms };
+            (queries, Some(meta))
+        }
+        Err(_) => (vec![], None),
     }
 }
 
@@ -400,8 +452,8 @@ pub async fn extract_memories(
         schema,
     ).await?;
 
-    debug!(count = result.memories.len(), "extracted memories from text");
-    Ok(result.memories)
+    debug!(count = result.value.memories.len(), "extracted memories from text");
+    Ok(result.value.memories)
 }
 
 /// Extract a JSON array from LLM output that may be wrapped in markdown code blocks.
@@ -436,6 +488,8 @@ struct EmbedRequest {
 #[derive(Deserialize)]
 struct EmbedResponse {
     data: Vec<EmbedData>,
+    #[serde(default)]
+    usage: Option<Usage>,
 }
 
 #[derive(Deserialize)]
@@ -447,9 +501,9 @@ struct EmbedData {
 pub async fn get_embeddings(
     cfg: &AiConfig,
     texts: &[String],
-) -> Result<Vec<Vec<f32>>, EngramError> {
+) -> Result<EmbedResult, EngramError> {
     if texts.is_empty() {
-        return Ok(vec![]);
+        return Ok(EmbedResult { embeddings: vec![], usage: None });
     }
 
     let req = EmbedRequest {
@@ -485,7 +539,7 @@ pub async fn get_embeddings(
             embeddings.len()
         )));
     }
-    Ok(embeddings)
+    Ok(EmbedResult { embeddings, usage: embed_resp.usage })
 }
 
 

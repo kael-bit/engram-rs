@@ -295,3 +295,28 @@ pub(super) async fn trash_purge(
     let purged = blocking(move || db.trash_purge()).await??;
     Ok(Json(serde_json::json!({ "purged": purged })))
 }
+
+#[derive(Deserialize)]
+pub(super) struct LlmUsageQuery {
+    #[serde(default = "default_days")]
+    days: u32,
+}
+fn default_days() -> u32 { 7 }
+
+pub(super) async fn llm_usage(
+    State(state): State<AppState>,
+    Query(q): Query<LlmUsageQuery>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let db = state.db.clone();
+    let days = q.days;
+    let (summary, daily) = blocking(move || {
+        let s = db.llm_usage_summary()?;
+        let d = db.llm_usage_daily(days)?;
+        Ok::<_, EngramError>((s, d))
+    }).await??;
+
+    Ok(Json(serde_json::json!({
+        "summary": summary,
+        "daily": daily,
+    })))
+}

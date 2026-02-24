@@ -65,6 +65,7 @@ async fn main() {
     });
 
     let embed_cache = EmbedCache::new(128);
+    proxy::init_proxy_counters(&shared);
     let state = AppState {
         db: shared.clone(), ai: ai_cfg, api_key, embed_cache,
         proxy: proxy_cfg,

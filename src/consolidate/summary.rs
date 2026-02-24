@@ -55,7 +55,13 @@ pub(super) async fn update_core_summary(db: &SharedDB, cfg: &AiConfig) {
         No preamble, no headers, no bullet points — flowing prose paragraphs only.";
 
     let summary = match ai::llm_chat_as(cfg, "gate", system, &input).await {
-        Ok(s) => s.trim().to_string(),
+        Ok(r) => {
+            if let Some(ref u) = r.usage {
+                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                let _ = db.log_llm_call("core_summary", &r.model, u.prompt_tokens, u.completion_tokens, cached, r.duration_ms);
+            }
+            r.content.trim().to_string()
+        }
         Err(e) => {
             warn!(error = %e, "core summary generation failed");
             return;

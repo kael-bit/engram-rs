@@ -120,6 +120,7 @@ pub fn router(state: AppState) -> Router {
         .route("/facts/{id}", delete(delete_fact))
         .route("/trash", get(trash_list).delete(trash_purge))
         .route("/trash/{id}/restore", post(trash_restore))
+        .route("/llm-usage", get(llm_usage))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Import needs a bigger body limit for exports with embeddings
@@ -280,8 +281,12 @@ fn spawn_embed(db: crate::SharedDB, cfg: ai::AiConfig, id: String, content: Stri
         loop {
             attempts += 1;
             match ai::get_embeddings(&cfg, std::slice::from_ref(&content)).await {
-                Ok(embs) if !embs.is_empty() => {
-                    if let Some(emb) = embs.into_iter().next() {
+                Ok(er) if !er.embeddings.is_empty() => {
+                    if let Some(ref u) = er.usage {
+                        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                        let _ = db.log_llm_call("embed", &cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
+                    }
+                    if let Some(emb) = er.embeddings.into_iter().next() {
                         let _ = tokio::task::spawn_blocking(move || {
                             db.set_embedding(&id, &emb)
                         })
@@ -314,8 +319,12 @@ fn spawn_embed_batch(db: crate::SharedDB, cfg: ai::AiConfig, items: Vec<(String,
         loop {
             attempts += 1;
             match ai::get_embeddings(&cfg, &texts).await {
-                Ok(embs) => {
-                    for (emb, (id, _)) in embs.into_iter().zip(items.iter()) {
+                Ok(er) => {
+                    if let Some(ref u) = er.usage {
+                        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                        let _ = db.log_llm_call("embed_batch", &cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
+                    }
+                    for (emb, (id, _)) in er.embeddings.into_iter().zip(items.iter()) {
                         let db = db.clone();
                         let id = id.clone();
                         let _ = tokio::task::spawn_blocking(move || {

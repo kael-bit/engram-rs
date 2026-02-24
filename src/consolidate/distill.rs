@@ -63,7 +63,13 @@ async fn distill_one_ns(
     );
 
     let summary = match ai::llm_chat_as(cfg, "gate", system, &user).await {
-        Ok(s) => s.trim().to_string(),
+        Ok(r) => {
+            if let Some(ref u) = r.usage {
+                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                let _ = db.log_llm_call("distill", &r.model, u.prompt_tokens, u.completion_tokens, cached, r.duration_ms);
+            }
+            r.content.trim().to_string()
+        }
         Err(e) => {
             warn!("session distillation failed: {e}");
             return 0;

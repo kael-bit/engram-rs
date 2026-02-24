@@ -113,7 +113,13 @@ pub(super) async fn triage_buffer(
             "triage_decisions", "Decide which memories to promote or keep",
             schema,
         ).await {
-            Ok(r) => r,
+            Ok(r) => {
+                if let Some(ref u) = r.usage {
+                    let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                    let _ = db.log_llm_call("triage", &r.model, u.prompt_tokens, u.completion_tokens, cached, r.duration_ms);
+                }
+                r.value
+            }
             Err(e) => {
                 tracing::warn!(ns = %ns, error = %e, "buffer triage LLM call failed");
                 continue;

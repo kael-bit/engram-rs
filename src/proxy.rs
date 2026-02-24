@@ -18,6 +18,28 @@ const FLUSH_QUIET_SECS: i64 = 30;
 
 static PROXY_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static PROXY_EXTRACTED: AtomicU64 = AtomicU64::new(0);
+static PROXY_PERSIST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+pub fn init_proxy_counters(db: &db::MemoryDB) {
+    if let Some(v) = db.get_meta("proxy_requests_total") {
+        if let Ok(n) = v.parse::<u64>() {
+            PROXY_REQUESTS.store(n, Ordering::Relaxed);
+        }
+    }
+    if let Some(v) = db.get_meta("proxy_extracted_total") {
+        if let Ok(n) = v.parse::<u64>() {
+            PROXY_EXTRACTED.store(n, Ordering::Relaxed);
+        }
+    }
+}
+
+fn persist_proxy_counters(db: &db::MemoryDB) {
+    let count = PROXY_PERSIST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    if count % 10 == 0 {
+        let _ = db.set_meta("proxy_requests_total", &PROXY_REQUESTS.load(Ordering::Relaxed).to_string());
+        let _ = db.set_meta("proxy_extracted_total", &PROXY_EXTRACTED.load(Ordering::Relaxed).to_string());
+    }
+}
 
 pub fn proxy_stats(db: Option<&db::MemoryDB>) -> (u64, u64, usize) {
     let buffered = db.map(super::db::MemoryDB::proxy_turn_count).unwrap_or(0);
@@ -48,6 +70,7 @@ pub async fn handle(
 
     let path = uri.path().strip_prefix("/proxy").unwrap_or(uri.path());
     PROXY_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    persist_proxy_counters(&state.db);
 
     let upstream_url = if let Some(q) = uri.query() {
         format!("{}{}?{}", proxy.upstream, path, q)
@@ -415,8 +438,9 @@ async fn extract_from_context(state: AppState, context: &str) {
 
     // Fetch recent buffer memories so the LLM can skip already-known concepts
     let db = state.db.clone();
+    let db2 = db.clone();
     let recent_mems = tokio::task::spawn_blocking(move || {
-        db.list_since(db::now_ms() - 6 * 3600 * 1000, 30)
+        db2.list_since(db::now_ms() - 6 * 3600 * 1000, 30)
     }).await.unwrap_or(Ok(vec![])).unwrap_or_default();
     let existing_knowledge = if recent_mems.is_empty() {
         String::new()
@@ -430,34 +454,28 @@ async fn extract_from_context(state: AppState, context: &str) {
         format!("\n\n=== ALREADY IN MEMORY (do NOT extract anything that overlaps with these) ===\n{}\n", lines.join("\n"))
     };
 
-    let system = "You extract long-term memories from a multi-turn LLM conversation.\n\
-        Your bar is high — most windows produce 0 extractions and that's fine.\n\
-        But when real decisions happen, capture them (typically 0-1 per window).\n\n\
-        ASK YOURSELF: Would a senior engineer jot this down for the team wiki? If yes, extract it.\n\n\
-        EXTRACT these (when the USER states or confirms them):\n\
-        - Major architectural decisions ('we chose X over Y', 'switching from Docker to native binaries')\n\
-        - Infrastructure changes that affect how the project works ('repo moved to new-org', 'CI now produces binary releases')\n\
-        - User-stated constraints or rules ('no Docker', 'code must look human-written')\n\
-        - Technology/tool choices and their rationale\n\
-        - Warnings or gotchas discovered through real experience ('raw.githubusercontent.com is blocked by GFW')\n\
-        - Project milestones and significant state changes ('v2 released', 'migrated to new account')\n\n\
-        NEVER extract (automatic reject):\n\
-        - Routine code changes (refactors, cleanups, renames)\n\
-        - Bug descriptions and their fixes\n\
-        - System health, metrics, test results\n\
-        - The assistant's own proposals or explanations — only extract what the USER stated\n\
-        - Step-by-step implementation details\n\
-        - Anything that overlaps with ALREADY IN MEMORY below\n\n\
-        KEY DISTINCTION:\n\
-        'We decided to use Redis for caching' → EXTRACT.\n\
-        'Fixed the Redis connection timeout bug' → REJECT.\n\
-        'We moved the repo to kael-bit' → EXTRACT.\n\
-        'Renamed main.rs to lib.rs' → REJECT.\n\n\
-        LANGUAGE: Write in the same language the USER uses. If the user speaks Chinese, output Chinese.\n\n\
-        DEDUP: If your extraction overlaps with something in ALREADY IN MEMORY, skip it.";
+    let system = "You extract long-term memories from a multi-turn conversation between a user and their AI assistant.\n\
+        Most windows produce nothing — that's fine. But don't miss real signals.\n\n\
+        EXTRACT:\n\
+        - Decisions: 'we chose X over Y', 'switching to native binaries'\n\
+        - Constraints: 'no Docker', 'code must look human-written', 'never mention X in public'\n\
+        - Lessons: mistakes pointed out, corrections, 'don't do X again', 'X was wrong because Y'\n\
+        - User feedback that shapes behavior: criticism, preferences, rules stated in frustration\n\
+          (e.g. 'you're too expensive, use haiku for this' → extract the model routing decision)\n\
+        - Infrastructure/tooling changes that persist\n\
+        - Gotchas discovered through experience\n\n\
+        Extract from EITHER side — user corrections AND assistant realizations both count.\n\
+        User anger often contains the most important signals.\n\n\
+        NEVER extract:\n\
+        - Routine code changes, refactors, test results\n\
+        - Bug fixes (unless there's a reusable lesson)\n\
+        - The assistant explaining how things work (teaching ≠ memory)\n\
+        - Anything already in ALREADY IN MEMORY below\n\n\
+        LANGUAGE: Match the user's language.\n\n\
+        DEDUP: Skip if it overlaps with ALREADY IN MEMORY.";
 
     let user = format!(
-        "Extract 0-1 memories from this conversation window. Zero is expected for routine work. Only extract if there's a genuine decision, constraint, or discovery worth preserving. Call with empty items if nothing qualifies.{existing_knowledge}\n\n\
+        "Extract memories from this conversation window. Call with empty items if nothing qualifies.{existing_knowledge}\n\n\
          === CONVERSATION ({} turns) ===\n{preview}",
         context.matches("User: ").count()
     );
@@ -505,7 +523,13 @@ async fn extract_from_context(state: AppState, context: &str) {
         "Store extracted memories from conversation",
         schema,
     ).await {
-        Ok(result) => result.items,
+        Ok(tcr) => {
+            if let Some(ref u) = tcr.usage {
+                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                let _ = db.log_llm_call("proxy_extract", &tcr.model, u.prompt_tokens, u.completion_tokens, cached, tcr.duration_ms);
+            }
+            tcr.value.items
+        }
         Err(e) => {
             warn!("proxy: extraction failed: {e}");
             return;
@@ -619,6 +643,7 @@ async fn extract_from_context(state: AppState, context: &str) {
 
     if stored > 0 {
         PROXY_EXTRACTED.fetch_add(stored, Ordering::Relaxed);
+        persist_proxy_counters(&db);
         info!(stored, extracted = count, "proxy: stored memories from window");
     } else if count > 0 {
         debug!("proxy: all extractions were duplicates");

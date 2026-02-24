@@ -559,8 +559,12 @@ pub(super) async fn do_recall(
                 Some(emb)
             } else {
                 match ai::get_embeddings(cfg, std::slice::from_ref(&query_text)).await {
-                    Ok(mut v) => {
-                        let emb = v.pop();
+                    Ok(er) => {
+                        if let Some(ref u) = er.usage {
+                            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                            let _ = state.db.log_llm_call("recall_embed", &cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
+                        }
+                        let emb = er.embeddings.into_iter().next();
                         if let Some(ref e) = emb {
                             state.embed_cache.insert(query_text.clone(), e.clone());
                         }
@@ -584,7 +588,13 @@ pub(super) async fn do_recall(
         explicit_expand.unwrap_or(false) && state.ai.as_ref().is_some_and(super::super::ai::AiConfig::has_llm);
     let expanded = if do_expand {
         if let Some(ref cfg) = state.ai {
-            let q = ai::expand_query(cfg, &query_text).await;
+            let (q, meta) = ai::expand_query(cfg, &query_text).await;
+            if let Some(m) = meta {
+                if let Some(ref u) = m.usage {
+                    let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                    let _ = state.db.log_llm_call("query_expand", &m.model, u.prompt_tokens, u.completion_tokens, cached, m.duration_ms);
+                }
+            }
             if !q.is_empty() {
                 debug!(expanded = ?q, "query expansion");
             }
@@ -613,7 +623,13 @@ pub(super) async fn do_recall(
         && result.memories.first().is_none_or(|m| m.relevance < 0.4)
     {
         if let Some(ref cfg) = state.ai {
-            let eq = ai::expand_query(cfg, &query_text).await;
+            let (eq, meta) = ai::expand_query(cfg, &query_text).await;
+            if let Some(m) = meta {
+                if let Some(ref u) = m.usage {
+                    let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                    let _ = state.db.log_llm_call("query_expand", &m.model, u.prompt_tokens, u.completion_tokens, cached, m.duration_ms);
+                }
+            }
             if !eq.is_empty() {
                 debug!(expanded = ?eq, "auto-expand (weak initial results)");
                 let db = state.db.clone();
@@ -642,7 +658,7 @@ pub(super) async fn do_recall(
 
     if do_rerank {
         if let Some(cfg) = state.ai.as_ref() {
-            recall::rerank_results(&mut result, &query_text, final_limit, cfg).await;
+            recall::rerank_results(&mut result, &query_text, final_limit, cfg, &state.db).await;
         }
     }
 
