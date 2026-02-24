@@ -120,18 +120,18 @@ fn format_audit_prompt(core: &[Memory], working: &[Memory]) -> String {
     prompt.push_str("## Core Layer\n");
     for m in core {
         let tags = m.tags.join(",");
-        let age_h = (now - m.last_accessed) as f64 / 3_600_000.0;
+        let age_d = (now - m.created_at) as f64 / 86_400_000.0;
         let preview: String = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.0}h, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.importance, m.access_count, age_h, tags, preview));
+        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, {:.1}d old, tags=[{}]) {}\n",
+            crate::util::short_id(&m.id), m.importance, m.access_count, age_d, tags, preview));
     }
     prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
     for m in working {
         let tags = m.tags.join(",");
-        let age_h = (now - m.last_accessed) as f64 / 3_600_000.0;
+        let age_d = (now - m.created_at) as f64 / 86_400_000.0;
         let preview: String = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.0}h, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.importance, m.access_count, age_h, tags, preview));
+        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, {:.1}d old, tags=[{}]) {}\n",
+            crate::util::short_id(&m.id), m.importance, m.access_count, age_d, tags, preview));
     }
     prompt
 }

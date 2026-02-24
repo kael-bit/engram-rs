@@ -93,12 +93,14 @@ impl<'a> RuleChecker<'a> {
             };
         }
 
-        // Rule: never delete recently updated memories (24h)
-        let age_h = (self.now_ms - mem.last_accessed) as f64 / 3_600_000.0;
+        // Rule: never delete recently created memories (24h)
+        // Note: we use created_at, not last_accessed — resume touches all memories
+        // which inflates last_accessed and would make this rule trigger on everything.
+        let age_h = (self.now_ms - mem.created_at) as f64 / 3_600_000.0;
         if age_h < 24.0 {
             return OpGrade {
                 op: op.clone(), grade: Grade::Bad,
-                reason: format!("deleting memory accessed {:.1}h ago (< 24h)", age_h),
+                reason: format!("deleting memory created {:.1}h ago (< 24h)", age_h),
             };
         }
 
@@ -321,20 +323,20 @@ fn format_sandbox_prompt(core: &[Memory], working: &[Memory]) -> String {
     prompt.push_str("## Core Layer\n");
     for m in core {
         let tags = m.tags.join(",");
-        let age_h = (now - m.last_accessed) as f64 / 3_600_000.0;
+        let age_d = (now - m.created_at) as f64 / 86_400_000.0;
         let preview = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (L{}, imp={:.1}, ac={}, age={:.0}h, kind={}, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.layer as u8, m.importance,
-            m.access_count, age_h, m.kind, tags, preview));
+        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, {:.1}d old, kind={}, tags=[{}]) {}\n",
+            crate::util::short_id(&m.id), m.importance,
+            m.access_count, age_d, m.kind, tags, preview));
     }
     prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
     for m in working {
         let tags = m.tags.join(",");
-        let age_h = (now - m.last_accessed) as f64 / 3_600_000.0;
+        let age_d = (now - m.created_at) as f64 / 86_400_000.0;
         let preview = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (L{}, imp={:.1}, ac={}, age={:.0}h, kind={}, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.layer as u8, m.importance,
-            m.access_count, age_h, m.kind, tags, preview));
+        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, {:.1}d old, kind={}, tags=[{}]) {}\n",
+            crate::util::short_id(&m.id), m.importance,
+            m.access_count, age_d, m.kind, tags, preview));
     }
     prompt
 }
