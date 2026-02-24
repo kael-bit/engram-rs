@@ -517,13 +517,7 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
                     let decision = resp.trim().to_uppercase();
                     if decision.starts_with("UPDATE") || decision.starts_with("ABSORB") {
                         // Newer supersedes older: transfer any unique tags, then delete old
-                        let mut new_tags: Vec<String> = newer.tags.clone();
-                        for tag in &older.tags {
-                            if !new_tags.contains(tag) {
-                                new_tags.push(tag.clone());
-                            }
-                        }
-                        new_tags.truncate(20);
+                        let new_tags = merge_tags(&newer.tags, &[&older.tags], 20);
 
                         // Bump newer's importance if older had higher
                         let imp = newer.importance.max(older.importance);
@@ -613,13 +607,7 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
                     let decision = resp.trim().to_uppercase();
                     if decision.starts_with("UPDATE") || decision.starts_with("ABSORB") {
                         let target_layer = wc.0.layer; // promote buffer to the old item's layer
-                        let mut new_tags: Vec<String> = buf.0.tags.clone();
-                        for tag in &wc.0.tags {
-                            if !new_tags.contains(tag) {
-                                new_tags.push(tag.clone());
-                            }
-                        }
-                        new_tags.truncate(20);
+                        let new_tags = merge_tags(&buf.0.tags, &[&wc.0.tags], 20);
                         let imp = buf.0.importance.max(wc.0.importance);
                         let access = buf.0.access_count + wc.0.access_count;
 
@@ -664,6 +652,20 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
     }
 
     (reconciled, removed_ids)
+}
+
+/// Merge tags from multiple sources, deduplicating and capping at `cap`.
+fn merge_tags(base: &[String], others: &[&[String]], cap: usize) -> Vec<String> {
+    let mut merged: Vec<String> = base.to_vec();
+    for tags in others {
+        for t in *tags {
+            if !merged.contains(t) {
+                merged.push(t.clone());
+            }
+        }
+    }
+    merged.truncate(cap);
+    merged
 }
 
 fn truncate_chars(s: &str, max: usize) -> String {
@@ -808,16 +810,10 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
                 .sum();
 
             // merge all tags (cap at 20)
-            let mut all_tags: Vec<String> = Vec::new();
-            for &idx in &cluster {
-                for tag in &ns_mems[idx].0.tags {
-                    if !all_tags.contains(tag) {
-                        all_tags.push(tag.clone());
-                    }
-                }
-            }
-            all_tags.truncate(20);
-
+            let tag_slices: Vec<&[String]> = cluster.iter()
+                .map(|&idx| ns_mems[idx].0.tags.as_slice())
+                .collect();
+            let all_tags = merge_tags(&[], &tag_slices, 20);
             // update the winner
             let best_id = ns_mems[best_idx].0.id.clone();
             {

@@ -694,6 +694,14 @@ impl MemoryDB {
     }
 
     pub fn stats(&self) -> Stats {
+        self.stats_impl(None)
+    }
+
+    pub fn stats_ns(&self, ns: &str) -> Stats {
+        self.stats_impl(Some(ns))
+    }
+
+    fn stats_impl(&self, ns: Option<&str>) -> Stats {
         let mut s = Stats {
             total: 0,
             buffer: 0,
@@ -702,82 +710,54 @@ impl MemoryDB {
             by_kind: KindStats::default(),
         };
         let Ok(conn) = self.conn() else { return s; };
-        let Ok(mut stmt) = conn
-            .prepare("SELECT layer, COUNT(*) FROM memories GROUP BY layer")
-        else {
-            return s;
-        };
-        let Ok(rows) = stmt.query_map([], |row| {
-            Ok((row.get::<_, u8>(0)?, row.get::<_, i64>(1)? as usize))
-        }) else {
-            return s;
+
+        let (layer_sql, kind_sql) = match ns {
+            Some(_) => (
+                "SELECT layer, COUNT(*) FROM memories WHERE namespace = ?1 GROUP BY layer",
+                "SELECT kind, COUNT(*) FROM memories WHERE namespace = ?1 GROUP BY kind",
+            ),
+            None => (
+                "SELECT layer, COUNT(*) FROM memories GROUP BY layer",
+                "SELECT kind, COUNT(*) FROM memories GROUP BY kind",
+            ),
         };
 
-        for r in rows.flatten() {
-            s.total += r.1;
-            match r.0 {
-                1 => s.buffer = r.1,
-                2 => s.working = r.1,
-                3 => s.core = r.1,
+        // Layer counts
+        let mut apply_layer = |layer: u8, count: usize| {
+            s.total += count;
+            match layer {
+                1 => s.buffer = count,
+                2 => s.working = count,
+                3 => s.core = count,
                 _ => {}
             }
-        }
-
-        if let Ok(mut stmt) = conn.prepare("SELECT kind, COUNT(*) FROM memories GROUP BY kind") {
-            if let Ok(rows) = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
-            }) {
-                for r in rows.flatten() {
-                    match r.0.as_str() {
-                        "semantic" => s.by_kind.semantic = r.1,
-                        "episodic" => s.by_kind.episodic = r.1,
-                        "procedural" => s.by_kind.procedural = r.1,
-                        _ => {}
-                    }
+        };
+        if let Ok(mut stmt) = conn.prepare(layer_sql) {
+            if let Some(n) = ns {
+                if let Ok(rows) = stmt.query_map(params![n], |r| Ok((r.get::<_,u8>(0)?, r.get::<_,i64>(1)? as usize))) {
+                    rows.flatten().for_each(|r| apply_layer(r.0, r.1));
                 }
+            } else if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_,u8>(0)?, r.get::<_,i64>(1)? as usize))) {
+                rows.flatten().for_each(|r| apply_layer(r.0, r.1));
             }
         }
 
-        s
-    }
-
-    pub fn stats_ns(&self, ns: &str) -> Stats {
-        let mut s = Stats { total: 0, buffer: 0, working: 0, core: 0, by_kind: KindStats::default() };
-        let Ok(conn) = self.conn() else { return s; };
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT layer, COUNT(*) FROM memories WHERE namespace = ?1 GROUP BY layer",
-        ) else {
-            return s;
-        };
-        let Ok(rows) = stmt.query_map(params![ns], |row| {
-            Ok((row.get::<_, u8>(0)?, row.get::<_, i64>(1)? as usize))
-        }) else {
-            return s;
-        };
-        for r in rows.flatten() {
-            s.total += r.1;
-            match r.0 {
-                1 => s.buffer = r.1,
-                2 => s.working = r.1,
-                3 => s.core = r.1,
-                _ => {}
-            }
-        }
-
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT kind, COUNT(*) FROM memories WHERE namespace = ?1 GROUP BY kind",
-        ) {
-            if let Ok(rows) = stmt.query_map(params![ns], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
-            }) {
-                for r in rows.flatten() {
-                    match r.0.as_str() {
-                        "semantic" => s.by_kind.semantic = r.1,
-                        "episodic" => s.by_kind.episodic = r.1,
-                        "procedural" => s.by_kind.procedural = r.1,
-                        _ => {}
-                    }
+        // Kind counts
+        if let Ok(mut stmt) = conn.prepare(kind_sql) {
+            let mut apply_kind = |kind: String, count: usize| {
+                match kind.as_str() {
+                    "semantic" => s.by_kind.semantic = count,
+                    "episodic" => s.by_kind.episodic = count,
+                    "procedural" => s.by_kind.procedural = count,
+                    _ => {}
                 }
+            };
+            if let Some(n) = ns {
+                if let Ok(rows) = stmt.query_map(params![n], |r| Ok((r.get::<_,String>(0)?, r.get::<_,i64>(1)? as usize))) {
+                    rows.flatten().for_each(|r| apply_kind(r.0, r.1));
+                }
+            } else if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,i64>(1)? as usize))) {
+                rows.flatten().for_each(|r| apply_kind(r.0, r.1));
             }
         }
 
