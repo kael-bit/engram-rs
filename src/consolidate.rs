@@ -223,7 +223,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // and a rejection from an older prompt shouldn't be permanent.
     let gate_retry_ms: i64 = 24 * 3600 * 1000; // 24 hours
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0) {
-        if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral" || t == "auto-distilled") {
+        if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral" || t == "auto-distilled" || t == "distilled") {
             continue;
         }
         // gate-rejected: skip unless cooldown expired

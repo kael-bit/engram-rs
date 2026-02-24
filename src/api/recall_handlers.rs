@@ -332,11 +332,14 @@ pub(super) async fn do_resume(
     let recent_out = take_budget(&recent, &mut budget_left, compact);
     let buffer_out = take_budget(&buffer, &mut budget_left, compact);
 
-    // Touch Working/Core memories served by resume — they're actively being used.
-    // Skip Buffer to avoid inflating scores for unproven memories.
+    // Touch all memories served by resume — they're actively being used.
+    // Buffer memories that make it into resume output have already been filtered
+    // by importance/recency, so touching them is justified reinforcement.
     {
         let db = state.db.clone();
-        let ids: Vec<String> = core_out.iter().chain(working_out.iter())
+        let ids: Vec<String> = core_out.iter()
+            .chain(working_out.iter())
+            .chain(buffer_out.iter())
             .map(|m| m.id.clone()).collect();
         tokio::task::spawn_blocking(move || {
             for id in &ids {
