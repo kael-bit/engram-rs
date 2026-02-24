@@ -44,6 +44,9 @@ pub struct ConsolidateResponse {
     /// Number of duplicate buffer memories removed.
     #[serde(skip_serializing_if = "is_zero")]
     pub buffer_deduped: usize,
+    /// Number of buffer memories promoted by LLM triage.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub triaged: usize,
     /// Number of facts extracted from existing memories.
     #[serde(skip_serializing_if = "is_zero")]
     pub facts_extracted: usize,
@@ -159,6 +162,19 @@ pub async fn consolidate(
             .await
             .unwrap_or(0);
         result.buffer_deduped = deduped;
+    }
+
+    // Buffer triage: LLM evaluates buffer memories that have usage signal.
+    // Replaces mechanical access_count threshold with intelligent promotion.
+    // Memories must be >1h old and have at least one access to be considered.
+    if let Some(ref cfg) = ai {
+        let min_age = 3600 * 1000; // 1 hour
+        let (count, ids) = triage_buffer(&db, cfg, min_age, 20, &result.promoted_ids).await;
+        result.triaged = count;
+        for id in ids {
+            result.promoted_ids.push(id);
+        }
+        result.promoted += count;
     }
 
     // Extract fact triples from Working/Core memories that don't have any yet.
@@ -341,6 +357,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         reconciled: 0,
         reconciled_ids: vec![],
         buffer_deduped: 0,
+        triaged: 0,
         facts_extracted: 0,
         promotion_candidates,
         distilled: 0,
@@ -404,6 +421,104 @@ async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<GateResult,
     } else {
         Ok(GateResult { approved: false, kind: None })
     }
+}
+
+// --- Buffer triage: LLM-based promotion from Buffer to Working ---
+
+const TRIAGE_SYSTEM: &str = "You are triaging an AI agent's short-term memory buffer.\n\
+    Each memory below is tagged with an ID. Decide which ones contain durable knowledge \
+    worth promoting to Working memory (medium-term), and which are transient.\n\n\
+    PROMOTE if the memory contains:\n\
+    - Design decisions, architecture choices, API contracts\n\
+    - Lessons learned, rules, principles\n\
+    - Procedures, workflows, step-by-step processes\n\
+    - Identity info, preferences, constraints\n\
+    - Project context that will be needed across sessions\n\n\
+    KEEP in buffer if:\n\
+    - Session summaries that just list what was done (not lessons)\n\
+    - Temporary status, in-progress notes\n\
+    - Information that's only relevant right now\n\n\
+    Also classify the kind for promoted memories:\n\
+    - procedural: step-by-step workflows, build/deploy/test processes\n\
+    - semantic: everything else (facts, decisions, lessons, preferences)\n\n\
+    Reply with one line per memory: ID PROMOTE kind  OR  ID KEEP\n\
+    Example:\n\
+    abc123 PROMOTE semantic\n\
+    def456 KEEP\n\
+    ghi789 PROMOTE procedural";
+
+/// Evaluate buffer memories using LLM and promote worthy ones to Working.
+/// Only considers memories older than `min_age_ms` with at least one access.
+/// Returns (promoted_count, promoted_ids).
+async fn triage_buffer(
+    db: &MemoryDB, cfg: &AiConfig,
+    min_age_ms: i64, max_batch: usize,
+    already_promoted: &[String],
+) -> (usize, Vec<String>) {
+    let now = crate::db::now_ms();
+    let candidates: Vec<_> = db.list_by_layer_meta(Layer::Buffer, 10000, 0)
+        .into_iter()
+        .filter(|m| {
+            let dominated = m.tags.iter().any(|t| t == "distilled" || t == "ephemeral");
+            let old_enough = (now - m.created_at) > min_age_ms;
+            let has_signal = m.access_count > 0 || m.repetition_count > 0;
+            !dominated && old_enough && has_signal && !already_promoted.contains(&m.id)
+        })
+        .take(max_batch)
+        .collect();
+
+    if candidates.is_empty() {
+        return (0, vec![]);
+    }
+
+    // Build batch prompt
+    let mut user_msg = String::with_capacity(candidates.len() * 200);
+    for m in &candidates {
+        let preview = truncate_chars(&m.content, 300);
+        let tags = m.tags.join(", ");
+        user_msg.push_str(&format!(
+            "[{}] (ac={}, tags=[{}]) {}\n\n",
+            &m.id[..8], m.access_count, tags, preview
+        ));
+    }
+
+    let response = match ai::llm_chat_as(cfg, "gate", TRIAGE_SYSTEM, &user_msg).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "buffer triage LLM call failed");
+            return (0, vec![]);
+        }
+    };
+
+    let mut promoted = 0;
+    let mut ids = Vec::new();
+
+    for line in response.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 { continue; }
+        let short_id = parts[0];
+        let decision = parts[1].to_uppercase();
+
+        if decision != "PROMOTE" { continue; }
+
+        // Match short_id prefix to full ID
+        if let Some(mem) = candidates.iter().find(|m| m.id.starts_with(short_id)) {
+            let kind = parts.get(2).map(|k| k.to_lowercase());
+            if db.promote(&mem.id, Layer::Working).is_ok() {
+                if let Some(ref k) = kind {
+                    if k == "procedural" && mem.kind == "semantic" {
+                        let _ = db.update_kind(&mem.id, k);
+                    }
+                }
+                debug!(id = %mem.id, kind = ?kind, "triage: promoted buffer → working");
+                ids.push(mem.id.clone());
+                promoted += 1;
+            }
+        }
+    }
+
+    info!(candidates = candidates.len(), promoted, "buffer triage complete");
+    (promoted, ids)
 }
 
 // --- Reconcile: same-topic update detection ---
