@@ -266,10 +266,13 @@ const EXPAND_PROMPT: &str = "Given a search query for a PERSONAL knowledge base 
     Bridge abstraction levels: abstract→concrete, concrete→abstract. \
     Example: 可观测性 → 日志系统 Loki Grafana 监控告警. \
     Example: alice是谁 → alice的身份 alice的角色 我和alice的关系. \
+    Example: security lessons → security lesson 安全相关的错误. \
     Focus on rephrasing the INTENT, not listing random related technologies. \
     If the query asks about a tool/library choice, rephrase as: why/decision/migration/选择/替换. \
     NEVER output explanations, commentary, or bullet points with dashes. \
-    Even for very short queries, always produce search phrases. Same language as input.";
+    Even for very short queries, always produce search phrases. \
+    The knowledge base contains notes in BOTH Chinese and English. \
+    Always include expansions in both languages to maximize recall coverage.";
 
 /// Generate alternative query phrasings for better recall coverage.
 pub async fn expand_query(cfg: &AiConfig, query: &str) -> Vec<String> {

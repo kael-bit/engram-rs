@@ -121,7 +121,7 @@ fn promote_high_access_working() {
     assert_eq!(result.promotion_candidates[0].0, "promote-me");
 
     // Simulate no-AI fallback: promote candidates directly
-    for (id, _) in &result.promotion_candidates {
+    for (id, _, _) in &result.promotion_candidates {
         db.promote(id, Layer::Core).unwrap();
     }
     let promoted = db.get("promote-me").unwrap().unwrap();
@@ -142,7 +142,7 @@ fn age_promote_old_working() {
     db.import(&[old, fresh]).unwrap();
 
     let result = consolidate_sync(&db, None);
-    let candidate_ids: Vec<&str> = result.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+    let candidate_ids: Vec<&str> = result.promotion_candidates.iter().map(|(id, _, _)| id.as_str()).collect();
     assert!(candidate_ids.contains(&"old-but-worthy"));
     assert!(!candidate_ids.contains(&"too-young"));
 }
@@ -248,7 +248,7 @@ fn operational_tag_blocks_working_to_core_promotion() {
     db.import(&[session_mem, normal, ephemeral]).unwrap();
 
     let result = consolidate_sync(&db, None);
-    let candidate_ids: Vec<&str> = result.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+    let candidate_ids: Vec<&str> = result.promotion_candidates.iter().map(|(id, _, _)| id.as_str()).collect();
 
     assert!(candidate_ids.contains(&"normal-mem"), "normal memory should be a candidate");
     assert!(!candidate_ids.contains(&"session-mem"), "session memory must not be a candidate");
@@ -294,7 +294,7 @@ fn gate_rejected_skips_promotion() {
     let r = consolidate_sync(&db, None);
 
     // gate-rejected should NOT appear in promotion candidates
-    let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+    let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _)| id.as_str()).collect();
     assert!(!candidate_ids.contains(&"gate-rej"), "gate-rejected must not be a promotion candidate");
     assert!(candidate_ids.contains(&"eligible"), "eligible should be a promotion candidate");
 }
@@ -315,7 +315,7 @@ fn gate_rejected_retries_after_cooldown() {
     let r = consolidate_sync(&db, None);
 
     // Should now be a promotion candidate (tag cleared, eligible again)
-    let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+    let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _)| id.as_str()).collect();
     assert!(candidate_ids.contains(&"retry-me"), "gate-rejected with expired cooldown should retry");
 
     // Tag should be removed
@@ -387,7 +387,7 @@ fn auto_distilled_blocks_core_promotion() {
     db.import(&[ad, normal]).unwrap();
 
     let r = consolidate_sync(&db, None);
-    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _)| id.as_str()).collect();
     assert!(!ids.contains(&"project-status"), "auto-distilled must not be a Core candidate");
     assert!(ids.contains(&"real-lesson"), "normal Working should be a candidate");
 }
@@ -433,7 +433,7 @@ fn gate_rejected_within_cooldown_skips_promotion() {
 
     db.import(&[gr]).unwrap();
     let r = consolidate_sync(&db, None);
-    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _)| id.as_str()).collect();
     assert!(!ids.contains(&"gr-fresh"), "gate-rejected within 24h must not be a candidate");
 
     // Verify the tag is still there (not cleared prematurely)
@@ -459,7 +459,7 @@ fn gate_rejected_after_cooldown_retries() {
     let m = db.get("gr-old").unwrap().unwrap();
     assert!(!m.tags.iter().any(|t| t == "gate-rejected"),
         "tag should be cleared after 24h cooldown");
-    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _)| id.as_str()).collect();
     assert!(ids.contains(&"gr-old"), "should re-enter promotion pipeline after cooldown");
 }
 
@@ -475,6 +475,6 @@ fn session_notes_blocked_from_core_promotion() {
 
     db.import(&[session]).unwrap();
     let r = consolidate_sync(&db, None);
-    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _)| id.as_str()).collect();
     assert!(!ids.contains(&"session-note"), "session notes must never reach Core promotion");
 }

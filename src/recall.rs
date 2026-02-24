@@ -309,16 +309,19 @@ pub fn recall(
             // This prevents CJK embedding weakness from burying keyword-confirmed results.
             if let Some(sm) = scored.iter_mut().find(|s| &s.memory.id == id) {
                 let fts_boost = if short_cjk { 0.6 } else { 0.3 };
-                let semantic_boosted = sm.relevance * (1.0 + fts_rel * fts_boost);
-                // Floor prevents keyword-confirmed results from sinking below a minimum,
-                // but shouldn't dominate — keep it modest so semantic ranking wins.
-                // For short CJK, raise the floor so keyword-confirmed results stay high.
+                // Gate FTS boost by semantic confidence: if semantic score is low,
+                // the keyword match is likely coincidental (e.g. "配置" appearing
+                // in an unrelated memory). Scale boost by how confident semantic is.
+                let sem_gate = (sm.relevance / 0.45).min(1.0);
+                let semantic_boosted = sm.relevance * (1.0 + fts_rel * fts_boost * sem_gate);
+                // Floor for keyword-confirmed results, also gated by semantic score
                 let fts_floor = if short_cjk {
-                    0.50 + fts_rel * 0.35 // top FTS hit → 0.85 floor
+                    0.50 + fts_rel * 0.35
                 } else {
-                    0.35 + fts_rel * 0.25 // top FTS hit → 0.6 floor
+                    0.35 + fts_rel * 0.25
                 };
-                sm.relevance = semantic_boosted.max(fts_floor).min(1.0);
+                let gated_floor = fts_floor * sem_gate;
+                sm.relevance = semantic_boosted.max(gated_floor).min(1.0);
                 let rescored = score_memory(&sm.memory, sm.relevance);
                 sm.score = rescored.score;
                 sm.recency = rescored.recency;
@@ -330,8 +333,8 @@ pub fn recall(
                 continue;
             }
             // FTS-only hits: keyword match without semantic confirmation.
-            // For short CJK queries, trust FTS more — cosine is unreliable.
-            let capped = if short_cjk { fts_rel * 0.7 } else { fts_rel * 0.5 };
+            // Without semantic backing, cap low — keyword alone is unreliable.
+            let capped = if short_cjk { fts_rel * 0.5 } else { fts_rel * 0.3 };
             seen.insert(id.clone());
             scored.push(score_memory(&mem, capped));
         }

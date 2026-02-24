@@ -70,7 +70,7 @@ pub struct ConsolidateResponse {
     pub facts_extracted: usize,
     /// IDs that passed access/age thresholds but await LLM gate review.
     #[serde(skip)]
-    pub(crate) promotion_candidates: Vec<(String, String)>, // (id, content)
+    pub(crate) promotion_candidates: Vec<(String, String, i64)>, // (id, content, access_count)
     /// Number of session notes distilled into project context.
     #[serde(skip_serializing_if = "is_zero")]
     pub distilled: usize,
@@ -107,8 +107,8 @@ pub async fn consolidate(
     if !candidates.is_empty() {
         match &ai {
             Some(cfg) => {
-                for (id, content) in &candidates {
-                    match llm_promotion_gate(cfg, content).await {
+                for (id, content, access_count) in &candidates {
+                    match llm_promotion_gate(cfg, content, *access_count).await {
                         Ok((true, kind)) => {
                             let db2 = db.clone();
                             let id2 = id.clone();
@@ -155,8 +155,8 @@ pub async fn consolidate(
             }
             None => {
                 let db2 = db.clone();
-                let cands: Vec<String> = candidates.iter().map(|(id, _)| id.clone()).collect();
-                let promoted_ids = tokio::task::spawn_blocking(move || {
+                let cands: Vec<String> = candidates.iter().map(|(id, _, _)| id.clone()).collect();
+                let promoted_ids: Vec<String> = tokio::task::spawn_blocking(move || {
                     cands.into_iter().filter(|id| db2.promote(id, Layer::Core).is_ok()).collect::<Vec<_>>()
                 }).await.unwrap_or_default();
                 result.promoted += promoted_ids.len();
@@ -296,7 +296,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
             && mem.importance >= promote_min_imp;
 
         if by_score || by_age {
-            promotion_candidates.push((mem.id.clone(), mem.content.clone()));
+            promotion_candidates.push((mem.id.clone(), mem.content.clone(), mem.access_count));
         }
     }
 
@@ -457,12 +457,19 @@ struct GateResult {
     kind: Option<String>,
 }
 
-async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<(bool, Option<String>), EngramError> {
-    let truncated = if content.len() > 500 {
-        &content[..content.char_indices().take(500).last()
-            .map(|(i, c)| i + c.len_utf8()).unwrap_or(500)]
+async fn llm_promotion_gate(cfg: &AiConfig, content: &str, access_count: i64) -> Result<(bool, Option<String>), EngramError> {
+    let truncated = truncate_chars(content, 500);
+
+    // When a memory has significant usage history, tell the gate so it can
+    // weigh empirical evidence, not just content analysis.
+    let user_msg = if access_count >= 10 {
+        format!(
+            "{}\n\n[Context: This memory has been recalled {} times by the agent, \
+             indicating high practical utility despite any prior rejections.]",
+            truncated, access_count
+        )
     } else {
-        content
+        truncated.to_string()
     };
 
     let schema = serde_json::json!({
@@ -483,7 +490,7 @@ async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<(bool, Opti
     });
 
     let result: GateResult = ai::llm_tool_call(
-        cfg, "gate", GATE_SYSTEM, truncated,
+        cfg, "gate", GATE_SYSTEM, &user_msg,
         "gate_decision", "Decide whether to promote this memory to Core",
         schema,
     ).await?;
