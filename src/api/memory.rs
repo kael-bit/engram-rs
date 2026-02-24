@@ -132,6 +132,7 @@ pub(super) struct UpdateBody {
     layer: Option<u8>,
     importance: Option<f64>,
     tags: Option<Vec<String>>,
+    kind: Option<String>,
 }
 
 pub(super) async fn update_memory(
@@ -142,6 +143,9 @@ pub(super) async fn update_memory(
     let db = state.db.clone();
     let mem = blocking(move || {
         let full_id = db.resolve_prefix(&id)?;
+        if let Some(ref k) = body.kind {
+            db.update_kind(&full_id, k)?;
+        }
         db.update_fields(
             &full_id,
             body.content.as_deref(),

@@ -85,14 +85,22 @@ pub async fn consolidate(
             Some(cfg) => {
                 for (id, content) in &candidates {
                     match llm_promotion_gate(cfg, content).await {
-                        Ok(true) => {
+                        Ok(GateResult { approved: true, kind }) => {
                             if db.promote(id, Layer::Core).is_ok() {
+                                // Set kind if gate provided one and memory is still default.
+                                if let Some(k) = kind {
+                                    if let Ok(Some(mem)) = db.get(id) {
+                                        if mem.kind == "semantic" {
+                                            let _ = db.update_kind(id, &k);
+                                        }
+                                    }
+                                }
                                 result.promoted_ids.push(id.clone());
                                 result.promoted += 1;
                                 debug!(id = %id, "promoted to Core");
                             }
                         }
-                        Ok(false) => {
+                        Ok(GateResult { approved: false, .. }) => {
                             result.gate_rejected += 1;
                             // Tag as reviewed-not-core so we don't re-evaluate every cycle.
                             // Don't drop importance — that penalizes Working-layer ranking.
@@ -325,9 +333,22 @@ const GATE_SYSTEM: &str = "You are a memory curator for an AI agent's long-term 
     - Duplicate: restates something that's obviously already known\n\
     - Research notes: survey results, market analysis, feature lists\n\
     \n\
-    Reply with ONLY one word: APPROVE or REJECT";
+    Reply with ONLY one word: APPROVE or REJECT\n\
+    \n\
+    If APPROVE, also specify the kind on the same line:\n\
+    - APPROVE semantic  (facts, knowledge, preferences, lessons, identity)\n\
+    - APPROVE procedural  (workflows, rules, how-to processes, behavioral directives)\n\
+    - APPROVE episodic  (specific dated events, interactions with context)\n\
+    \n\
+    If unsure about kind, default to semantic.";
 
-async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<bool, String> {
+/// Gate result: approved (with optional kind) or rejected.
+struct GateResult {
+    approved: bool,
+    kind: Option<String>,
+}
+
+async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<GateResult, String> {
     let truncated = if content.len() > 500 {
         &content[..content.char_indices().take(500).last()
             .map(|(i, c)| i + c.len_utf8()).unwrap_or(500)]
@@ -336,7 +357,18 @@ async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<bool, Strin
     };
     let response = ai::llm_chat_as(cfg, "gate", GATE_SYSTEM, truncated).await?;
     let decision = response.trim().to_uppercase();
-    Ok(decision.starts_with("APPROVE"))
+    if decision.starts_with("APPROVE") {
+        let kind = if decision.contains("PROCEDURAL") {
+            Some("procedural".into())
+        } else if decision.contains("EPISODIC") {
+            Some("episodic".into())
+        } else {
+            Some("semantic".into())
+        };
+        Ok(GateResult { approved: true, kind })
+    } else {
+        Ok(GateResult { approved: false, kind: None })
+    }
 }
 
 // --- Reconcile: same-topic update detection ---

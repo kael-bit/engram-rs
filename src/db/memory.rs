@@ -889,6 +889,15 @@ impl MemoryDB {
         self.get(id)
     }
 
+    /// Update just the kind field for a memory.
+    pub fn update_kind(&self, id: &str, kind: &str) -> Result<(), EngramError> {
+        self.conn()?.execute(
+            "UPDATE memories SET kind = ?1 WHERE id = ?2",
+            params![kind, id],
+        )?;
+        Ok(())
+    }
+
     /// Export all memories as a JSON-serializable vec (for backup/migration).
     /// Embeddings are excluded to keep exports portable.
     pub fn export_all(&self) -> Result<Vec<Memory>, EngramError> {
