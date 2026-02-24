@@ -462,15 +462,18 @@ const GATE_SYSTEM: &str = "You are a memory curator for an AI agent's long-term 
     - Relational: important facts about people, relationships\n\
     - Constraints: financial limits, payment rules, security policies, behavioral boundaries\n\
     - Architectural: fundamental design decisions that shape the project\n\
-    - High-utility operational knowledge: if the context note says this memory has been recalled many times (15+), \
-    it has proven its practical value regardless of category. Favor APPROVE for heavily-used memories \
-    — the agent's actual behavior is a stronger signal than content classification.\n\
+    - High-utility operational knowledge: if the context note says this memory has been recalled many times (50+), \
+    it has proven its practical value. Consider APPROVE for heavily-used memories \
+    — but still REJECT if the content is a TODO list, roadmap, plan, or temporal snapshot, \
+    regardless of recall count.\n\
     \n\
     REJECT (keep in Working) if it is:\n\
     - Operational: bug fixes, code changes, version bumps, deployment logs (UNLESS heavily recalled)\n\
     - Ephemeral: session summaries, daily progress, temporary status\n\
     - Temporal snapshot: contains specific numbers, version strings, counts, percentages, or describes 'current state' \
     — these go stale and don't belong in permanent memory\n\
+    - Plans and proposals: numbered lists of things TO DO, improvement proposals, design plans with bullet points \
+    — these are transient and will be outdated soon. Core stores lessons LEARNED, not plans MADE.\n\
     - Technical detail: specific code patterns, API signatures, config values, tech stack specs\n\
     - System documentation: descriptions of how a system works, feature lists, implementation summaries, \
     TODO/roadmap lists — these belong in docs/README, not in Core memory. \
@@ -500,7 +503,7 @@ async fn llm_promotion_gate(cfg: &AiConfig, content: &str, access_count: i64) ->
 
     // When a memory has significant usage history, tell the gate so it can
     // weigh empirical evidence, not just content analysis.
-    let user_msg = if access_count >= 10 {
+    let user_msg = if access_count >= 30 {
         format!(
             "{}\n\n[Context: This memory has been recalled {} times by the agent, \
              indicating high practical utility despite any prior rejections.]",
