@@ -72,7 +72,7 @@ pub async fn handle(
     for (name, value) in &headers {
         let skip = matches!(
             name.as_str(),
-            "host" | "connection" | "transfer-encoding" | "content-length"
+            "host" | "connection" | "transfer-encoding" | "content-length" | "authorization"
         );
         if !skip {
             if let Ok(v) = value.to_str() {
@@ -81,10 +81,9 @@ pub async fn handle(
         }
     }
 
-    if !headers.contains_key("authorization") {
-        if let Some(ref key) = proxy.default_key {
-            upstream_req = upstream_req.header("authorization", format!("Bearer {key}"));
-        }
+    // Always use the configured upstream key, never forward the caller's auth
+    if let Some(ref key) = proxy.default_key {
+        upstream_req = upstream_req.header("authorization", format!("Bearer {key}"));
     }
 
     upstream_req = upstream_req.body(req_bytes);
