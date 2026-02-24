@@ -644,6 +644,15 @@ pub async fn quick_semantic_dup_threshold(
     let embeddings = ai::get_embeddings(ai_cfg, &[content.to_string()]).await?;
     let emb = embeddings.first().ok_or_else(|| EngramError::AiBackend("no embedding returned".into()))?;
     let candidates = db.search_semantic(emb, 10);
+    if let Some((top_id, top_score)) = candidates.first() {
+        tracing::debug!(
+            top_id = &top_id[..8.min(top_id.len())],
+            top_score = %format!("{:.4}", top_score),
+            threshold = %format!("{:.2}", threshold),
+            total_candidates = candidates.len(),
+            "semantic dedup check"
+        );
+    }
     for (id, score) in &candidates {
         if *score > threshold {
             return Ok(Some(id.clone()));

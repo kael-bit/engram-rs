@@ -15,11 +15,46 @@ pub(super) async fn create_memory(
     headers: axum::http::HeaderMap,
     Json(mut input): Json<db::MemoryInput>,
 ) -> Result<(StatusCode, Json<db::Memory>), EngramError> {
-    // Body namespace takes precedence, then X-Namespace header
     if input.namespace.is_none() {
         input.namespace = get_namespace(&headers);
     }
     let sync = input.sync_embed.unwrap_or(false);
+    let skip_dedup = input.skip_dedup.unwrap_or(false);
+
+    // Semantic dedup: if AI is available and dedup isn't skipped, check
+    // for semantically similar existing memories before inserting.
+    // Jaccard (in db.insert) catches textual duplicates; this catches
+    // "same concept, different wording" — the gap that caused rep=0.
+    if !skip_dedup {
+        if let Some(ref cfg) = state.ai {
+            if cfg.has_embed() {
+                tracing::debug!("semantic dedup: checking before insert");
+                match crate::recall::quick_semantic_dup_threshold(
+                    cfg, &state.db, &input.content, 0.65,
+                ).await {
+                    Ok(Some(existing_id)) if !existing_id.is_empty() => {
+                        let db = state.db.clone();
+                        let eid = existing_id.clone();
+                        let _ = tokio::task::spawn_blocking(move || db.reinforce(&eid)).await;
+                        let db = state.db.clone();
+                        let mem = tokio::task::spawn_blocking(move || db.get(&existing_id))
+                            .await
+                            .map_err(|e| EngramError::Internal(e.to_string()))?
+                            .map_err(|e| EngramError::Internal(e.to_string()))?
+                            .ok_or(EngramError::NotFound)?;
+                        tracing::info!(
+                            existing_id = %mem.id,
+                            rep = mem.repetition_count,
+                            "semantic dedup: reinforced existing instead of inserting"
+                        );
+                        return Ok((StatusCode::OK, Json(mem)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     let db = state.db.clone();
     let mem = blocking(move || db.insert(input))
         .await??;
