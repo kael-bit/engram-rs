@@ -23,6 +23,7 @@ Metadata: ac=access count, age=days old, mod=days since last edit, kind, tags.
 - mod < 1d → don't touch
 - Never demote to buffer (to:1)
 - Never delete identity or lesson-tagged memories
+- Check the current layer before proposing demote — demoting L2→L2 is a no-op bug
 
 ## What BELONGS in Core (examples)
 - "never force-push to main" — lesson, prevents mistakes
@@ -133,7 +134,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
 fn format_audit_prompt(core: &[Memory], working: &[Memory]) -> String {
     let now = crate::db::now_ms();
     let mut prompt = String::with_capacity(16_000);
-    prompt.push_str("## Core Layer\n");
+    prompt.push_str("## Core Layer (L3)\n");
     for m in core {
         let tags = m.tags.join(",");
         let age_d = (now - m.created_at) as f64 / 86_400_000.0;
@@ -143,10 +144,10 @@ fn format_audit_prompt(core: &[Memory], working: &[Memory]) -> String {
             age_d
         };
         let preview: String = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
+        prompt.push_str(&format!("- [{}] L3 (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
             crate::util::short_id(&m.id), m.importance, m.access_count, age_d, mod_d, tags, preview));
     }
-    prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
+    prompt.push_str(&format!("\n## Working Layer (L2, {} memories)\n", working.len()));
     for m in working {
         let tags = m.tags.join(",");
         let age_d = (now - m.created_at) as f64 / 86_400_000.0;
@@ -156,7 +157,7 @@ fn format_audit_prompt(core: &[Memory], working: &[Memory]) -> String {
             age_d
         };
         let preview: String = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
+        prompt.push_str(&format!("- [{}] L2 (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
             crate::util::short_id(&m.id), m.importance, m.access_count, age_d, mod_d, tags, preview));
     }
     prompt
