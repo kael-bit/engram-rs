@@ -185,6 +185,65 @@ Store a summary: what you did + what was decided + what to do next.
 Tag as "session". Without the "next" part, you'll wake up lost.
 ```
 
+#### Option A-alt: HTTP API (no MCP needed)
+
+If you prefer not to set up MCP, add curl-based instructions directly to your `CLAUDE.md`:
+
+```markdown
+## Memory
+
+You have persistent memory via engram at http://localhost:3917
+Auth: Bearer YOUR_API_KEY
+
+### Every session start (DO THIS FIRST)
+```bash
+curl -sf -H "Authorization: Bearer YOUR_API_KEY" "http://localhost:3917/resume?hours=6&compact=true"
+```
+
+### When to store what
+
+| What | Tags | Kind | Example |
+|------|------|------|---------|
+| Design decisions | topic tags | *(default)* | "API uses REST, auth via Bearer token" |
+| Lessons from mistakes | `lesson` + topic | *(default)* | "LESSON: never force-push to main" |
+| Step-by-step workflows | `procedure` + topic | `procedural` | "Deploy: test → build → stop → cp → start" |
+| User preferences | `preference` | *(default)* | "User prefers concise Chinese replies" |
+| Session recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
+
+**Don't store**: routine output, things in code files, transient status.
+
+### Recall
+```bash
+curl -sf -X POST -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" -d '{"query": "your question"}' http://localhost:3917/recall
+```
+
+### Store
+```bash
+# Fact or decision
+curl -sf -X POST -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" -d '{"content": "...", "tags": ["topic"]}' http://localhost:3917/memories
+
+# Lesson (survives longer)
+curl -sf -X POST -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" -d '{"content": "LESSON: ...", "tags": ["lesson", "topic"]}' http://localhost:3917/memories
+
+# Procedure (never expires)
+curl -sf -X POST -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" -d '{"content": "Steps: 1. ... 2. ...", "tags": ["procedure"], "kind": "procedural"}' http://localhost:3917/memories
+```
+
+### Before risky operations
+```bash
+curl -sf -H "Authorization: Bearer YOUR_API_KEY" http://localhost:3917/triggers/deploy
+```
+
+### End of session
+Store what you did + what to do next. Tag as "session".
+```
+
+> **Tip:** For multi-agent setups, add `X-Namespace: agent-name` header to isolate each agent's memory.
+
 #### Option B: LLM Proxy (automatic capture)
 
 Route Claude Code's API calls through engram — memories are extracted automatically from every conversation. No prompt changes needed.
