@@ -88,8 +88,8 @@ async fn require_auth(
 
 pub fn router(state: AppState) -> Router {
     let public = Router::new()
-        .route("/", get(health))
-        .route("/health", get(health))
+        .route("/", get(index))
+        .route("/health", get(health_only))
         .route("/stats", get(stats))
         .route("/ui", get(serve_ui));
 
@@ -148,7 +148,8 @@ async fn serve_ui() -> impl axum::response::IntoResponse {
     axum::response::Html(include_str!("../../web/index.html"))
 }
 
-async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
+/// Shared health data (without endpoints) used by both `/` and `/health`.
+async fn health_data(state: &AppState) -> serde_json::Value {
     let db = state.db.clone();
     let (s, integrity, db_size_mb) = blocking(move || {
         let s = db.stats();
@@ -172,7 +173,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
 
     let (proxy_reqs, proxy_extracted, proxy_buffered) = crate::proxy::proxy_stats(Some(&state.db));
 
-    Json(serde_json::json!({
+    serde_json::json!({
         "name": "engram",
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_secs": uptime_secs,
@@ -188,8 +189,16 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         },
         "integrity": integrity,
         "stats": s,
-        "endpoints": {
-            "GET /": "this health check",
+    })
+}
+
+/// GET / — full index with health data + endpoint list.
+async fn index(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let mut data = health_data(&state).await;
+    if let Some(obj) = data.as_object_mut() {
+        obj.insert("endpoints".to_string(), serde_json::json!({
+            "GET /": "index with health data + endpoint list",
+            "GET /health": "health only (uptime, rss, cache, integrity — no endpoints)",
             "GET /stats": "memory counts per layer",
             "POST /memories": "create a memory",
             "POST /memories/batch": "batch create memories (body: [{content, ...}, ...])",
@@ -220,11 +229,18 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /trash": "list soft-deleted memories (?limit=100)",
             "POST /trash/:id/restore": "restore a memory from trash",
             "DELETE /trash": "permanently purge all trash",
-            "GET /health": "detailed health (uptime, rss, cache, integrity)",
             "ANY /proxy/*": "transparent LLM proxy (requires ENGRAM_PROXY_UPSTREAM)",
+            "POST /proxy/flush": "flush proxy sliding window for current session",
+            "GET /proxy/window": "view proxy sliding window for current session",
             "GET /ui": "web dashboard",
-        },
-    }))
+        }));
+    }
+    Json(data)
+}
+
+/// GET /health — health data only (no endpoint list).
+async fn health_only(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(health_data(&state).await)
 }
 
 async fn stats(

@@ -51,7 +51,7 @@ sequenceDiagram
 
 ```
 Set up engram (persistent memory) by following the guide at:
-https://raw.githubusercontent.com/kael-bit/engram/main/docs/SETUP.md
+https://raw.githubusercontent.com/kael-bit/engram-rs/main/docs/SETUP.md
 ```
 
 **For humans:** see [docs/SETUP.md](docs/SETUP.md) for step-by-step instructions covering Claude Code, OpenClaw, Codex, and other editors. Supports MCP tools or HTTP API integration.
@@ -243,7 +243,7 @@ engram runs autonomously — no cron or external scheduler needed:
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` | Health + endpoint list |
-| `GET` | `/health` | Detailed health (uptime, RSS, cache stats) — same as `/` |
+| `GET` | `/health` | Health only (uptime, RSS, cache, integrity — no endpoints) |
 | `GET` | `/stats` | Layer counts |
 | `POST` | `/memories` | Create memory |
 | `POST` | `/memories/batch` | Batch create |
@@ -276,6 +276,7 @@ engram runs autonomously — no cron or external scheduler needed:
 | `DELETE` | `/facts/:id` | Delete fact |
 | `ANY` | `/proxy/*` | Transparent LLM proxy |
 | `POST` | `/proxy/flush` | Flush buffered proxy conversations for extraction |
+| `GET` | `/proxy/window` | View proxy sliding window for current session |
 | `GET` | `/ui` | Web dashboard |
 
 ## MCP Tools

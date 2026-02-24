@@ -23,7 +23,7 @@ Before doing anything, ask:
 ### From source (Rust required)
 
 ```bash
-git clone https://github.com/kael-bit/engram.git
+git clone https://github.com/kael-bit/engram-rs.git
 cd engram
 cargo build --release
 ```
@@ -34,7 +34,7 @@ Binary will be at `./target/release/engram` (~6MB).
 
 ```bash
 # Download latest release
-curl -L https://github.com/kael-bit/engram/releases/latest/download/engram-$(uname -s)-$(uname -m) -o engram
+curl -L https://github.com/kael-bit/engram-rs/releases/latest/download/engram-$(uname -s)-$(uname -m) -o engram
 chmod +x engram
 ```
 
