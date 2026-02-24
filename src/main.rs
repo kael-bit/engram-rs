@@ -43,76 +43,53 @@ pub struct AppState {
     pub(crate) last_proxy_turn: std::sync::Arc<std::sync::atomic::AtomicI64>,
 }
 
-/// Small LRU-ish cache for query embeddings to avoid repeated API calls.
-/// Key = query text, Value = embedding vector.
-pub type EmbedCache = std::sync::Arc<std::sync::Mutex<EmbedCacheInner>>;
+use lru::LruCache;
+use std::num::NonZeroUsize;
 
-pub struct EmbedCacheInner {
-    map: std::collections::HashMap<String, Vec<f64>>,
-    order: std::collections::VecDeque<String>,
-    cap: usize,
+/// LRU cache for query embeddings to avoid repeated API calls.
+#[derive(Clone)]
+pub struct EmbedCache {
+    inner: std::sync::Arc<std::sync::Mutex<EmbedCacheInner>>,
+}
+
+struct EmbedCacheInner {
+    cache: LruCache<String, Vec<f64>>,
     hits: u64,
     misses: u64,
 }
 
-impl EmbedCacheInner {
-    pub fn new(cap: usize) -> Self {
+impl EmbedCache {
+    pub fn new(capacity: usize) -> Self {
         Self {
-            map: std::collections::HashMap::with_capacity(cap),
-            order: std::collections::VecDeque::with_capacity(cap),
-            cap,
-            hits: 0,
-            misses: 0,
+            inner: std::sync::Arc::new(std::sync::Mutex::new(EmbedCacheInner {
+                cache: LruCache::new(
+                    NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(128).unwrap()),
+                ),
+                hits: 0,
+                misses: 0,
+            })),
         }
     }
 
-    pub fn get(&mut self, key: &str) -> Option<&Vec<f64>> {
-        if self.map.contains_key(key) {
-            self.hits += 1;
-            // promote to back (most recently used)
-            if let Some(pos) = self.order.iter().position(|k| k == key) {
-                self.order.remove(pos);
-                self.order.push_back(key.to_string());
-            }
-            self.map.get(key)
+    pub fn get(&self, key: &str) -> Option<Vec<f64>> {
+        let mut inner = self.inner.lock().unwrap();
+        let val = inner.cache.get(key).cloned();
+        if val.is_some() {
+            inner.hits += 1;
         } else {
-            self.misses += 1;
-            None
+            inner.misses += 1;
         }
+        val
     }
 
-    pub fn put(&mut self, key: String, val: Vec<f64>) {
-        if self.map.contains_key(&key) {
-            // update value in-place and refresh position in order
-            self.map.insert(key.clone(), val);
-            if let Some(pos) = self.order.iter().position(|k| k == &key) {
-                self.order.remove(pos);
-                self.order.push_back(key);
-            }
-            return;
-        }
-        if self.cap == 0 {
-            return;
-        }
-        if self.order.len() >= self.cap {
-            if let Some(old) = self.order.pop_front() {
-                self.map.remove(&old);
-            }
-        }
-        self.order.push_back(key.clone());
-        self.map.insert(key, val);
+    pub fn insert(&self, key: String, value: Vec<f64>) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.cache.put(key, value);
     }
 
-    pub fn len(&self) -> usize {
-        self.map.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.cap
+    pub fn stats(&self) -> (usize, usize, u64, u64) {
+        let inner = self.inner.lock().unwrap();
+        (inner.cache.len(), inner.cache.cap().get(), inner.hits, inner.misses)
     }
 }
 
@@ -160,8 +137,7 @@ async fn main() {
         }
     });
 
-    let embed_cache: EmbedCache =
-        std::sync::Arc::new(std::sync::Mutex::new(EmbedCacheInner::new(128)));
+    let embed_cache = EmbedCache::new(128);
     let state = AppState {
         db: shared.clone(), ai: ai_cfg, api_key, embed_cache,
         proxy: proxy_cfg,

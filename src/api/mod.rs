@@ -168,9 +168,7 @@ async fn health_data(state: &AppState) -> serde_json::Value {
 
     let uptime_secs = state.started_at.elapsed().as_secs();
     let rss_kb = read_rss_kb();
-    let (cache_len, cache_cap, cache_hits, cache_misses) = state.embed_cache.lock()
-        .map(|c| (c.len(), c.capacity(), c.hits, c.misses))
-        .unwrap_or((0, 0, 0, 0));
+    let (cache_len, cache_cap, cache_hits, cache_misses) = state.embed_cache.stats();
 
     let (proxy_reqs, proxy_extracted, proxy_buffered) = crate::proxy::proxy_stats(Some(&state.db));
 
@@ -349,9 +347,7 @@ mod tests {
             db: std::sync::Arc::new(mdb),
             ai: None,
             api_key: api_key.map(|s| s.to_string()),
-            embed_cache: std::sync::Arc::new(std::sync::Mutex::new(
-                crate::EmbedCacheInner::new(16),
-            )),
+            embed_cache: crate::EmbedCache::new(16),
             proxy: None,
             started_at: std::time::Instant::now(),
             last_proxy_turn: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),

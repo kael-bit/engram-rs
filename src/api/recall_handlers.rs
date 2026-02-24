@@ -461,10 +461,7 @@ pub(super) async fn do_recall(
     let query_emb = if let Some(ref cfg) = state.ai {
         if cfg.has_embed() {
             // check cache first
-            let cached = {
-                let mut cache = state.embed_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                cache.get(&query_text).cloned()
-            };
+            let cached = state.embed_cache.get(&query_text);
             if let Some(emb) = cached {
                 debug!("embed cache hit for recall query");
                 Some(emb)
@@ -473,8 +470,7 @@ pub(super) async fn do_recall(
                     Ok(mut v) => {
                         let emb = v.pop();
                         if let Some(ref e) = emb {
-                            let mut cache = state.embed_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                            cache.put(query_text.clone(), e.clone());
+                            state.embed_cache.insert(query_text.clone(), e.clone());
                         }
                         emb
                     }
