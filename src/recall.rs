@@ -481,10 +481,32 @@ pub async fn rerank_results(
 
     let user = format!("Query: {query}\n\nResults:\n{numbered}");
 
-    match ai::llm_chat_as(cfg, "rerank", RERANK_SYSTEM, &user).await {
-        Ok(raw) => {
-            debug!(raw = %raw, query = query, "rerank result");
-            let order = parse_rerank_response(&raw, response.memories.len());
+    #[derive(serde::Deserialize)]
+    struct RerankResult { ranked_ids: Vec<usize> }
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "ranked_ids": {
+                "type": "array",
+                "items": { "type": "integer" },
+                "description": "Result numbers sorted by relevance (1-indexed)"
+            }
+        },
+        "required": ["ranked_ids"]
+    });
+
+    match ai::llm_tool_call::<RerankResult>(
+        cfg, "rerank", RERANK_SYSTEM, &user,
+        "rerank_result", "Return result numbers sorted by relevance to the query",
+        schema,
+    ).await {
+        Ok(rr) => {
+            let order: Vec<usize> = rr.ranked_ids.iter()
+                .filter(|&&n| n >= 1 && n <= response.memories.len())
+                .map(|&n| n - 1)
+                .collect();
+            debug!(order = ?order, query = query, "rerank result");
             if order.is_empty() {
                 return;
             }
@@ -511,6 +533,7 @@ pub async fn rerank_results(
     }
 }
 
+#[allow(dead_code)]
 fn parse_rerank_response(raw: &str, count: usize) -> Vec<usize> {
     raw.split(|c: char| !c.is_ascii_digit())
         .filter(|s| !s.is_empty())

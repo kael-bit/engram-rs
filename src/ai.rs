@@ -262,26 +262,33 @@ const EXPAND_PROMPT: &str = "Given a search query for a PERSONAL knowledge base 
     Example: alice是谁 → alice的身份 alice的角色 我和alice的关系. \
     Focus on rephrasing the INTENT, not listing random related technologies. \
     If the query asks about a tool/library choice, rephrase as: why/decision/migration/选择/替换. \
-    NEVER output explanations, commentary, or bullet points with dashes. Output ONLY search phrases, one per line. \
+    NEVER output explanations, commentary, or bullet points with dashes. \
     Even for very short queries, always produce search phrases. Same language as input.";
 
 /// Generate alternative query phrasings for better recall coverage.
 pub async fn expand_query(cfg: &AiConfig, query: &str) -> Vec<String> {
-    match llm_chat_as(cfg, "expand", EXPAND_PROMPT, query).await {
-        Ok(text) => text
-            .lines()
-            .map(|l| l.trim().trim_start_matches("- ").trim().to_string())
-            .filter(|l| {
-                // Skip empty, too short, or meta-commentary lines
-                !l.is_empty() && l.len() > 2
-                    && !l.contains("过于简洁")
-                    && !l.contains("缺乏上下文")
-                    && !l.contains("无法生成")
-                    && !l.starts_with("这个查询")
-                    && !l.starts_with("该查询")
-                    && !l.starts_with("注意")
-                    && !l.starts_with("Note:")
-            })
+    #[derive(Deserialize)]
+    struct ExpandResult { queries: Vec<String> }
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "queries": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Alternative search phrases (3-5)"
+            }
+        },
+        "required": ["queries"]
+    });
+
+    match llm_tool_call::<ExpandResult>(
+        cfg, "expand", EXPAND_PROMPT, query,
+        "expanded_queries", "Generate alternative search phrases for the query",
+        schema,
+    ).await {
+        Ok(r) => r.queries.into_iter()
+            .filter(|q| !q.is_empty() && q.len() > 2)
             .take(5)
             .collect(),
         Err(_) => vec![],

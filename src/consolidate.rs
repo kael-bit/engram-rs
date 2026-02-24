@@ -91,9 +91,8 @@ pub async fn consolidate(
             Some(cfg) => {
                 for (id, content) in &candidates {
                     match llm_promotion_gate(cfg, content).await {
-                        Ok(GateResult { approved: true, kind }) => {
+                        Ok((true, kind)) => {
                             if db.promote(id, Layer::Core).is_ok() {
-                                // Set kind if gate provided one and memory is still default.
                                 if let Some(k) = kind {
                                     if let Ok(Some(mem)) = db.get(id) {
                                         if mem.kind == "semantic" {
@@ -106,10 +105,8 @@ pub async fn consolidate(
                                 debug!(id = %id, "promoted to Core");
                             }
                         }
-                        Ok(GateResult { approved: false, .. }) => {
+                        Ok((false, _)) => {
                             result.gate_rejected += 1;
-                            // Tag as reviewed-not-core so we don't re-evaluate every cycle.
-                            // Don't drop importance — that penalizes Working-layer ranking.
                             if let Ok(Some(mem)) = db.get(id) {
                                 let mut tags = mem.tags.clone();
                                 if !tags.iter().any(|t| t == "gate-rejected") {
@@ -168,7 +165,7 @@ pub async fn consolidate(
     // Replaces mechanical access_count threshold with intelligent promotion.
     // Memories must be >1h old and have at least one access to be considered.
     if let Some(ref cfg) = ai {
-        let min_age = 3600 * 1000; // 1 hour
+        let min_age = 600 * 1000; // 10 minutes — gives time for dedup to run first
         let (count, ids) = triage_buffer(&db, cfg, min_age, 20, &result.promoted_ids).await;
         result.triaged = count;
         for id in ids {
@@ -395,32 +392,47 @@ const GATE_SYSTEM: &str = "You are a memory curator for an AI agent's long-term 
     If unsure about kind, default to semantic.";
 
 /// Gate result: approved (with optional kind) or rejected.
+#[derive(Debug, Deserialize)]
 struct GateResult {
-    approved: bool,
+    decision: String,
+    #[serde(default)]
     kind: Option<String>,
 }
 
-async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<GateResult, String> {
+async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<(bool, Option<String>), String> {
     let truncated = if content.len() > 500 {
         &content[..content.char_indices().take(500).last()
             .map(|(i, c)| i + c.len_utf8()).unwrap_or(500)]
     } else {
         content
     };
-    let response = ai::llm_chat_as(cfg, "gate", GATE_SYSTEM, truncated).await?;
-    let decision = response.trim().to_uppercase();
-    if decision.starts_with("APPROVE") {
-        let kind = if decision.contains("PROCEDURAL") {
-            Some("procedural".into())
-        } else if decision.contains("EPISODIC") {
-            Some("episodic".into())
-        } else {
-            Some("semantic".into())
-        };
-        Ok(GateResult { approved: true, kind })
-    } else {
-        Ok(GateResult { approved: false, kind: None })
-    }
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "decision": {
+                "type": "string",
+                "enum": ["approve", "reject"],
+                "description": "Whether to promote to Core"
+            },
+            "kind": {
+                "type": "string",
+                "enum": ["semantic", "procedural", "episodic"],
+                "description": "Memory kind (only when approving)"
+            }
+        },
+        "required": ["decision"]
+    });
+
+    let result: GateResult = ai::llm_tool_call(
+        cfg, "gate", GATE_SYSTEM, truncated,
+        "gate_decision", "Decide whether to promote this memory to Core",
+        schema,
+    ).await?;
+
+    let approved = result.decision == "approve";
+    let kind = if approved { result.kind.or(Some("semantic".into())) } else { None };
+    Ok((approved, kind))
 }
 
 // --- Buffer triage: LLM-based promotion from Buffer to Working ---
@@ -438,14 +450,22 @@ const TRIAGE_SYSTEM: &str = "You are triaging an AI agent's short-term memory bu
     - Session summaries that just list what was done (not lessons)\n\
     - Temporary status, in-progress notes\n\
     - Information that's only relevant right now\n\n\
-    Also classify the kind for promoted memories:\n\
+    Classify the kind for promoted memories:\n\
     - procedural: step-by-step workflows, build/deploy/test processes\n\
-    - semantic: everything else (facts, decisions, lessons, preferences)\n\n\
-    Reply with one line per memory: ID PROMOTE kind  OR  ID KEEP\n\
-    Example:\n\
-    abc123 PROMOTE semantic\n\
-    def456 KEEP\n\
-    ghi789 PROMOTE procedural";
+    - semantic: everything else (facts, decisions, lessons, preferences)";
+
+#[derive(Debug, Deserialize)]
+struct TriageDecision {
+    id: String,
+    action: String,
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TriageResult {
+    decisions: Vec<TriageDecision>,
+}
 
 /// Evaluate buffer memories using LLM and promote worthy ones to Working.
 /// Only considers memories older than `min_age_ms` with at least one access.
@@ -471,7 +491,6 @@ async fn triage_buffer(
         return (0, vec![]);
     }
 
-    // Build batch prompt
     let mut user_msg = String::with_capacity(candidates.len() * 200);
     for m in &candidates {
         let preview = truncate_chars(&m.content, 300);
@@ -482,7 +501,30 @@ async fn triage_buffer(
         ));
     }
 
-    let response = match ai::llm_chat_as(cfg, "gate", TRIAGE_SYSTEM, &user_msg).await {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "decisions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Memory ID prefix (first 8 chars)" },
+                        "action": { "type": "string", "enum": ["promote", "keep"] },
+                        "kind": { "type": "string", "enum": ["semantic", "procedural"], "description": "Only for promoted memories" }
+                    },
+                    "required": ["id", "action"]
+                }
+            }
+        },
+        "required": ["decisions"]
+    });
+
+    let result: TriageResult = match ai::llm_tool_call(
+        cfg, "gate", TRIAGE_SYSTEM, &user_msg,
+        "triage_decisions", "Decide which memories to promote or keep",
+        schema,
+    ).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "buffer triage LLM call failed");
@@ -493,24 +535,16 @@ async fn triage_buffer(
     let mut promoted = 0;
     let mut ids = Vec::new();
 
-    for line in response.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 2 { continue; }
-        let short_id = parts[0];
-        let decision = parts[1].to_uppercase();
-
-        if decision != "PROMOTE" { continue; }
-
-        // Match short_id prefix to full ID
-        if let Some(mem) = candidates.iter().find(|m| m.id.starts_with(short_id)) {
-            let kind = parts.get(2).map(|k| k.to_lowercase());
+    for d in &result.decisions {
+        if d.action != "promote" { continue; }
+        if let Some(mem) = candidates.iter().find(|m| m.id.starts_with(&d.id)) {
             if db.promote(&mem.id, Layer::Working).is_ok() {
-                if let Some(ref k) = kind {
+                if let Some(ref k) = d.kind {
                     if k == "procedural" && mem.kind == "semantic" {
                         let _ = db.update_kind(&mem.id, k);
                     }
                 }
-                debug!(id = %mem.id, kind = ?kind, "triage: promoted buffer → working");
+                debug!(id = %mem.id, kind = ?d.kind, "triage: promoted buffer → working");
                 ids.push(mem.id.clone());
                 promoted += 1;
             }
@@ -526,13 +560,12 @@ async fn triage_buffer(
 const RECONCILE_PROMPT: &str = "You are comparing two memory entries about potentially the same topic.\n\
     The NEWER entry was created after the OLDER one.\n\n\
     Decide:\n\
-    - UPDATE: The newer entry is an updated version of the same information. \
+    - update: The newer entry is an updated version of the same information. \
     The older one is now stale/outdated and should be removed.\n\
-    - ABSORB: The newer entry contains all useful info from the older one plus more. \
+    - absorb: The newer entry contains all useful info from the older one plus more. \
     The older one is redundant.\n\
-    - KEEP_BOTH: They cover genuinely different aspects or the older one has \
-    unique details not in the newer one.\n\n\
-    Reply with ONLY one word: UPDATE, ABSORB, or KEEP_BOTH";
+    - keep_both: They cover genuinely different aspects or the older one has \
+    unique details not in the newer one.";
 
 /// Merge near-duplicate buffer memories based on cosine similarity.
 /// No LLM calls — keeps the newest entry, sums access counts, merges tags.
@@ -692,13 +725,32 @@ async fn try_reconcile_pair(
         truncate_chars(&newer.content, 400),
     );
 
-    let resp = match ai::llm_chat_as(cfg, "gate", RECONCILE_PROMPT, &user_msg).await {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "decision": {
+                "type": "string",
+                "enum": ["update", "absorb", "keep_both"],
+                "description": "How to reconcile the two memories"
+            }
+        },
+        "required": ["decision"]
+    });
+
+    #[derive(Deserialize)]
+    struct ReconcileDecision { decision: String }
+
+    let result: ReconcileDecision = match ai::llm_tool_call(
+        cfg, "gate", RECONCILE_PROMPT, &user_msg,
+        "reconcile_decision", "Decide how to reconcile two memories",
+        schema,
+    ).await {
         Ok(r) => r,
         Err(e) => { warn!(error = %e, "reconcile LLM call failed"); return None; }
     };
 
-    let decision = resp.trim().to_uppercase();
-    if !decision.starts_with("UPDATE") && !decision.starts_with("ABSORB") {
+    let decision = result.decision;
+    if decision != "update" && decision != "absorb" {
         debug!(older = %older.id, newer = %newer.id, "reconcile: keeping both");
         return None;
     }
@@ -1843,46 +1895,31 @@ mod tests {
     }
 
     #[test]
-    fn gate_result_parses_kind() {
-        // Simulate the parsing logic from llm_promotion_gate
-        let parse = |response: &str| -> GateResult {
-            let decision = response.trim().to_uppercase();
-            if decision.starts_with("APPROVE") {
-                let kind = if decision.contains("PROCEDURAL") {
-                    Some("procedural".into())
-                } else if decision.contains("EPISODIC") {
-                    Some("episodic".into())
-                } else {
-                    Some("semantic".into())
-                };
-                GateResult { approved: true, kind }
-            } else {
-                GateResult { approved: false, kind: None }
-            }
-        };
-
-        let r = parse("APPROVE semantic");
-        assert!(r.approved);
+    fn gate_result_deserializes() {
+        // Test that GateResult deserializes from function call JSON correctly
+        let json = r#"{"decision":"approve","kind":"semantic"}"#;
+        let r: GateResult = serde_json::from_str(json).unwrap();
+        assert_eq!(r.decision, "approve");
         assert_eq!(r.kind.as_deref(), Some("semantic"));
 
-        let r = parse("APPROVE procedural");
-        assert!(r.approved);
+        let json = r#"{"decision":"approve","kind":"procedural"}"#;
+        let r: GateResult = serde_json::from_str(json).unwrap();
+        assert_eq!(r.decision, "approve");
         assert_eq!(r.kind.as_deref(), Some("procedural"));
 
-        let r = parse("APPROVE EPISODIC");
-        assert!(r.approved);
+        let json = r#"{"decision":"approve","kind":"episodic"}"#;
+        let r: GateResult = serde_json::from_str(json).unwrap();
+        assert_eq!(r.decision, "approve");
         assert_eq!(r.kind.as_deref(), Some("episodic"));
 
-        let r = parse("approve");  // no kind specified → defaults semantic
-        assert!(r.approved);
-        assert_eq!(r.kind.as_deref(), Some("semantic"));
-
-        let r = parse("REJECT");
-        assert!(!r.approved);
+        let json = r#"{"decision":"approve"}"#;
+        let r: GateResult = serde_json::from_str(json).unwrap();
+        assert_eq!(r.decision, "approve");
         assert!(r.kind.is_none());
 
-        let r = parse("REJECT - operational detail");
-        assert!(!r.approved);
+        let json = r#"{"decision":"reject"}"#;
+        let r: GateResult = serde_json::from_str(json).unwrap();
+        assert_eq!(r.decision, "reject");
         assert!(r.kind.is_none());
     }
 

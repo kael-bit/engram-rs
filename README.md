@@ -161,24 +161,28 @@ You have persistent memory via engram MCP tools.
 ### Every session start
 Call `engram_resume` with hours=6 to restore context. Read the core and working sections — that's who you are and what you were doing.
 
+### When to store what
+
+| What | Tags | Kind | Example |
+|------|------|------|---------|
+| Design decisions | topic tags | *(default)* | "API uses REST, auth via Bearer token" |
+| Lessons from mistakes | `lesson` + topic | *(default)* | "LESSON: never force-push to main" |
+| Step-by-step workflows | `procedure` + topic | `procedural` | "Deploy: test → build → stop → cp → start" |
+| User preferences | `preference` | *(default)* | "User prefers concise Chinese replies" |
+| Session recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
+
+**Don't store**: routine output ("tests passed"), things in code files, transient status.
+
 ### During conversation
-- Decisions, preferences, lessons learned → `engram_store` immediately. Don't wait.
-- Workflows, procedures, how-to steps → `engram_store` with kind="procedural" (these never decay).
-- "Remember this" from the user → `engram_store` with importance=0.9.
-- Need context → `engram_recall` with the question as query.
-- Before risky operations (git push, deploy, send message) → `engram_triggers` with the action name.
+- Decisions, preferences, lessons → `engram_store` immediately
+- Workflows, procedures → `engram_store` with kind="procedural" (never decay)
+- "Remember this" from the user → `engram_store` with importance=0.9
+- Need context → `engram_recall` with the question as query
+- Before risky operations → `engram_triggers` with the action name
 
 ### Before session ends
-Store a session summary via `engram_store`:
-- What you did this session
-- What was decided
-- What to do next (critical — without this you'll wake up lost)
-Tags: "session". This is how you maintain continuity across sessions.
-
-### What NOT to store
-- Routine task details ("ran cargo build, it passed")
-- Things already in project files
-- Transient operational status
+Store a summary: what you did + what was decided + what to do next.
+Tag as "session". Without the "next" part, you'll wake up lost.
 ```
 
 #### Option B: LLM Proxy (automatic capture)
@@ -264,6 +268,18 @@ Restore context first — nothing else matters until you know who you are:
 Read the core section (identity, constraints, lessons) and working section (active context).
 If there are next_actions, that's your todo list.
 
+### When to store what
+
+| What | Tags | Kind | Example |
+|------|------|------|---------|
+| Design decisions | topic tags | *(default)* | "API uses REST, auth via Bearer token" |
+| Lessons from mistakes | `lesson` + topic | *(default)* | "LESSON: never force-push to main" |
+| Step-by-step workflows | `procedure` + topic | `procedural` | "Deploy: test → build → stop → cp → start" |
+| User preferences | `preference` | *(default)* | "User prefers concise Chinese replies" |
+| Session recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
+
+**Don't store**: routine output, things already in code/config files, transient status.
+
 ### Storing memories
 Important facts, decisions, lessons:
   curl -X POST http://localhost:3917/memories \
@@ -296,11 +312,6 @@ Store what you did and what comes next:
     -d '{"content": "Session: refactored auth module, decided to use JWT. Next: write integration tests.", "tags": ["session"]}'
 
 Without the "next" part, you'll wake up not knowing what to do.
-
-### Don't store
-- Routine ops ("ran tests, passed")
-- Things already in code/config files
-- Transient status that won't matter tomorrow
 ```
 
 ### Cursor / Windsurf / Other Editors
