@@ -2,10 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 env:
@@ -46,7 +43,6 @@ jobs:
           fi
 
   build:
-    if: github.event_name == 'push'
     needs: test
     strategy:
       matrix:
