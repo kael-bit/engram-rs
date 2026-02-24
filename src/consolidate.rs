@@ -1770,4 +1770,62 @@ mod tests {
         assert!(!r.approved);
         assert!(r.kind.is_none());
     }
+
+    #[test]
+    fn gate_rejected_within_cooldown_skips_promotion() {
+        let db = test_db();
+        let now = crate::db::now_ms();
+
+        // gate-rejected memory accessed recently (within 24h cooldown)
+        let mut gr = mem_with_ts("gr-fresh", Layer::Working, 0.8, 20, now - 3600_000, now - 1000);
+        gr.tags = vec!["gate-rejected".into()];
+        gr.repetition_count = 5;
+
+        db.import(&[gr]).unwrap();
+        let r = consolidate_sync(&db, None);
+        let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(!ids.contains(&"gr-fresh"), "gate-rejected within 24h must not be a candidate");
+
+        // Verify the tag is still there (not cleared prematurely)
+        let m = db.get("gr-fresh").unwrap().unwrap();
+        assert!(m.tags.iter().any(|t| t == "gate-rejected"), "tag should persist within cooldown");
+    }
+
+    #[test]
+    fn gate_rejected_after_cooldown_retries() {
+        let db = test_db();
+        let now = crate::db::now_ms();
+
+        // gate-rejected memory last accessed >24h ago
+        let old_access = now - 25 * 3600_000; // 25 hours ago
+        let mut gr = mem_with_ts("gr-old", Layer::Working, 0.8, 20, now - 48 * 3600_000, old_access);
+        gr.tags = vec!["gate-rejected".into()];
+        gr.repetition_count = 5;
+
+        db.import(&[gr]).unwrap();
+        let r = consolidate_sync(&db, None);
+
+        // After cooldown, the tag should be removed and it becomes a candidate
+        let m = db.get("gr-old").unwrap().unwrap();
+        assert!(!m.tags.iter().any(|t| t == "gate-rejected"),
+            "tag should be cleared after 24h cooldown");
+        let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(ids.contains(&"gr-old"), "should re-enter promotion pipeline after cooldown");
+    }
+
+    #[test]
+    fn session_notes_blocked_from_core_promotion() {
+        let db = test_db();
+        let now = crate::db::now_ms();
+
+        let mut session = mem_with_ts("session-note", Layer::Working, 0.8, 30, now - 1000, now);
+        session.source = "session".into();
+        session.tags = vec!["session".into()];
+        session.repetition_count = 10;
+
+        db.import(&[session]).unwrap();
+        let r = consolidate_sync(&db, None);
+        let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(!ids.contains(&"session-note"), "session notes must never reach Core promotion");
+    }
 }
