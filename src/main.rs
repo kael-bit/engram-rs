@@ -14,7 +14,7 @@ pub(crate) mod util;
 
 use clap::Parser;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -204,6 +204,7 @@ async fn main() {
                 ).await;
                 if r.promoted > 0 || r.decayed > 0 || r.merged > 0
                     || r.gate_rejected > 0 || r.demoted > 0 || r.reconciled > 0
+                    || r.distilled > 0
                 {
                     info!(
                         promoted = r.promoted,
@@ -212,8 +213,11 @@ async fn main() {
                         reconciled = r.reconciled,
                         gate_rejected = r.gate_rejected,
                         demoted = r.demoted,
+                        distilled = r.distilled,
                         "auto-consolidate"
                     );
+                } else {
+                    debug!("auto-consolidate: no changes");
                 }
                 tokio::time::sleep(interval).await;
             }
