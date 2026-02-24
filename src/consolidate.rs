@@ -1511,4 +1511,28 @@ mod tests {
         assert!(db.get("some-note").unwrap().is_none(), "regular buffer should be dropped");
         assert!(r.decayed >= 1);
     }
+
+    #[test]
+    fn gate_rejected_skips_promotion() {
+        let db = test_db();
+        let old = crate::db::now_ms() - 7 * 86_400_000;
+
+        // High-scoring Working memory WITH gate-rejected tag — should NOT be a candidate
+        let mut rejected = mem_with_ts("gate-rej", Layer::Working, 0.8, 20, old, crate::db::now_ms());
+        rejected.tags = vec!["gate-rejected".into()];
+        rejected.repetition_count = 5;
+
+        // High-scoring Working memory WITHOUT gate-rejected — should be a candidate
+        let mut eligible = mem_with_ts("eligible", Layer::Working, 0.8, 20, old, crate::db::now_ms());
+        eligible.repetition_count = 5;
+
+        db.import(&[rejected, eligible]).unwrap();
+
+        let r = consolidate_sync(&db, None);
+
+        // gate-rejected should NOT appear in promotion candidates
+        let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(!candidate_ids.contains(&"gate-rej"), "gate-rejected must not be a promotion candidate");
+        assert!(candidate_ids.contains(&"eligible"), "eligible should be a promotion candidate");
+    }
 }
