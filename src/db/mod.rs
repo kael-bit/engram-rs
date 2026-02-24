@@ -620,6 +620,17 @@ fn tokenize_for_dedup(text: &str) -> std::collections::HashSet<String> {
     }
 }
 
+/// Jaccard similarity between two text snippets (no DB involved).
+/// Returns true if similarity exceeds threshold.
+pub(crate) fn jaccard_similar(a: &str, b: &str, threshold: f64) -> bool {
+    let ta = tokenize_for_dedup(a);
+    let tb = tokenize_for_dedup(b);
+    if ta.len() < 3 || tb.len() < 3 { return false; }
+    let inter = ta.intersection(&tb).count();
+    let union = ta.union(&tb).count();
+    union > 0 && (inter as f64 / union as f64) > threshold
+}
+
 fn row_to_memory(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
     row_to_memory_impl(row, false)
 }

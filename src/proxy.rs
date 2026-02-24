@@ -425,7 +425,7 @@ async fn extract_from_context(state: AppState, context: &str) {
 
         // intra-batch dedup: skip if too similar to something we already stored this round
         if batch_contents.iter().any(|prev| {
-            state.db.is_near_duplicate_pair(prev, &entry.content, 0.5)
+            crate::db::jaccard_similar(prev, &entry.content, 0.5)
         }) {
             info!("proxy: dedup/intra-batch skip: {}", entry.content.chars().take(60).collect::<String>());
             continue;

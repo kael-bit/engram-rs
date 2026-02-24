@@ -976,7 +976,7 @@ impl MemoryDB {
     /// Uses token-level Jaccard similarity (threshold ~0.8).
     /// Check if content is near-duplicate of an existing memory (default namespace).
     pub fn is_near_duplicate(&self, content: &str) -> bool {
-        self.find_near_duplicate(content, "").is_some()
+        self.find_near_duplicate_threshold(content, "", 0.8).is_some()
     }
 
     /// Check with a custom Jaccard threshold (default is 0.8).
@@ -984,19 +984,7 @@ impl MemoryDB {
         self.find_near_duplicate_threshold(content, "", threshold).is_some()
     }
 
-    /// Compare two strings directly using Jaccard similarity (no DB lookup).
-    pub fn is_near_duplicate_pair(&self, a: &str, b: &str, threshold: f64) -> bool {
-        let tokens_a = tokenize_for_dedup(a);
-        let tokens_b = tokenize_for_dedup(b);
-        if tokens_a.len() < 3 || tokens_b.len() < 3 {
-            return false;
-        }
-        let intersection = tokens_a.intersection(&tokens_b).count();
-        let union = tokens_a.union(&tokens_b).count();
-        union > 0 && (intersection as f64 / union as f64) > threshold
-    }
-
-    fn find_near_duplicate(&self, content: &str, ns: &str) -> Option<Memory> {
+    pub(crate) fn find_near_duplicate(&self, content: &str, ns: &str) -> Option<Memory> {
         self.find_near_duplicate_threshold(content, ns, 0.8)
     }
 
