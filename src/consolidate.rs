@@ -94,8 +94,15 @@ pub async fn consolidate(
                         }
                         Ok(false) => {
                             result.gate_rejected += 1;
-                            // Prevent repeated LLM calls: drop importance below promote threshold
-                            let _ = db.update_fields(id, None, None, Some(0.4), None);
+                            // Tag as reviewed-not-core so we don't re-evaluate every cycle.
+                            // Don't drop importance — that penalizes Working-layer ranking.
+                            if let Ok(Some(mem)) = db.get(id) {
+                                let mut tags = mem.tags.clone();
+                                if !tags.iter().any(|t| t == "gate-rejected") {
+                                    tags.push("gate-rejected".into());
+                                    let _ = db.update_fields(id, None, None, None, Some(&tags));
+                                }
+                            }
                             info!(id = %id, content = %truncate_chars(content, 50), "gate rejected promotion to Core");
                         }
                         Err(e) => {
@@ -194,7 +201,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Repetition weighs 2.5x because restating > incidental recall hit.
     // Session notes and ephemeral tags are always blocked.
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0) {
-        if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral") {
+        if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral" || t == "gate-rejected") {
             continue;
         }
         let score = mem.access_count as f64 + mem.repetition_count as f64 * 2.5;
