@@ -36,18 +36,60 @@ pub(super) async fn create_memory(
                         let db = state.db.clone();
                         let eid = existing_id.clone();
                         let _ = tokio::task::spawn_blocking(move || db.reinforce(&eid)).await;
+
+                        // If new content is longer, it likely carries additional
+                        // information ("苹果" → "苹果+香蕉"). Update the existing
+                        // memory's content instead of discarding the new info.
                         let db = state.db.clone();
-                        let mem = tokio::task::spawn_blocking(move || db.get(&existing_id))
+                        let eid2 = existing_id.clone();
+                        let existing = tokio::task::spawn_blocking(move || db.get(&eid2))
                             .await
                             .map_err(|e| EngramError::Internal(e.to_string()))?
                             .map_err(|e| EngramError::Internal(e.to_string()))?
                             .ok_or(EngramError::NotFound)?;
+
+                        let new_longer = input.content.len() > existing.content.len();
+                        let new_content = &input.content;
+                        let new_tags = input.tags.clone().unwrap_or_default();
+
+                        if new_longer {
+                            // Merge tags, update content to the richer version
+                            let mut merged_tags = existing.tags.clone();
+                            for t in &new_tags {
+                                if !merged_tags.contains(t) {
+                                    merged_tags.push(t.clone());
+                                }
+                            }
+                            let db = state.db.clone();
+                            let eid3 = existing_id.clone();
+                            let content = new_content.clone();
+                            let mem = tokio::task::spawn_blocking(move || {
+                                db.update_fields(&eid3, Some(&content), None, None, Some(&merged_tags))
+                            })
+                                .await
+                                .map_err(|e| EngramError::Internal(e.to_string()))?
+                                .map_err(|e| EngramError::Internal(e.to_string()))?
+                                .ok_or(EngramError::NotFound)?;
+
+                            // Re-embed with updated content
+                            if let Some(ref cfg) = state.ai {
+                                spawn_embed(state.db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
+                            }
+
+                            tracing::info!(
+                                existing_id = %mem.id,
+                                rep = mem.repetition_count,
+                                "semantic dedup: updated content (new is longer) + reinforced"
+                            );
+                            return Ok((StatusCode::OK, Json(mem)));
+                        }
+
                         tracing::info!(
-                            existing_id = %mem.id,
-                            rep = mem.repetition_count,
-                            "semantic dedup: reinforced existing instead of inserting"
+                            existing_id = %existing.id,
+                            rep = existing.repetition_count,
+                            "semantic dedup: reinforced existing (no new info)"
                         );
-                        return Ok((StatusCode::OK, Json(mem)));
+                        return Ok((StatusCode::OK, Json(existing)));
                     }
                     _ => {}
                 }
