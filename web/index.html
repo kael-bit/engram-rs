@@ -146,6 +146,7 @@ label { font-size:11px; color:#888; }
       <li data-v="health"><span class="nl">Health</span></li>
       <li data-v="trash"><span class="nl">Trash</span><span class="ct" id="c-trash">0</span></li>
       <li data-v="tools"><span class="nl">Tools</span></li>
+      <li data-v="llm-usage"><span class="nl">🔢 LLM Usage</span></li>
       <li data-v="tests"><span class="nl">Tests</span></li>
     </ul>
   </div>
@@ -1053,12 +1054,89 @@ async function testSortOrder(){
   }
 }
 
+/* --- LLM Usage page --- */
+let llmRefreshTimer=null;
+
+function fmtTokens(n){
+  if(n==null)return '0';
+  if(n>=1e6)return (n/1e6).toFixed(1)+'M';
+  if(n>=1e3)return (n/1e3).toFixed(1)+'K';
+  return String(n);
+}
+
+function renderLlmUsage(){
+  document.getElementById('main').innerHTML=`
+    <h2>🔢 LLM Usage</h2>
+    <div id="llmContent"><div class="empty">Loading...</div></div>`;
+  loadLlmUsage();
+  // auto-refresh every 30s
+  if(llmRefreshTimer)clearInterval(llmRefreshTimer);
+  llmRefreshTimer=setInterval(()=>{if(curView==='llm-usage')loadLlmUsage();},30000);
+}
+
+async function loadLlmUsage(){
+  try{
+    const d=await api('/llm-usage');
+    const s=d.summary||{};
+    const daily=d.daily||[];
+
+    // Summary cards
+    let html=`<div class="stats">
+      <div class="sc"><div class="v">${fmtTokens(s.total_calls)}</div><div class="l">Total Calls</div></div>
+      <div class="sc buf"><div class="v">${fmtTokens(s.total_input)}</div><div class="l">Input Tokens</div></div>
+      <div class="sc wrk"><div class="v">${fmtTokens(s.total_output)}</div><div class="l">Output Tokens</div></div>
+      <div class="sc cor"><div class="v">${fmtTokens(s.today_calls)}</div><div class="l">Today</div></div>
+    </div>`;
+
+    // By Component table
+    const byComp=s.by_component||{};
+    const compEntries=Object.entries(byComp).sort((a,b)=>(b[1].calls||0)-(a[1].calls||0));
+    if(compEntries.length){
+      html+=`<div class="card"><b style="font-size:12px">By Component</b>
+        <table class="ftable" style="margin-top:8px"><thead><tr><th>Component</th><th>Calls</th><th>Input</th><th>Output</th><th>Cached</th></tr></thead><tbody>`;
+      for(const[name,v]of compEntries){
+        html+=`<tr><td>${esc(name)}</td><td>${v.calls||0}</td><td>${fmtTokens(v.input_tokens)}</td><td>${fmtTokens(v.output_tokens)}</td><td>${fmtTokens(v.cached_tokens)}</td></tr>`;
+      }
+      html+=`</tbody></table></div>`;
+    }
+
+    // By Model table
+    const byModel=s.by_model||{};
+    const modelEntries=Object.entries(byModel).sort((a,b)=>(b[1].calls||0)-(a[1].calls||0));
+    if(modelEntries.length){
+      html+=`<div class="card"><b style="font-size:12px">By Model</b>
+        <table class="ftable" style="margin-top:8px"><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Cached</th></tr></thead><tbody>`;
+      for(const[name,v]of modelEntries){
+        html+=`<tr><td>${esc(name)}</td><td>${v.calls||0}</td><td>${fmtTokens(v.input_tokens)}</td><td>${fmtTokens(v.output_tokens)}</td><td>${fmtTokens(v.cached_tokens)}</td></tr>`;
+      }
+      html+=`</tbody></table></div>`;
+    }
+
+    // Daily table — most recent first
+    if(daily.length){
+      const sorted=[...daily].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+      html+=`<div class="card"><b style="font-size:12px">Daily Breakdown</b>
+        <table class="ftable" style="margin-top:8px"><thead><tr><th>Date</th><th>Component</th><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Cached</th><th>Avg Latency</th></tr></thead><tbody>`;
+      for(const r of sorted){
+        html+=`<tr><td>${esc(r.date||'')}</td><td>${esc(r.component||'')}</td><td>${esc(r.model||'')}</td><td>${r.calls||0}</td><td>${fmtTokens(r.input_tokens)}</td><td>${fmtTokens(r.output_tokens)}</td><td>${fmtTokens(r.cached_tokens)}</td><td>${r.avg_duration_ms?r.avg_duration_ms+'ms':'—'}</td></tr>`;
+      }
+      html+=`</tbody></table></div>`;
+    }
+
+    document.getElementById('llmContent').innerHTML=html;
+  }catch(e){
+    document.getElementById('llmContent').innerHTML=`<div class="empty">Error: ${esc(e.message)}</div>`;
+  }
+}
+
 function switchView(v){
   curView=v;page=0;
+  // clear LLM auto-refresh when navigating away
+  if(v!=='llm-usage'&&llmRefreshTimer){clearInterval(llmRefreshTimer);llmRefreshTimer=null;}
   document.querySelectorAll('.nav li').forEach(li=>li.classList.toggle('active',li.dataset.v===v));
   if(v==='recall')renderRecall();else if(v==='search')renderSearch();else if(v==='resume')renderResume();else if(v==='create')renderCreate();
   else if(v==='facts')renderFacts();else if(v==='proxy')renderProxy();else if(v==='health')renderHealth();
-  else if(v==='trash')renderTrash();else if(v==='tools')renderTools();else if(v==='tests')renderTests();else renderList(getMem());
+  else if(v==='trash')renderTrash();else if(v==='tools')renderTools();else if(v==='llm-usage')renderLlmUsage();else if(v==='tests')renderTests();else renderList(getMem());
 }
 
 document.querySelectorAll('.nav').forEach(n=>{n.onclick=e=>{const li=e.target.closest('li');if(li)switchView(li.dataset.v);};});
