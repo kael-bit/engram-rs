@@ -399,9 +399,11 @@ impl MemoryDB {
     /// Returns the number of memories affected.
     pub fn decay_importance(&self, idle_hours: f64, decay_amount: f64, floor: f64) -> Result<usize, EngramError> {
         let cutoff = now_ms() - (idle_hours * 3_600_000.0) as i64;
+        // Only decay Buffer and Working — Core memories earned their spot
+        // and shouldn't lose importance from inactivity.
         let n = self.conn()?.execute(
             "UPDATE memories SET importance = MAX(?1, importance - ?2) \
-             WHERE last_accessed < ?3 AND importance > ?1",
+             WHERE last_accessed < ?3 AND importance > ?1 AND layer < 3",
             params![floor, decay_amount, cutoff],
         )?;
         Ok(n)
