@@ -449,10 +449,13 @@ pub fn recall(
 
 const RERANK_SYSTEM: &str = "\
 You rerank memory search results by relevance to the user's query.
-Think about what the user is actually asking — identity questions need identity answers,
-how-to questions need practical/actionable answers, not opinions or meta-commentary.
-Prefer specific, directly useful results over tangential mentions.
-Return ONLY the numbers, most relevant first, comma-separated.
+Think step-by-step about what the user ACTUALLY needs:
+- \"X是谁\" / \"who is X\" → identity/relationship answers first
+- \"X怎么用\" / \"how to X\" → workflows, procedures, role descriptions first; lessons/caveats second
+- \"X怎么设计\" / \"how is X designed\" → architecture/design answers first
+Prefer results that DIRECTLY answer the question over tangential mentions or meta-commentary.
+A result describing what something does and how to use it beats a cautionary principle about it.
+Return ONLY the numbers, most relevant first, comma-separated. No explanation.
 Example: 3,1,5,2";
 
 /// Re-rank recall results using an LLM. Falls back to original order on failure.
@@ -480,6 +483,7 @@ pub async fn rerank_results(
 
     match ai::llm_chat_as(cfg, "rerank", RERANK_SYSTEM, &user).await {
         Ok(raw) => {
+            debug!(raw = %raw, query = query, "rerank result");
             let order = parse_rerank_response(&raw, response.memories.len());
             if order.is_empty() {
                 return;
