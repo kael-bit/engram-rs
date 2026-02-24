@@ -10,12 +10,17 @@ use super::merge_tags;
 const TRIAGE_SYSTEM: &str = "You are triaging an AI agent's short-term memory buffer.\n\
     Each memory below is tagged with an ID. Decide which ones contain durable knowledge \
     worth promoting to Working memory (medium-term), and which are transient.\n\n\
+    Metadata:\n\
+    - ac = recall count (how many times actively retrieved by query)\n\
+    - rep = repetition count (how many times the same concept was mentioned again). \
+    High rep means the agent/user keeps restating this — it's deeply important to them.\n\n\
     PROMOTE if the memory contains:\n\
     - Design decisions, architecture choices, API contracts\n\
     - Lessons learned, rules, principles\n\
     - Procedures, workflows, step-by-step processes\n\
     - Identity info, preferences, constraints\n\
-    - Project context that will be needed across sessions\n\n\
+    - Project context that will be needed across sessions\n\
+    - Anything with rep >= 2 — repeated emphasis signals importance\n\n\
     KEEP in buffer if:\n\
     - Session summaries that just list what was done (not lessons)\n\
     - Temporary status, in-progress notes\n\
@@ -79,8 +84,8 @@ pub(super) async fn triage_buffer(
             let preview = truncate_chars(&m.content, 300);
             let tags = m.tags.join(", ");
             user_msg.push_str(&format!(
-                "[{}] (ac={}, tags=[{}]) {}\n\n",
-                crate::util::short_id(&m.id), m.access_count, tags, preview
+                "[{}] (ac={}, rep={}, tags=[{}]) {}\n\n",
+                crate::util::short_id(&m.id), m.access_count, m.repetition_count, tags, preview
             ));
         }
 
