@@ -21,8 +21,8 @@ Memories promote upward through access frequency (Ebbinghaus-style reinforcement
 - **Buffer TTL**: 24 hours — unaccessed buffer entries are dropped; rescued to Working if access score ≥ half threshold OR importance ≥ 0.7
 - **Procedural** memories and **lessons** (`tag=lesson`) are exempt from TTL — they persist indefinitely
 - **Session notes** (`source=session`) and `ephemeral`-tagged memories never promote to Core
-- **Session distillation**: when 3+ session notes accumulate, consolidation synthesizes a project status snapshot as a regular memory that can promote normally — so project context reaches Core even though session notes can't
-- **Gate retry**: memories rejected by the Core promotion gate get a second chance after 7 days
+- **Session distillation**: when 3+ session notes accumulate, consolidation synthesizes a project status snapshot into Working — project context stays current, not buried in Core
+- **Gate retry**: memories rejected by the Core promotion gate get a second chance after 24 hours
 - Each recall bumps importance by 0.02 (capped at 1.0); `/resume` touches Core/Working memories
 - Near-duplicate insertions count as repetition (2.5× weight)
 

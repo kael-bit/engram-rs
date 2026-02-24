@@ -219,11 +219,11 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Reinforcement score = access_count + repetition_count * 2.5
     // Repetition weighs 2.5x because restating > incidental recall hit.
     // Session notes and ephemeral tags are always blocked.
-    // gate-rejected memories get a retry after 7 days — the gate prompt evolves,
+    // gate-rejected memories get a retry after 24 hours — AI iterates fast,
     // and a rejection from an older prompt shouldn't be permanent.
-    let gate_retry_ms: i64 = 7 * 24 * 3600 * 1000; // 7 days
+    let gate_retry_ms: i64 = 24 * 3600 * 1000; // 24 hours
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0) {
-        if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral") {
+        if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral" || t == "auto-distilled") {
             continue;
         }
         // gate-rejected: skip unless cooldown expired
@@ -730,12 +730,14 @@ async fn distill_sessions(db: &SharedDB, cfg: &AiConfig) -> usize {
         info!("session distillation: skipped (near-duplicate exists)");
         // Still tag sessions as distilled so we don't retry
     } else {
-        // Store as a regular memory — no session tag, can promote to Core
+        // Store directly in Working — project status is active context, not Core material.
+        // auto-distilled tag blocks Core promotion (like session notes).
         let input = crate::db::MemoryInput {
             content: summary.clone(),
             tags: Some(vec!["project-status".into(), "auto-distilled".into()]),
             source: Some("consolidation".into()),
             importance: Some(0.7),
+            layer: Some(2), // Working
             ..Default::default()
         };
         let db4 = db.clone();
@@ -1633,8 +1635,8 @@ mod tests {
     #[test]
     fn gate_rejected_retries_after_cooldown() {
         let db = test_db();
-        let old = crate::db::now_ms() - 14 * 86_400_000; // 14 days ago
-        let stale_access = crate::db::now_ms() - 8 * 86_400_000; // last accessed 8 days ago
+        let old = crate::db::now_ms() - 3 * 86_400_000; // 3 days ago
+        let stale_access = crate::db::now_ms() - 2 * 86_400_000; // last accessed 2 days ago (>24h)
 
         // gate-rejected but last_accessed > 7 days ago → cooldown expired
         let mut retry = mem_with_ts("retry-me", Layer::Working, 0.8, 20, old, stale_access);
