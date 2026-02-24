@@ -77,7 +77,7 @@ pub(super) async fn quick_search(
     let query = sq.q.clone();
     let results = blocking(move || {
         let d = db;
-        let hits = d.search_fts_ns(&query, limit, ns_filter.as_deref());
+        let hits = d.search_fts_ns(&query, limit, ns_filter.as_deref()).unwrap_or_default();
         let memories: Vec<db::Memory> = hits
             .into_iter()
             .filter_map(|(id, _)| d.get(&id).ok().flatten())
@@ -250,6 +250,7 @@ pub(super) async fn do_resume(
         // DB already sorts by importance DESC.
         let core: Vec<db::Memory> = d
             .list_by_layer_meta_ns(db::Layer::Core, core_limit * 2, 0, ns_filter.as_deref())
+            .unwrap_or_default()
             .into_iter()
             .filter(|m| ws_match(m))
             .take(core_limit)
@@ -258,6 +259,7 @@ pub(super) async fn do_resume(
         // Working: exclude session-source memories (they go in sessions/next_actions)
         let working: Vec<db::Memory> = d
             .list_by_layer_meta_ns(db::Layer::Working, core_limit * 2, 0, ns_filter.as_deref())
+            .unwrap_or_default()
             .into_iter()
             .filter(|m| ws_match(m) && !is_session(m))
             .take(core_limit)
@@ -265,6 +267,7 @@ pub(super) async fn do_resume(
 
         let mut buffer: Vec<db::Memory> = d
             .list_by_layer_meta_ns(db::Layer::Buffer, 100, 0, ns_filter.as_deref())
+            .unwrap_or_default()
             .into_iter()
             .filter(|m| !is_session(m))
             .collect();

@@ -220,12 +220,12 @@ pub fn recall(
     // score the memories that FTS/facts already surfaced.
 
     let ns = req.namespace.as_deref();
-    let fts = db.search_fts_ns(&req.query, fetch_limit * 3, ns);
+    let fts = db.search_fts_ns(&req.query, fetch_limit * 3, ns).unwrap_or_default();
 
     let mut extra_fts_results: Vec<Vec<(String, f64)>> = Vec::new();
     if let Some(queries) = extra_queries {
         for eq in queries {
-            extra_fts_results.push(db.search_fts_ns(eq, limit, ns));
+            extra_fts_results.push(db.search_fts_ns(eq, limit, ns).unwrap_or_default());
         }
     }
 

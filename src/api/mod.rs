@@ -258,7 +258,7 @@ async fn stats(
         };
         let mut v = serde_json::to_value(&s).unwrap_or_default();
         if is_global {
-            let nss = db.list_namespaces();
+            let nss = db.list_namespaces().unwrap_or_default();
             v["namespaces"] = serde_json::json!(nss);
         }
         v

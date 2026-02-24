@@ -73,15 +73,12 @@ impl MemoryDB {
         Ok(())
     }
 
-    pub fn get_all_with_embeddings(&self) -> Vec<(Memory, Vec<f64>)> {
-        let Ok(conn) = self.conn() else { return vec![]; };
-        let Ok(mut stmt) = conn
-            .prepare("SELECT * FROM memories WHERE embedding IS NOT NULL")
-        else {
-            return vec![];
-        };
+    pub fn get_all_with_embeddings(&self) -> Result<Vec<(Memory, Vec<f64>)>, EngramError> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare("SELECT * FROM memories WHERE embedding IS NOT NULL")?;
 
-        stmt.query_map([], |row| {
+        Ok(stmt.query_map([], |row| {
             let mem = row_to_memory_with_embedding(row)?;
             Ok(mem)
         })
@@ -93,7 +90,7 @@ impl MemoryDB {
                 })
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default())
     }
 
     /// Semantic search: find memories closest to a query embedding.
@@ -128,7 +125,7 @@ impl MemoryDB {
         }
 
         // Fallback to DB scan
-        let all = self.get_all_with_embeddings();
+        let all = self.get_all_with_embeddings().unwrap_or_default();
         let mut scored: Vec<(String, f64)> = all
             .into_iter()
             .filter(|(mem, _)| ns.is_none_or(|n| mem.namespace == n))

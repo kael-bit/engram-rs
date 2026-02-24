@@ -426,14 +426,14 @@ impl MemoryDB {
     /// List all memories in a given layer, ordered by importance descending.
     /// List memories by layer, excluding embedding blobs.
     /// Supports optional namespace filter in SQL.
-    pub fn list_by_layer_meta(&self, layer: Layer, limit: usize, offset: usize) -> Vec<Memory> {
+    pub fn list_by_layer_meta(&self, layer: Layer, limit: usize, offset: usize) -> Result<Vec<Memory>, EngramError> {
         self.list_by_layer_meta_ns(layer, limit, offset, None)
     }
 
     pub fn list_by_layer_meta_ns(
         &self, layer: Layer, limit: usize, offset: usize, ns: Option<&str>,
-    ) -> Vec<Memory> {
-        let Ok(conn) = self.conn() else { return vec![]; };
+    ) -> Result<Vec<Memory>, EngramError> {
+        let conn = self.conn()?;
         let mut sql = format!(
             "SELECT {META_COLS} FROM memories WHERE layer = ?1"
         );
@@ -448,22 +448,52 @@ impl MemoryDB {
         }
         sql += " ORDER BY importance DESC LIMIT ?2 OFFSET ?3";
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(std::convert::AsRef::as_ref).collect();
-        let Ok(mut stmt) = conn.prepare(&sql) else { return vec![]; };
-        stmt.query_map(param_refs.as_slice(), row_to_memory_meta)
+        let mut stmt = conn.prepare(&sql)?;
+        Ok(stmt.query_map(param_refs.as_slice(), row_to_memory_meta)
             .map(|iter| iter.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok()).collect())
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
     /// Find memories below a decay score threshold (Buffer/Working only).
     /// Uses meta-only query — embeddings not needed for decay checks.
-    pub(crate) fn get_decayed(&self, threshold: f64) -> Vec<Memory> {
+    ///
+    /// SQL pre-filter strategy (avoids full table scan):
+    /// Decay score = importance × exp(−decay_rate × idle_hours / 168).
+    /// Two coarse SQL conditions (OR'd) form a guaranteed superset of all
+    /// truly decayed memories so the DB can skip the rest:
+    ///
+    ///  1. `importance < importance_cap` — low-importance memories decay
+    ///     fast, include them regardless of age.
+    ///  2. `last_accessed < age_cutoff` — old memories may have decayed
+    ///     even at higher importance.
+    ///
+    /// The age_cutoff is derived so that any memory with importance ≥ cap
+    /// and the fastest layer < 3 decay rate (Buffer = 5.0) that IS below
+    /// threshold MUST be older than the cutoff.  This keeps the pre-filter
+    /// safe: no truly decayed memory is ever excluded.
+    pub(crate) fn get_decayed(&self, threshold: f64) -> Result<Vec<Memory>, EngramError> {
         let now = now_ms();
-        let Ok(conn) = self.conn() else { return vec![]; };
-        let sql = format!("SELECT {META_COLS} FROM memories WHERE layer < 3");
-        let Ok(mut stmt) = conn.prepare(&sql) else {
-            return vec![];
+        let conn = self.conn()?;
+
+        // --- coarse SQL pre-filter parameters ---
+        let importance_cap = 0.5_f64.max(threshold);
+
+        // Min idle hours for a memory with importance = cap and the
+        // fastest decay (Buffer, rate = 5.0) to drop below threshold:
+        //   cap × exp(−5 h / 168) = threshold  ⟹  h = −33.6 × ln(threshold / cap)
+        let min_decay_hours = if importance_cap > threshold {
+            (-168.0_f64 / 5.0) * (threshold / importance_cap).ln()
+        } else {
+            1.0 // threshold ≥ cap → include all ages
         };
-        stmt.query_map([], row_to_memory_meta)
+        let age_cutoff = now - (min_decay_hours.max(1.0) * 3_600_000.0) as i64;
+
+        let sql = format!(
+            "SELECT {META_COLS} FROM memories \
+             WHERE layer < 3 AND (importance < ?1 OR last_accessed < ?2)"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        Ok(stmt.query_map(params![importance_cap, age_cutoff], row_to_memory_meta)
             .map(|iter| {
                 iter.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
                     .filter(|m| {
@@ -473,7 +503,7 @@ impl MemoryDB {
                     })
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
     /// List all memories with pagination.
@@ -707,15 +737,12 @@ impl MemoryDB {
         s
     }
 
-    pub fn list_namespaces(&self) -> Vec<String> {
-        let Ok(conn) = self.conn() else { return vec![] };
-        let mut stmt = match conn.prepare("SELECT DISTINCT namespace FROM memories ORDER BY namespace") {
-            Ok(s) => s,
-            Err(_) => return vec![],
-        };
-        stmt.query_map([], |r| r.get(0))
+    pub fn list_namespaces(&self) -> Result<Vec<String>, EngramError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT DISTINCT namespace FROM memories ORDER BY namespace")?;
+        Ok(stmt.query_map([], |r| r.get(0))
             .map(|rows| rows.flatten().collect())
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
     /// Check DB integrity: FTS sync, orphans, missing embeddings.
@@ -949,7 +976,7 @@ impl MemoryDB {
         } else {
             content
         };
-        let candidates = self.search_fts_ns(query_text, 5, Some(ns));
+        let candidates = self.search_fts_ns(query_text, 5, Some(ns)).unwrap_or_default();
         if candidates.is_empty() {
             return None;
         }

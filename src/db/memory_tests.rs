@@ -412,7 +412,7 @@ fn row_to_memory_skips_embedding_by_default() {
     assert!(got.embedding.is_none());
 
     // But get_all_with_embeddings should have it
-    let with_emb = db.get_all_with_embeddings();
+    let with_emb = db.get_all_with_embeddings().unwrap();
     assert_eq!(with_emb.len(), 1);
     assert_eq!(with_emb[0].1, vec![1.0, 2.0, 3.0]);
 }
@@ -661,7 +661,7 @@ fn repair_rebuilds_missing_fts() {
     let report = db.integrity();
     assert!(report.ok);
     // FTS search should work again
-    let results = db.search_fts("missing fts", 5);
+    let results = db.search_fts("missing fts", 5).unwrap();
     assert!(!results.is_empty());
 }
 

@@ -15,7 +15,7 @@ fn fts_search_finds_content() {
     })
     .unwrap();
 
-    let results = db.search_fts("quick fox", 10);
+    let results = db.search_fts("quick fox", 10).unwrap();
     assert!(!results.is_empty());
 }
 
@@ -31,9 +31,9 @@ fn fts_cjk_bigram_search() {
     .unwrap();
 
     // Two-char CJK words should match via bigrams
-    assert!(!db.search_fts("天气", 10).is_empty(), "天气 should match");
-    assert!(!db.search_fts("散步", 10).is_empty(), "散步 should match");
-    assert!(!db.search_fts("出门散步", 10).is_empty(), "出门散步 should match");
+    assert!(!db.search_fts("天气", 10).unwrap().is_empty(), "天气 should match");
+    assert!(!db.search_fts("散步", 10).unwrap().is_empty(), "散步 should match");
+    assert!(!db.search_fts("出门散步", 10).unwrap().is_empty(), "出门散步 should match");
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn fts_stopword_only_query_returns_empty() {
     }).unwrap();
 
     // Pure stop word query should return empty
-    let results = db.search_fts("是的了", 10);
+    let results = db.search_fts("是的了", 10).unwrap();
     assert!(results.is_empty(), "stop-word-only query should return empty");
 }
 
@@ -69,6 +69,6 @@ fn fts_mixed_latin_cjk_boundary_split() {
 
     // "alice是谁" should split into "alice" + "是" + "谁", stop words filtered,
     // leaving "alice" — which should match the indexed content.
-    let results = db.search_fts("alice是谁", 10);
+    let results = db.search_fts("alice是谁", 10).unwrap();
     assert!(!results.is_empty(), "alice是谁 should find content containing alice");
 }

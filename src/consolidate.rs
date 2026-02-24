@@ -221,7 +221,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Demote session notes that shouldn't be in Core.
     // Session logs are episodic — they belong in Working at most.
     let mut demoted = 0_usize;
-    for mem in db.list_by_layer_meta(Layer::Core, 10000, 0) {
+    for mem in db.list_by_layer_meta(Layer::Core, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list_by_layer_meta(Core) failed"); vec![] }) {
         if (is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral"))
             && db.demote(&mem.id, Layer::Working).is_ok() {
                 demoted += 1;
@@ -235,7 +235,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // gate-rejected memories get a retry after 24 hours — AI iterates fast,
     // and a rejection from an older prompt shouldn't be permanent.
     let gate_retry_ms: i64 = 24 * 3600 * 1000; // 24 hours
-    for mem in db.list_by_layer_meta(Layer::Working, 10000, 0) {
+    for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list_by_layer_meta(Working) failed"); vec![] }) {
         if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral" || t == "auto-distilled" || t == "distilled") {
             continue;
         }
@@ -268,7 +268,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // initial dedup and 2+ hours in buffer, promote them.
     let buffer_threshold = promote_threshold.max(5) as f64;
     let lesson_cooldown_ms: i64 = 2 * 3600 * 1000; // 2 hours
-    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0) {
+    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list_by_layer_meta(Buffer) failed"); vec![] }) {
         // Distilled sessions already have their content in the project-status
         // summary — promoting them individually would be redundant.
         if mem.tags.iter().any(|t| t == "distilled") { continue; }
@@ -292,7 +292,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // otherwise it wasn't important enough to keep.
     // Procedural memories and lessons are exempt — they persist indefinitely.
     // Lessons encode past mistakes; forgetting them defeats their purpose.
-    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0) {
+    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list_by_layer_meta(Buffer) failed"); vec![] }) {
         let is_lesson = mem.tags.iter().any(|t| t == "lesson");
         if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson {
             continue;
@@ -319,7 +319,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
 
     // Drop decayed Buffer/Working entries — but skip anything we just promoted,
     // procedural memories, or lessons (they don't decay).
-    for mem in db.get_decayed(decay_threshold) {
+    for mem in db.get_decayed(decay_threshold).unwrap_or_else(|e| { warn!(error = %e, "get_decayed failed"); vec![] }) {
         let is_lesson = mem.tags.iter().any(|t| t == "lesson");
         if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson {
             continue;
@@ -478,6 +478,7 @@ async fn triage_buffer(
     let now = crate::db::now_ms();
     // Group by namespace so triage never crosses namespace boundaries
     let all_buffers: Vec<_> = db.list_by_layer_meta(Layer::Buffer, 10000, 0)
+        .unwrap_or_default()
         .into_iter()
         .filter(|m| {
             let dominated = m.tags.iter().any(|t| t == "distilled" || t == "ephemeral");
@@ -579,7 +580,7 @@ const RECONCILE_PROMPT: &str = "You are comparing two memory entries about poten
 /// Merge near-duplicate buffer memories based on cosine similarity.
 /// No LLM calls — keeps the newest entry, sums access counts, merges tags.
 fn dedup_buffer(db: &MemoryDB) -> usize {
-    let all = db.get_all_with_embeddings();
+    let all = db.get_all_with_embeddings().unwrap_or_else(|e| { warn!(error = %e, "get_all_with_embeddings failed"); vec![] });
     let buffers: Vec<_> = all.iter()
         .filter(|(m, e)| !e.is_empty() && m.layer == Layer::Buffer)
         .collect();
@@ -640,6 +641,10 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
     let db2 = db.clone();
     let all = tokio::task::spawn_blocking(move || db2.get_all_with_embeddings())
         .await
+        .unwrap_or_else(|e| {
+            warn!(error = %e, "reconcile: get_all_with_embeddings task failed");
+            Ok(vec![])
+        })
         .unwrap_or_else(|e| {
             warn!(error = %e, "reconcile: get_all_with_embeddings failed");
             vec![]
@@ -847,8 +852,9 @@ async fn distill_sessions(db: &SharedDB, cfg: &AiConfig) -> usize {
     let by_ns: std::collections::HashMap<String, Vec<Memory>> = match tokio::task::spawn_blocking(move || {
         let mut groups: std::collections::HashMap<String, Vec<Memory>> = std::collections::HashMap::new();
         for mem in db2.list_by_layer_meta(Layer::Buffer, 500, 0)
+            .unwrap_or_default()
             .into_iter()
-            .chain(db2.list_by_layer_meta(Layer::Working, 500, 0))
+            .chain(db2.list_by_layer_meta(Layer::Working, 500, 0).unwrap_or_default())
         {
             let is_session = mem.source == "session"
                 || mem.tags.iter().any(|t| t == "session");
@@ -950,6 +956,10 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
         .await
         .unwrap_or_else(|e| {
             warn!(error = %e, "get_all_with_embeddings task failed");
+            Ok(vec![])
+        })
+        .unwrap_or_else(|e| {
+            warn!(error = %e, "get_all_with_embeddings failed");
             vec![]
         });
 
@@ -1205,8 +1215,8 @@ Your job: reorganize them. Output a JSON array of operations.
 /// Full audit: reviews Core+Working memories using the gate model.
 /// Chunks automatically if total prompt would exceed ~100K chars.
 pub async fn audit_memories(cfg: &AiConfig, db: &crate::db::MemoryDB) -> Result<AuditResult, String> {
-    let core = db.list_by_layer_meta(crate::db::Layer::Core, 500, 0);
-    let working = db.list_by_layer_meta(crate::db::Layer::Working, 500, 0);
+    let core = db.list_by_layer_meta(crate::db::Layer::Core, 500, 0).unwrap_or_default();
+    let working = db.list_by_layer_meta(crate::db::Layer::Working, 500, 0).unwrap_or_default();
 
     let all: Vec<&crate::db::Memory> = core.iter().chain(working.iter()).collect();
 
