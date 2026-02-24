@@ -417,6 +417,10 @@ Recall combines multiple signals:
 - **FTS5 keyword search**: BM25 with jieba segmentation for Chinese and bigram tokenization for Japanese/Korean
 - **Fact lookup**: exact entity matching via the facts table
 - **Composite scoring**: `(0.6 × relevance + 0.2 × importance + 0.2 × recency) × layer_bonus`
+- **Keyword affinity**: semantic-only results that lack any query terms get a 0.7× penalty — mitigates embedding model weaknesses with short CJK queries
+- **Stop word filtering**: common words (的、是、了、the、is、etc.) are excluded from FTS queries to reduce noise
+- **FTS relevance floor**: keyword matches require minimum relevance to contribute to dual-hit boosting
+- **Score cap**: final scores are capped at 1.0 to prevent threshold confusion from stacked bonuses
 
 Results are deduplicated across all search modes. When both semantic and keyword search find the same memory, relevance gets a boost.
 
