@@ -81,7 +81,8 @@ Requires=engram.socket
 [Service]
 ExecStart=/usr/local/bin/engram
 Environment=ENGRAM_DB=/var/lib/engram/engram.db
-Environment=ENGRAM_API_KEY=your-secret-key
+# Optional: enable auth for remote/shared deployments
+# Environment=ENGRAM_API_KEY=your-secret-key
 Environment=ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions
 Environment=ENGRAM_LLM_KEY=sk-xxx
 Environment=ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings

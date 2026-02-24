@@ -45,15 +45,17 @@ cargo build --release
 
 ```bash
 # Minimal — just memory engine
-ENGRAM_API_KEY=your-secret-key ./engram
+./engram
 
 # With LLM features (consolidation, extraction, reranking)
-ENGRAM_API_KEY=your-secret-key \
 ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions \
 ENGRAM_LLM_KEY=sk-xxx \
 ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings \
 ENGRAM_EMBED_KEY=sk-xxx \
 ./engram
+
+# Optional: enable auth (for remote/shared deployments)
+ENGRAM_API_KEY=your-secret-key ./engram
 ```
 
 Engram is now running on `http://localhost:3917`.
@@ -89,8 +91,7 @@ Or create `.mcp.json` in the project root:
       "command": "node",
       "args": ["/absolute/path/to/engram/mcp/dist/index.js"],
       "env": {
-        "ENGRAM_URL": "http://localhost:3917",
-        "ENGRAM_API_KEY": "your-secret-key"
+        "ENGRAM_URL": "http://localhost:3917"
       }
     }
   }
@@ -155,11 +156,10 @@ No build step needed. Add to the project's `CLAUDE.md`:
 ## Memory
 
 You have persistent memory via engram at http://localhost:3917
-Auth: Bearer YOUR_API_KEY
 
 ### Every session start or after context compaction (DO THIS FIRST)
 ```bash
-curl -sf -H "Authorization: Bearer YOUR_API_KEY" "http://localhost:3917/resume?hours=6&compact=true"
+curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 ```
 
 Compaction summaries are lossy. After any compaction event, call resume again to restore details.
@@ -179,7 +179,7 @@ Compaction summaries are lossy. After any compaction event, call resume again to
 ### Recalling memories
 Before acting on any non-trivial task, recall first. Don't assume you remember — check:
 ```bash
-curl -sf -X POST -H "Authorization: Bearer YOUR_API_KEY" \
+curl -sf -X POST \
   -H "Content-Type: application/json" -d '{"query": "your question"}' http://localhost:3917/recall
 ```
 Recall when:
@@ -191,21 +191,21 @@ Recall when:
 ### Store
 ```bash
 # Fact or decision
-curl -sf -X POST -H "Authorization: Bearer YOUR_API_KEY" \
+curl -sf -X POST \
   -H "Content-Type: application/json" -d '{"content": "...", "tags": ["topic"]}' http://localhost:3917/memories
 
 # Lesson (survives longer)
-curl -sf -X POST -H "Authorization: Bearer YOUR_API_KEY" \
+curl -sf -X POST \
   -H "Content-Type: application/json" -d '{"content": "LESSON: ...", "tags": ["lesson", "topic"]}' http://localhost:3917/memories
 
 # Procedure (never expires)
-curl -sf -X POST -H "Authorization: Bearer YOUR_API_KEY" \
+curl -sf -X POST \
   -H "Content-Type: application/json" -d '{"content": "Steps: 1. ... 2. ...", "tags": ["procedure"], "kind": "procedural"}' http://localhost:3917/memories
 ```
 
 ### Before risky operations
 ```bash
-curl -sf -H "Authorization: Bearer YOUR_API_KEY" http://localhost:3917/triggers/deploy
+curl -sf http://localhost:3917/triggers/deploy
 ```
 
 ### End of session
@@ -337,13 +337,13 @@ After setup, test the integration:
 curl -s http://localhost:3917/health
 
 # Store a test memory
-curl -sf -X POST -H "Authorization: Bearer YOUR_API_KEY" \
+curl -sf -X POST \
   -H "Content-Type: application/json" \
   -d '{"content": "Test memory from setup", "tags": ["test"]}' \
   http://localhost:3917/memories
 
 # Recall it
-curl -sf -X POST -H "Authorization: Bearer YOUR_API_KEY" \
+curl -sf -X POST \
   -H "Content-Type: application/json" \
   -d '{"query": "test setup"}' \
   http://localhost:3917/recall
@@ -361,7 +361,8 @@ After=network.target
 
 [Service]
 ExecStart=/usr/local/bin/engram
-Environment=ENGRAM_API_KEY=your-secret-key
+# Optional: enable auth for remote/shared deployments
+# Environment=ENGRAM_API_KEY=your-secret-key
 Environment=ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions
 Environment=ENGRAM_LLM_KEY=sk-xxx
 Environment=ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings
