@@ -37,9 +37,6 @@ pub(super) async fn create_memory(
                         let eid = existing_id.clone();
                         let _ = tokio::task::spawn_blocking(move || db.reinforce(&eid)).await;
 
-                        // If new content is longer, it likely carries additional
-                        // information ("苹果" → "苹果+香蕉"). Update the existing
-                        // memory's content instead of discarding the new info.
                         let db = state.db.clone();
                         let eid2 = existing_id.clone();
                         let existing = tokio::task::spawn_blocking(move || db.get(&eid2))
@@ -48,46 +45,62 @@ pub(super) async fn create_memory(
                             .map_err(|e| EngramError::Internal(e.to_string()))?
                             .ok_or(EngramError::NotFound)?;
 
-                        let new_longer = input.content.len() > existing.content.len();
-                        let new_content = &input.content;
-                        let new_tags = input.tags.clone().unwrap_or_default();
+                        // If new content differs meaningfully from existing, merge via
+                        // LLM to preserve details from both. Pure restatements (very
+                        // similar text) just reinforce without an LLM call.
+                        let contents_differ = input.content != existing.content;
+                        // Jaccard < 0.8 means there's meaningful textual difference
+                        let textually_different = !db::jaccard_similar(
+                            &existing.content, &input.content, 0.8,
+                        );
 
-                        if new_longer {
-                            // Merge tags, update content to the richer version
-                            let mut merged_tags = existing.tags.clone();
-                            for t in &new_tags {
-                                if !merged_tags.contains(t) {
-                                    merged_tags.push(t.clone());
+                        if contents_differ && textually_different {
+                            let merged_content = if let Some(ref cfg) = state.ai {
+                                merge_memory_contents(cfg, &existing.content, &input.content).await
+                                    .unwrap_or_else(|_| input.content.clone())
+                            } else {
+                                // No AI: fall back to longer version
+                                if input.content.len() > existing.content.len() {
+                                    input.content.clone()
+                                } else {
+                                    existing.content.clone()
                                 }
-                            }
-                            let db = state.db.clone();
-                            let eid3 = existing_id.clone();
-                            let content = new_content.clone();
-                            let mem = tokio::task::spawn_blocking(move || {
-                                db.update_fields(&eid3, Some(&content), None, None, Some(&merged_tags))
-                            })
-                                .await
-                                .map_err(|e| EngramError::Internal(e.to_string()))?
-                                .map_err(|e| EngramError::Internal(e.to_string()))?
-                                .ok_or(EngramError::NotFound)?;
+                            };
 
-                            // Re-embed with updated content
-                            if let Some(ref cfg) = state.ai {
-                                spawn_embed(state.db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
-                            }
+                            // Only update if merge actually changed content
+                            if merged_content != existing.content {
+                                let mut merged_tags = existing.tags.clone();
+                                for t in input.tags.as_deref().unwrap_or(&[]) {
+                                    if !merged_tags.contains(t) {
+                                        merged_tags.push(t.clone());
+                                    }
+                                }
+                                let db = state.db.clone();
+                                let eid3 = existing_id.clone();
+                                let content = merged_content;
+                                let mem = tokio::task::spawn_blocking(move || {
+                                    db.update_fields(&eid3, Some(&content), None, None, Some(&merged_tags))
+                                })
+                                    .await
+                                    .map_err(|e| EngramError::Internal(e.to_string()))?
+                                    .map_err(|e| EngramError::Internal(e.to_string()))?
+                                    .ok_or(EngramError::NotFound)?;
 
-                            tracing::info!(
-                                existing_id = %mem.id,
-                                rep = mem.repetition_count,
-                                "semantic dedup: updated content (new is longer) + reinforced"
-                            );
-                            return Ok((StatusCode::OK, Json(mem)));
+                                if let Some(ref cfg) = state.ai {
+                                    spawn_embed(state.db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
+                                }
+
+                                tracing::info!(
+                                    existing_id = %mem.id, rep = mem.repetition_count,
+                                    "semantic dedup: LLM-merged content + reinforced"
+                                );
+                                return Ok((StatusCode::OK, Json(mem)));
+                            }
                         }
 
                         tracing::info!(
-                            existing_id = %existing.id,
-                            rep = existing.repetition_count,
-                            "semantic dedup: reinforced existing (no new info)"
+                            existing_id = %existing.id, rep = existing.repetition_count,
+                            "semantic dedup: reinforced (no new info)"
                         );
                         return Ok((StatusCode::OK, Json(existing)));
                     }
@@ -339,4 +352,24 @@ pub(super) async fn list_memories(
     .await??;
 
     Ok(Json(result))
+}
+
+const MERGE_PROMPT: &str = "\
+Merge two versions of the same memory into one. Preserve ALL specific details \
+from BOTH versions — names, numbers, commands, constraints. \
+Output ONLY the merged text, nothing else. Keep the same language as the input. \
+Be concise; don't add commentary or explanation.";
+
+async fn merge_memory_contents(
+    cfg: &ai::AiConfig,
+    existing: &str,
+    new: &str,
+) -> Result<String, EngramError> {
+    let user_msg = format!("EXISTING:\n{}\n\nNEW:\n{}", existing, new);
+    let merged = ai::llm_chat_as(cfg, "gate", MERGE_PROMPT, &user_msg).await?;
+    let trimmed = merged.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(EngramError::Internal("LLM returned empty merge".into()));
+    }
+    Ok(trimmed)
 }
