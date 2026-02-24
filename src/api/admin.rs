@@ -104,7 +104,8 @@ pub(super) async fn proxy_flush(
 pub(super) async fn proxy_window(
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {
-    match state.db.peek_proxy_turns() {
+    let db = state.db.clone();
+    match blocking(move || db.peek_proxy_turns()).await.unwrap_or(Err(crate::error::EngramError::Internal("spawn failed".into()))) {
         Ok(sessions) => {
             let mut result = serde_json::Map::new();
             for (key, turns) in sessions {

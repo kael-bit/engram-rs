@@ -13,6 +13,21 @@ use std::sync::Arc;
 
 pub type SharedDB = Arc<db::MemoryDB>;
 
+/// Run a blocking DB operation on tokio's blocking thread pool.
+///
+/// All synchronous MemoryDB calls in async context MUST go through this
+/// to avoid starving tokio worker threads.
+pub async fn db_call<F, T>(db: &SharedDB, f: F) -> Result<T, error::EngramError>
+where
+    F: FnOnce(&db::MemoryDB) -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let db = Arc::clone(db);
+    tokio::task::spawn_blocking(move || f(&db))
+        .await
+        .map_err(|e| error::EngramError::Internal(e.to_string()))
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: SharedDB,

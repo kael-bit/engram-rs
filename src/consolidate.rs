@@ -92,14 +92,23 @@ pub async fn consolidate(
                 for (id, content) in &candidates {
                     match llm_promotion_gate(cfg, content).await {
                         Ok((true, kind)) => {
-                            if db.promote(id, Layer::Core).is_ok() {
-                                if let Some(k) = kind {
-                                    if let Ok(Some(mem)) = db.get(id) {
-                                        if mem.kind == "semantic" {
-                                            let _ = db.update_kind(id, &k);
+                            let db2 = db.clone();
+                            let id2 = id.clone();
+                            let promoted = tokio::task::spawn_blocking(move || -> bool {
+                                if db2.promote(&id2, Layer::Core).is_ok() {
+                                    if let Some(k) = kind {
+                                        if let Ok(Some(mem)) = db2.get(&id2) {
+                                            if mem.kind == "semantic" {
+                                                let _ = db2.update_kind(&id2, &k);
+                                            }
                                         }
                                     }
+                                    true
+                                } else {
+                                    false
                                 }
+                            }).await.unwrap_or(false);
+                            if promoted {
                                 result.promoted_ids.push(id.clone());
                                 result.promoted += 1;
                                 debug!(id = %id, "promoted to Core");
@@ -107,30 +116,33 @@ pub async fn consolidate(
                         }
                         Ok((false, _)) => {
                             result.gate_rejected += 1;
-                            if let Ok(Some(mem)) = db.get(id) {
-                                let mut tags = mem.tags.clone();
-                                if !tags.iter().any(|t| t == "gate-rejected") {
-                                    tags.push("gate-rejected".into());
-                                    let _ = db.update_fields(id, None, None, None, Some(&tags));
+                            let db2 = db.clone();
+                            let id2 = id.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                if let Ok(Some(mem)) = db2.get(&id2) {
+                                    let mut tags = mem.tags.clone();
+                                    if !tags.iter().any(|t| t == "gate-rejected") {
+                                        tags.push("gate-rejected".into());
+                                        let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
+                                    }
                                 }
-                            }
+                            }).await;
                             info!(id = %id, content = %truncate_chars(content, 50), "gate rejected promotion to Core");
                         }
                         Err(e) => {
-                            // LLM error → skip this round, don't promote blindly
                             warn!(id = %id, error = %e, "LLM gate failed, skipping");
                         }
                     }
                 }
             }
             None => {
-                // No AI configured — promote all (legacy behavior)
-                for (id, _) in &candidates {
-                    if db.promote(id, Layer::Core).is_ok() {
-                        result.promoted_ids.push(id.clone());
-                        result.promoted += 1;
-                    }
-                }
+                let db2 = db.clone();
+                let cands: Vec<String> = candidates.iter().map(|(id, _)| id.clone()).collect();
+                let promoted_ids = tokio::task::spawn_blocking(move || {
+                    cands.into_iter().filter(|id| db2.promote(id, Layer::Core).is_ok()).collect::<Vec<_>>()
+                }).await.unwrap_or_default();
+                result.promoted += promoted_ids.len();
+                result.promoted_ids.extend(promoted_ids);
             }
         }
     }
@@ -491,22 +503,26 @@ struct TriageResult {
 /// Only considers memories older than `min_age_ms` with at least one access.
 /// Returns (promoted_count, promoted_ids).
 async fn triage_buffer(
-    db: &MemoryDB, cfg: &AiConfig,
+    db: &SharedDB, cfg: &AiConfig,
     min_age_ms: i64, max_batch: usize,
     already_promoted: &[String],
 ) -> (usize, Vec<String>) {
     let now = crate::db::now_ms();
-    // Group by namespace so triage never crosses namespace boundaries
-    let all_buffers: Vec<_> = db.list_by_layer_meta(Layer::Buffer, 10000, 0)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|m| {
-            let dominated = m.tags.iter().any(|t| t == "distilled" || t == "ephemeral");
-            let old_enough = (now - m.created_at) > min_age_ms;
-            let has_signal = m.access_count > 0 || m.repetition_count > 0;
-            !dominated && old_enough && has_signal && !already_promoted.contains(&m.id)
-        })
-        .collect();
+
+    let db2 = db.clone();
+    let promoted_set: Vec<String> = already_promoted.to_vec();
+    let all_buffers: Vec<Memory> = tokio::task::spawn_blocking(move || {
+        db2.list_by_layer_meta(Layer::Buffer, 10000, 0)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| {
+                let dominated = m.tags.iter().any(|t| t == "distilled" || t == "ephemeral");
+                let old_enough = (now - m.created_at) > min_age_ms;
+                let has_signal = m.access_count > 0 || m.repetition_count > 0;
+                !dominated && old_enough && has_signal && !promoted_set.contains(&m.id)
+            })
+            .collect()
+    }).await.unwrap_or_default();
 
     // Process each namespace separately
     let mut ns_groups: std::collections::HashMap<&str, Vec<&Memory>> = std::collections::HashMap::new();
@@ -565,12 +581,21 @@ async fn triage_buffer(
         for d in &result.decisions {
             if d.action != "promote" { continue; }
             if let Some(mem) = candidates.iter().find(|m| m.id.starts_with(&d.id)) {
-                if db.promote(&mem.id, Layer::Working).is_ok() {
-                    if let Some(ref k) = d.kind {
-                        if k == "procedural" && mem.kind == "semantic" {
-                            let _ = db.update_kind(&mem.id, k);
+                let db3 = db.clone();
+                let mid = mem.id.clone();
+                let kind = d.kind.clone();
+                let mk = mem.kind.clone();
+                let promoted = tokio::task::spawn_blocking(move || {
+                    if db3.promote(&mid, Layer::Working).is_ok() {
+                        if let Some(ref k) = kind {
+                            if k == "procedural" && mk == "semantic" {
+                                let _ = db3.update_kind(&mid, k);
+                            }
                         }
-                    }
+                        true
+                    } else { false }
+                }).await.unwrap_or(false);
+                if promoted {
                     debug!(id = %mem.id, ns = %ns, kind = ?d.kind, "triage: promoted buffer → working");
                     all_ids.push(mem.id.clone());
                     total_promoted += 1;
@@ -1234,9 +1259,13 @@ Your job: reorganize them. Output a JSON array of operations.
 
 /// Full audit: reviews Core+Working memories using the gate model.
 /// Chunks automatically if total prompt would exceed ~100K chars.
-pub async fn audit_memories(cfg: &AiConfig, db: &crate::db::MemoryDB) -> Result<AuditResult, String> {
-    let core = db.list_by_layer_meta(crate::db::Layer::Core, 500, 0).unwrap_or_default();
-    let working = db.list_by_layer_meta(crate::db::Layer::Working, 500, 0).unwrap_or_default();
+pub async fn audit_memories(cfg: &AiConfig, db: &crate::SharedDB) -> Result<AuditResult, String> {
+    let db2 = db.clone();
+    let (core, working) = tokio::task::spawn_blocking(move || {
+        let c = db2.list_by_layer_meta(crate::db::Layer::Core, 500, 0).unwrap_or_default();
+        let w = db2.list_by_layer_meta(crate::db::Layer::Working, 500, 0).unwrap_or_default();
+        (c, w)
+    }).await.map_err(|e| format!("spawn failed: {e}"))?;
 
     let all: Vec<&crate::db::Memory> = core.iter().chain(working.iter()).collect();
 
@@ -1257,7 +1286,17 @@ pub async fn audit_memories(cfg: &AiConfig, db: &crate::db::MemoryDB) -> Result<
         let prompt = format_audit_prompt(&core, &working);
         let response = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
         let ops = parse_audit_ops(&response, &core, &working);
-        apply_audit_ops(db, ops, &mut combined);
+        let db3 = db.clone();
+        let applied = tokio::task::spawn_blocking(move || {
+            let mut r = AuditResult::default();
+            apply_audit_ops(&db3, ops, &mut r);
+            r
+        }).await.unwrap_or_default();
+        combined.promoted += applied.promoted;
+        combined.demoted += applied.demoted;
+        combined.deleted += applied.deleted;
+        combined.merged += applied.merged;
+        combined.ops.extend(applied.ops);
     } else {
         // chunked: Core summary + Working in batches
         let core_summary = format_layer_summary("Core", &core);
@@ -1275,7 +1314,17 @@ pub async fn audit_memories(cfg: &AiConfig, db: &crate::db::MemoryDB) -> Result<
             // for chunked mode, resolve against core + this chunk only
             let chunk_vec: Vec<crate::db::Memory> = chunk.to_vec();
             let ops = parse_audit_ops(&response, &core, &chunk_vec);
-            apply_audit_ops(db, ops, &mut combined);
+            let db4 = db.clone();
+            let applied = tokio::task::spawn_blocking(move || {
+                let mut r = AuditResult::default();
+                apply_audit_ops(&db4, ops, &mut r);
+                r
+            }).await.unwrap_or_default();
+            combined.promoted += applied.promoted;
+            combined.demoted += applied.demoted;
+            combined.deleted += applied.deleted;
+            combined.merged += applied.merged;
+            combined.ops.extend(applied.ops);
         }
     }
 

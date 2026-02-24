@@ -8,7 +8,7 @@ use futures::StreamExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, error, info, warn};
 
-use crate::{ai, db, util::truncate_chars, AppState};
+use crate::{ai, db, error::EngramError, util::truncate_chars, AppState};
 
 // Sliding window thresholds: flush when enough context accumulates.
 const WINDOW_MAX_TURNS: usize = 8;
@@ -226,12 +226,15 @@ async fn stream_response(
 async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, session_key: String) {
     let assistant_msg = extract_assistant_msg(&res_raw);
 
-    // Parse the messages array and apply watermark-based filtering
-    let user_msg = match extract_user_via_watermark(&state, &req_raw, &session_key) {
-        Some(msg) => msg,
-        None => {
-            // First request, context truncation, or no parseable messages.
-            // Still no user message to pair — skip this exchange.
+    // Watermark extraction involves DB reads/writes — run on blocking thread
+    let wm_state = state.clone();
+    let wm_raw = req_raw.clone();
+    let wm_key = session_key.clone();
+    let user_msg = match tokio::task::spawn_blocking(move || {
+        extract_user_via_watermark(&wm_state, &wm_raw, &wm_key)
+    }).await {
+        Ok(Some(msg)) => msg,
+        Ok(None) | Err(_) => {
             if assistant_msg.is_empty() {
                 return;
             }
@@ -250,22 +253,33 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, se
 
     let turn = format!("User: {}\nAssistant: {}", user_msg, assistant_msg);
 
-    if let Err(e) = state.db.save_proxy_turn(&session_key, &turn) {
-        warn!("proxy: failed to persist turn: {e}");
-    }
+    // All DB operations on a blocking thread to avoid starving tokio workers
+    let db = state.db.clone();
+    let sk = session_key.clone();
+    let turn_c = turn.clone();
+    let should_flush = tokio::task::spawn_blocking(move || -> Result<Option<String>, EngramError> {
+        db.save_proxy_turn(&sk, &turn_c)?;
+        if db.proxy_session_should_flush(&sk, WINDOW_MAX_TURNS, WINDOW_MAX_CHARS)
+            && db.proxy_session_quiet_for(&sk, FLUSH_QUIET_SECS)
+        {
+            let ctx = db.drain_proxy_session(&sk)?;
+            if !ctx.is_empty() {
+                return Ok(Some(ctx));
+            }
+        }
+        Ok(None)
+    }).await;
+
     state.last_proxy_turn.store(
         crate::db::now_ms(),
         std::sync::atomic::Ordering::Relaxed,
     );
 
-    if state.db.proxy_session_should_flush(&session_key, WINDOW_MAX_TURNS, WINDOW_MAX_CHARS)
-        && state.db.proxy_session_quiet_for(&session_key, FLUSH_QUIET_SECS)
-    {
-        if let Ok(ctx) = state.db.drain_proxy_session(&session_key) {
-            if !ctx.is_empty() {
-                extract_from_context(state, &ctx).await;
-            }
-        }
+    match should_flush {
+        Ok(Ok(Some(ctx))) => extract_from_context(state, &ctx).await,
+        Ok(Err(e)) => warn!("proxy: DB error in turn save: {e}"),
+        Err(e) => warn!("proxy: spawn_blocking failed: {e}"),
+        _ => {}
     }
 }
 
@@ -362,10 +376,15 @@ fn extract_message_content(msg: &serde_json::Value) -> Option<String> {
 
 /// Flush all remaining buffered turns. Called from background timer and shutdown.
 pub async fn flush_window(state: &AppState) {
-    let pending = match state.db.drain_all_proxy_turns() {
-        Ok(p) => p,
-        Err(e) => {
+    let db = state.db.clone();
+    let pending = match tokio::task::spawn_blocking(move || db.drain_all_proxy_turns()).await {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => {
             warn!("proxy: failed to drain turns: {e}");
+            return;
+        }
+        Err(e) => {
+            warn!("proxy: spawn_blocking failed: {e}");
             return;
         }
     };
@@ -396,10 +415,10 @@ async fn extract_from_context(state: AppState, context: &str) {
     let preview = truncate_chars(context, 12000);
 
     // Fetch recent buffer memories so the LLM can skip already-known concepts
-    let recent_mems = state.db.list_since(
-        db::now_ms() - 6 * 3600 * 1000,
-        30,
-    ).unwrap_or_default();
+    let db = state.db.clone();
+    let recent_mems = tokio::task::spawn_blocking(move || {
+        db.list_since(db::now_ms() - 6 * 3600 * 1000, 30)
+    }).await.unwrap_or(Ok(vec![])).unwrap_or_default();
     let existing_knowledge = if recent_mems.is_empty() {
         String::new()
     } else {
@@ -527,18 +546,19 @@ async fn extract_from_context(state: AppState, context: &str) {
             match crate::recall::quick_semantic_dup_threshold(ai_cfg, &state.db, &entry.content, 0.60).await {
                 Ok(id) => id,
                 Err(_) => {
-                    // Fallback to Jaccard — can't get ID from this path
-                    if state.db.is_near_duplicate_with(&entry.content, 0.5) {
-                        Some(String::new()) // signal "is dup" without ID
-                    } else {
-                        None
-                    }
+                    // Fallback to Jaccard on blocking thread
+                    let db = state.db.clone();
+                    let c = entry.content.clone();
+                    tokio::task::spawn_blocking(move || {
+                        if db.is_near_duplicate_with(&c, 0.5) { Some(String::new()) } else { None }
+                    }).await.unwrap_or(None)
                 }
             };
         if let Some(ref existing_id) = dup_id {
-            // Repetition = reinforcement, even from proxy extraction
             if !existing_id.is_empty() {
-                let _ = state.db.reinforce(existing_id);
+                let db = state.db.clone();
+                let eid = existing_id.clone();
+                let _ = tokio::task::spawn_blocking(move || db.reinforce(&eid)).await;
             }
             info!(
                 "proxy: dedup/semantic skip (reinforced): {}",
@@ -561,16 +581,18 @@ async fn extract_from_context(state: AppState, context: &str) {
             ..Default::default()
         };
 
-        match state.db.insert(input) {
-            Ok(mem) => {
-                // Store extracted fact triples linked to this memory
+        let db = state.db.clone();
+        match tokio::task::spawn_blocking(move || db.insert(input)).await {
+            Ok(Ok(mem)) => {
                 if let Some(facts) = facts_input {
                     if !facts.is_empty() {
                         let linked: Vec<db::FactInput> = facts.into_iter().map(|mut f| {
                             f.memory_id = Some(mem.id.clone());
                             f
                         }).collect();
-                        if let Err(e) = state.db.insert_facts(linked, &mem.namespace) {
+                        let db2 = state.db.clone();
+                        let ns = mem.namespace.clone();
+                        if let Err(e) = tokio::task::spawn_blocking(move || db2.insert_facts(linked, &ns)).await.unwrap_or(Err(EngramError::Internal("spawn failed".into()))) {
                             warn!("proxy: failed to store facts: {e}");
                         }
                     }
@@ -578,8 +600,11 @@ async fn extract_from_context(state: AppState, context: &str) {
                 batch_contents.push(content_copy);
                 stored += 1;
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 warn!("proxy: failed to store: {e}");
+            }
+            Err(e) => {
+                warn!("proxy: spawn_blocking failed: {e}");
             }
         }
     }
