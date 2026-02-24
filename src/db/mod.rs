@@ -594,6 +594,17 @@ impl MemoryDB {
         })
     }
 
+    pub fn get_meta_prefix(&self, prefix: &str) -> Vec<String> {
+        let c = match self.conn() { Ok(c) => c, Err(_) => return vec![] };
+        let mut stmt = match c.prepare("SELECT key FROM engram_meta WHERE key LIKE ?1") {
+            Ok(s) => s, Err(_) => return vec![],
+        };
+        let pattern = format!("{}%", prefix);
+        stmt.query_map([&pattern], |r| r.get::<_, String>(0))
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    }
+
     pub fn set_meta(&self, key: &str, value: &str) -> Result<(), EngramError> {
         let c = self.conn()?;
         c.execute(

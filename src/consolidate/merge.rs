@@ -27,6 +27,10 @@ const RECONCILE_PROMPT: &str = "You are comparing two memory entries about poten
     unique details not in the newer one.";
 
 /// Detect same-topic memories where a newer one supersedes an older one.
+fn reconcile_pair_key(id_a: &str, id_b: &str) -> String {
+    if id_a < id_b { format!("{}:{}", id_a, id_b) } else { format!("{}:{}", id_b, id_a) }
+}
+
 /// Runs every consolidation cycle. Uses a moderate similarity threshold
 /// (0.55-0.78) to find topically related but not near-duplicate pairs.
 /// Near-duplicates (>0.78) are handled by merge_similar instead.
@@ -72,6 +76,17 @@ pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, 
     let mut reconciled = 0;
     let mut removed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    // Load cached keep_both decisions to avoid re-asking LLM
+    let keep_both_cache: std::collections::HashSet<String> = {
+        let db_kb = db.clone();
+        tokio::task::spawn_blocking(move || {
+            db_kb.get_meta_prefix("reconcile_kb:")
+                .into_iter()
+                .filter_map(|key| key.strip_prefix("reconcile_kb:").map(|s| s.to_string()))
+                .collect()
+        }).await.unwrap_or_default()
+    };
+
     // Pass 1: Within Working/Core — newer supersedes older on same topic.
     for i in 0..wc.len() {
         if removed_ids.contains(&wc[i].0.id) { continue; }
@@ -79,7 +94,7 @@ pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, 
             if removed_ids.contains(&wc[j].0.id) { continue; }
             if let Some(id) = try_reconcile_pair(
                 db, cfg, &wc[i].0, &wc[i].1, &wc[j].0, &wc[j].1,
-                None, &removed_ids,
+                None, &removed_ids, &keep_both_cache,
             ).await {
                 removed_ids.insert(id);
                 reconciled += 1;
@@ -101,7 +116,7 @@ pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, 
             if buf.0.created_at <= target.0.created_at { continue; }
             if let Some(id) = try_reconcile_pair(
                 db, cfg, &target.0, &target.1, &buf.0, &buf.1,
-                Some(target.0.layer), &removed_ids,
+                Some(target.0.layer), &removed_ids, &keep_both_cache,
             ).await {
                 removed_ids.insert(id);
                 reconciled += 1;
@@ -135,6 +150,7 @@ async fn try_reconcile_pair(
     a: &Memory, a_emb: &[f32], b: &Memory, b_emb: &[f32],
     promote_newer_to: Option<Layer>,
     already_removed: &std::collections::HashSet<String>,
+    keep_both_cache: &std::collections::HashSet<String>,
 ) -> Option<String> {
     if already_removed.contains(&a.id) || already_removed.contains(&b.id) {
         return None;
@@ -148,6 +164,13 @@ async fn try_reconcile_pair(
     let one_hour_ms: i64 = 3600 * 1000;
     if (newer.created_at - older.created_at) < one_hour_ms { return None; }
     if older.namespace != newer.namespace { return None; }
+
+    // Skip pairs we already judged as keep_both
+    let pair_key = reconcile_pair_key(&older.id, &newer.id);
+    if keep_both_cache.contains(&pair_key) {
+        debug!(older = %older.id, newer = %newer.id, "reconcile: skip cached keep_both");
+        return None;
+    }
 
     let user_msg = format!(
         "OLDER (created {}, layer={}):\n{}\n\nNEWER (created {}, layer={}):\n{}",
@@ -192,6 +215,12 @@ async fn try_reconcile_pair(
     let decision = result.decision;
     if decision != "update" && decision != "absorb" {
         debug!(older = %older.id, newer = %newer.id, "reconcile: keeping both");
+        // Persist keep_both so we never re-ask about this pair
+        let pair_key = reconcile_pair_key(&older.id, &newer.id);
+        let db_meta = db.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            db_meta.set_meta(&format!("reconcile_kb:{}", pair_key), "1")
+        }).await;
         return None;
     }
 

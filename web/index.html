@@ -146,11 +146,11 @@ label { font-size:11px; color:#888; }
       <li data-v="health"><span class="nl">Health</span></li>
       <li data-v="trash"><span class="nl">Trash</span><span class="ct" id="c-trash">0</span></li>
       <li data-v="tools"><span class="nl">Tools</span></li>
-      <li data-v="llm-usage"><span class="nl">LLM Usage</span></li>
       <li data-v="tests"><span class="nl">Tests</span></li>
     </ul>
   </div>
   <div class="sidebar-footer">
+    <button onclick="switchView('llm-usage')" id="llmNavBtn" style="text-align:left">📊 LLM Usage</button>
     <button onclick="doAction('/consolidate','POST','{}')">Consolidate</button>
     <button onclick="doAction('/repair','POST')">Repair FTS</button>
   </div>
@@ -1057,6 +1057,25 @@ async function testSortOrder(){
 /* --- LLM Usage page --- */
 let llmRefreshTimer=null;
 
+const COMP_DESC={
+  gate:'Working→Core promotion decisions',
+  audit:'Memory quality review (merge/demote/delete)',
+  reconcile:'Detects same-topic memories, decides update vs keep both',
+  merge:'Merges near-duplicate memories into one',
+  rerank:'Re-ranks recall results by relevance',
+  expand:'Expands search queries for better recall',
+  triage:'Sorts new memories into layers',
+  proxy_extract:'Extracts memories from proxy conversations',
+  core_summary:'Generates Core memory summaries for resume',
+  embed:'Embedding operation',
+  embed_batch:'Batch embedding operation',
+  embed_sync:'Sync embedding operation',
+  recall_embed:'Recall embedding operation',
+  merge_embed:'Merge embedding operation',
+  insert_merge:'Dedup check on insert',
+  distill:'Distills session notes into project context',
+};
+
 function fmtTokens(n){
   if(n==null)return '0';
   if(n>=1e6)return (n/1e6).toFixed(1)+'M';
@@ -1066,12 +1085,28 @@ function fmtTokens(n){
 
 function renderLlmUsage(){
   document.getElementById('main').innerHTML=`
-    <h2>LLM Usage</h2>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <h2 style="margin:0">LLM Usage</h2>
+      <button class="btn btn-danger" style="font-size:11px;padding:3px 10px" onclick="clearLlmUsage()">Clear</button>
+    </div>
     <div id="llmContent"><div class="empty">Loading...</div></div>`;
   loadLlmUsage();
   // auto-refresh every 30s
   if(llmRefreshTimer)clearInterval(llmRefreshTimer);
   llmRefreshTimer=setInterval(()=>{if(curView==='llm-usage')loadLlmUsage();},30000);
+}
+
+async function clearLlmUsage(){
+  if(!confirm('Clear all LLM usage data?'))return;
+  try{
+    await api('/llm-usage',{method:'DELETE'});
+    toast('LLM usage cleared');
+    loadLlmUsage();
+  }catch(e){
+    if(e.message&&(e.message.includes('404')||e.message.includes('405')))
+      alert('DELETE /llm-usage not implemented on this server version');
+    else toast(e.message,false);
+  }
 }
 
 async function loadLlmUsage(){
@@ -1095,7 +1130,8 @@ async function loadLlmUsage(){
       html+=`<div class="card"><b style="font-size:12px">By Component</b>
         <table class="ftable" style="margin-top:8px"><thead><tr><th>Component</th><th>Calls</th><th>Input</th><th>Output</th><th>Cached</th></tr></thead><tbody>`;
       for(const[name,v]of compEntries){
-        html+=`<tr><td>${esc(name)}</td><td>${v.calls||0}</td><td>${fmtTokens(v.input_tokens)}</td><td>${fmtTokens(v.output_tokens)}</td><td>${fmtTokens(v.cached_tokens)}</td></tr>`;
+        const desc=COMP_DESC[name]||'';
+        html+=`<tr><td>${esc(name)}${desc?'<div style="font-size:10px;color:#666;font-weight:400;line-height:1.3">'+esc(desc)+'</div>':''}</td><td>${v.calls||0}</td><td>${fmtTokens(v.input_tokens)}</td><td>${fmtTokens(v.output_tokens)}</td><td>${fmtTokens(v.cached_tokens)}</td></tr>`;
       }
       html+=`</tbody></table></div>`;
     }
@@ -1134,6 +1170,8 @@ function switchView(v){
   // clear LLM auto-refresh when navigating away
   if(v!=='llm-usage'&&llmRefreshTimer){clearInterval(llmRefreshTimer);llmRefreshTimer=null;}
   document.querySelectorAll('.nav li').forEach(li=>li.classList.toggle('active',li.dataset.v===v));
+  const llmBtn=document.getElementById('llmNavBtn');
+  if(llmBtn){llmBtn.style.color=v==='llm-usage'?'#fff':'';llmBtn.style.borderColor=v==='llm-usage'?'#555':'';}
   if(v==='recall')renderRecall();else if(v==='search')renderSearch();else if(v==='resume')renderResume();else if(v==='create')renderCreate();
   else if(v==='facts')renderFacts();else if(v==='proxy')renderProxy();else if(v==='health')renderHealth();
   else if(v==='trash')renderTrash();else if(v==='tools')renderTools();else if(v==='llm-usage')renderLlmUsage();else if(v==='tests')renderTests();else renderList(getMem());
