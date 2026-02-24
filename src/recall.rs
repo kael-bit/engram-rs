@@ -279,7 +279,9 @@ pub fn recall(
             // This prevents CJK embedding weakness from burying keyword-confirmed results.
             if let Some(sm) = scored.iter_mut().find(|s| &s.memory.id == id) {
                 let semantic_boosted = sm.relevance * (1.0 + fts_rel * 0.3);
-                let fts_floor = 0.5 + fts_rel * 0.4; // top FTS hit → 0.9 relevance
+                // Floor prevents keyword-confirmed results from sinking below a minimum,
+                // but shouldn't dominate — keep it modest so semantic ranking wins.
+                let fts_floor = 0.35 + fts_rel * 0.25; // top FTS hit → 0.6 floor
                 sm.relevance = semantic_boosted.max(fts_floor).min(1.0);
                 let rescored = score_memory(&sm.memory, sm.relevance);
                 sm.score = rescored.score;
