@@ -9,3 +9,7 @@
 .sync_state
 AUDIT.md
 *-INTERNAL*
+
+literal:# Local
+.local-prompt.md
+.githooks/
