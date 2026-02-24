@@ -353,12 +353,31 @@ fn append_segmented(text: &str) -> String {
         return text.to_string();
     }
 
+    // Split CJK/latin boundaries so "alice是谁" → "alice 是谁"
+    let mut spaced = String::with_capacity(text.len() * 2);
+    let mut prev_cjk: Option<bool> = None;
+    for c in text.chars() {
+        if c.is_alphanumeric() || is_cjk(c) {
+            let cur = is_cjk(c);
+            if let Some(prev) = prev_cjk {
+                if cur != prev {
+                    spaced.push(' ');
+                }
+            }
+            spaced.push(c);
+            prev_cjk = Some(cur);
+        } else {
+            spaced.push(c);
+            prev_cjk = None;
+        }
+    }
+
     // jieba handles Chinese (CJK ideographs)
-    let has_chinese = text.chars().any(is_cjk_ideograph);
+    let has_chinese = spaced.chars().any(is_cjk_ideograph);
     let mut extra_tokens = Vec::new();
 
     if has_chinese {
-        let words = jieba().cut_for_search(text, false);
+        let words = jieba().cut_for_search(&spaced, false);
         for w in words {
             let trimmed = w.trim();
             if trimmed.len() > 1 && trimmed.chars().any(is_cjk) {
@@ -368,7 +387,7 @@ fn append_segmented(text: &str) -> String {
     }
 
     // Bigrams for kana/hangul (jieba doesn't segment these)
-    let chars: Vec<char> = text.chars().collect();
+    let chars: Vec<char> = spaced.chars().collect();
     for i in 0..chars.len().saturating_sub(1) {
         let a = chars[i];
         let b = chars[i + 1];
@@ -382,9 +401,9 @@ fn append_segmented(text: &str) -> String {
     }
 
     if extra_tokens.is_empty() {
-        text.to_string()
+        spaced
     } else {
-        format!("{} {}", text, extra_tokens.join(" "))
+        format!("{} {}", spaced, extra_tokens.join(" "))
     }
 }
 

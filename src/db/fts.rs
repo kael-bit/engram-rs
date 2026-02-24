@@ -102,10 +102,22 @@ impl MemoryDB {
 
     /// FTS search with optional namespace filter (JOIN against memories table).
     pub fn search_fts_ns(&self, query: &str, limit: usize, ns: Option<&str>) -> Vec<(String, f64)> {
-        let sanitized: String = query
-            .chars()
-            .map(|c| if c.is_alphanumeric() || is_cjk(c) { c } else { ' ' })
-            .collect();
+        // Sanitize: keep alphanumeric + CJK, insert spaces at CJK/latin boundaries
+        let mut sanitized = String::with_capacity(query.len() * 2);
+        let mut prev_cjk = false;
+        for c in query.chars() {
+            if c.is_alphanumeric() || is_cjk(c) {
+                let cur_cjk = is_cjk(c);
+                if !sanitized.is_empty() && cur_cjk != prev_cjk {
+                    sanitized.push(' ');
+                }
+                sanitized.push(c);
+                prev_cjk = cur_cjk;
+            } else {
+                sanitized.push(' ');
+                prev_cjk = false;
+            }
+        }
         let sanitized = sanitized.trim();
         if sanitized.is_empty() {
             return vec![];
@@ -312,5 +324,19 @@ mod tests {
         // Pure stop word query should return empty
         let results = db.search_fts("是的了", 10);
         assert!(results.is_empty(), "stop-word-only query should return empty");
+    }
+
+    #[test]
+    fn fts_mixed_latin_cjk_boundary_split() {
+        let db = test_db();
+        db.insert(MemoryInput {
+            content: "alice is my colleague".into(),
+            ..Default::default()
+        }).unwrap();
+
+        // "alice是谁" should split into "alice" + "是" + "谁", stop words filtered,
+        // leaving "alice" — which should match the indexed content.
+        let results = db.search_fts("alice是谁", 10);
+        assert!(!results.is_empty(), "alice是谁 should find content containing alice");
     }
 }
