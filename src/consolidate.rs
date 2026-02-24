@@ -89,14 +89,14 @@ pub async fn consolidate(
                             if db.promote(id, Layer::Core).is_ok() {
                                 result.promoted_ids.push(id.clone());
                                 result.promoted += 1;
-                                debug!(id = %id, "LLM approved promotion to Core");
+                                debug!(id = %id, "promoted to Core");
                             }
                         }
                         Ok(false) => {
                             result.gate_rejected += 1;
                             // Prevent repeated LLM calls: drop importance below promote threshold
                             let _ = db.update_fields(id, None, None, Some(0.4), None);
-                            debug!(id = %id, "LLM rejected promotion, importance reduced to 0.4");
+                            info!(id = %id, content = %truncate_chars(content, 50), "gate rejected promotion to Core");
                         }
                         Err(e) => {
                             // LLM error → skip this round, don't promote blindly
