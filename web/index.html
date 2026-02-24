@@ -146,7 +146,7 @@ label { font-size:11px; color:#888; }
       <li data-v="health"><span class="nl">Health</span></li>
       <li data-v="trash"><span class="nl">Trash</span><span class="ct" id="c-trash">0</span></li>
       <li data-v="tools"><span class="nl">Tools</span></li>
-      <li data-v="llm-usage"><span class="nl">🔢 LLM Usage</span></li>
+      <li data-v="llm-usage"><span class="nl">LLM Usage</span></li>
       <li data-v="tests"><span class="nl">Tests</span></li>
     </ul>
   </div>
@@ -1066,7 +1066,7 @@ function fmtTokens(n){
 
 function renderLlmUsage(){
   document.getElementById('main').innerHTML=`
-    <h2>🔢 LLM Usage</h2>
+    <h2>LLM Usage</h2>
     <div id="llmContent"><div class="empty">Loading...</div></div>`;
   loadLlmUsage();
   // auto-refresh every 30s
