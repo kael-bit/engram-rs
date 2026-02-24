@@ -134,8 +134,9 @@ You have persistent memory via engram MCP tools.
 ### Every session start or after context compaction
 Call `engram_resume` with hours=6 to restore context. Read the core and working sections — that's who you are and what you were doing.
 
-Compaction summaries are lossy — they drop details, lessons, and recent decisions.
-After any compaction event, immediately call `engram_resume` before continuing.
+**Compaction detection:** If you see a `<summary>` block replacing prior conversation, or a system message containing "Compacted", context was just compressed. Compaction summaries are lossy — they drop details, lessons, and recent decisions.
+
+**Hard rule: after compaction, your FIRST action must be `engram_resume` — before responding to any user message.** Nothing you say will be grounded without your memory.
 
 ### When to store what
 
@@ -188,7 +189,9 @@ You have persistent memory via engram at http://localhost:3917
 curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 ```
 
-Compaction summaries are lossy. After any compaction event, call resume again to restore details.
+**Compaction detection:** If you see a `<summary>` block replacing prior conversation, or a system message containing "Compacted", context was just compressed. Compaction summaries are lossy — they drop details and decisions.
+
+**Hard rule: after compaction, call resume BEFORE responding to any user message.** Nothing you say will be grounded without your memory.
 
 ### When to store what
 
@@ -257,8 +260,9 @@ Restore context first — nothing else matters until you know who you are:
 
 Read the core section (identity, constraints, lessons) and working section (active context).
 
-Compaction summaries are lossy — they drop details, lessons, and recent decisions.
-After any compaction event, resume from engram before continuing the conversation.
+**Compaction detection:** If you see a `<summary>` block replacing prior conversation, or a system message containing "Compacted", context was just compressed. Compaction summaries are lossy — they drop details, lessons, and recent decisions.
+
+**Hard rule: after compaction, resume is your FIRST action — before responding to any user message.** Nothing you say will be grounded without your memory.
 
 ### When to store what
 
