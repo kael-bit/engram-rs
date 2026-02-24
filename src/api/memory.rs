@@ -211,6 +211,7 @@ pub(super) async fn batch_delete(
 pub(super) struct ListQuery {
     layer: Option<u8>,
     tag: Option<String>,
+    kind: Option<String>,
     #[serde(alias = "namespace")]
     ns: Option<String>,
     limit: Option<usize>,
@@ -237,11 +238,12 @@ pub(super) async fn list_memories(
             q.ns.as_deref(),
             q.layer,
             q.tag.as_deref(),
+            q.kind.as_deref(),
         )?;
 
         let count = memories.len();
-        let total = if q.tag.is_some() || q.layer.is_some() {
-            d.count_filtered(q.ns.as_deref(), q.layer, q.tag.as_deref())
+        let total = if q.tag.is_some() || q.layer.is_some() || q.kind.is_some() {
+            d.count_filtered(q.ns.as_deref(), q.layer, q.tag.as_deref(), q.kind.as_deref())
                 .unwrap_or(count)
         } else {
             match q.ns.as_deref() {

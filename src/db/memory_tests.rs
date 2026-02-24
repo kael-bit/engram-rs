@@ -219,24 +219,24 @@ fn list_filtered_by_ns_layer_tag() {
     }).unwrap();
 
     // namespace filter
-    let nsa = db.list_filtered(10, 0, Some("ns-a"), None, None).unwrap();
+    let nsa = db.list_filtered(10, 0, Some("ns-a"), None, None, None).unwrap();
     assert_eq!(nsa.len(), 2);
 
     // namespace + layer
-    let nsa_l2 = db.list_filtered(10, 0, Some("ns-a"), Some(2), None).unwrap();
+    let nsa_l2 = db.list_filtered(10, 0, Some("ns-a"), Some(2), None, None).unwrap();
     assert_eq!(nsa_l2.len(), 1);
     assert!(nsa_l2[0].content.contains("gamma"));
 
     // tag filter
-    let hot = db.list_filtered(10, 0, None, None, Some("hot")).unwrap();
+    let hot = db.list_filtered(10, 0, None, None, Some("hot"), None).unwrap();
     assert_eq!(hot.len(), 2);
 
     // all combined
-    let combo = db.list_filtered(10, 0, Some("ns-a"), Some(2), Some("hot")).unwrap();
+    let combo = db.list_filtered(10, 0, Some("ns-a"), Some(2), Some("hot"), None).unwrap();
     assert_eq!(combo.len(), 1);
 
     // no match
-    let empty = db.list_filtered(10, 0, Some("ns-a"), None, Some("cold")).unwrap();
+    let empty = db.list_filtered(10, 0, Some("ns-a"), None, Some("cold"), None).unwrap();
     assert_eq!(empty.len(), 0);
 }
 
@@ -876,14 +876,14 @@ fn list_filtered_by_layer() {
     let w = db.insert(MemoryInput::new("working1").layer(2)).unwrap();
     db.insert(MemoryInput::new("core1").layer(3)).unwrap();
 
-    let all = db.list_filtered(100, 0, None, None, None).unwrap();
+    let all = db.list_filtered(100, 0, None, None, None, None).unwrap();
     assert_eq!(all.len(), 4);
 
-    let buf_only = db.list_filtered(100, 0, None, Some(1), None).unwrap();
+    let buf_only = db.list_filtered(100, 0, None, Some(1), None, None).unwrap();
     assert_eq!(buf_only.len(), 2);
     assert!(buf_only.iter().all(|m| m.layer == Layer::Buffer));
 
-    let working = db.list_filtered(100, 0, None, Some(2), None).unwrap();
+    let working = db.list_filtered(100, 0, None, Some(2), None, None).unwrap();
     assert_eq!(working.len(), 1);
     assert_eq!(working[0].id, w.id);
 }
@@ -895,10 +895,10 @@ fn list_filtered_by_tag() {
     db.insert(MemoryInput::new("lesson2").tags(vec!["lesson".into()])).unwrap();
     db.insert(MemoryInput::new("no tag")).unwrap();
 
-    let lessons = db.list_filtered(100, 0, None, None, Some("lesson")).unwrap();
+    let lessons = db.list_filtered(100, 0, None, None, Some("lesson"), None).unwrap();
     assert_eq!(lessons.len(), 2);
 
-    let auth = db.list_filtered(100, 0, None, None, Some("auth")).unwrap();
+    let auth = db.list_filtered(100, 0, None, None, Some("auth"), None).unwrap();
     assert_eq!(auth.len(), 1);
     assert!(auth[0].content.contains("lesson1"));
 }
@@ -910,11 +910,11 @@ fn list_filtered_by_namespace() {
     db.insert(MemoryInput::new("agent-a").namespace("agent-a")).unwrap();
     db.insert(MemoryInput::new("agent-b").namespace("agent-b")).unwrap();
 
-    let a = db.list_filtered(100, 0, Some("agent-a"), None, None).unwrap();
+    let a = db.list_filtered(100, 0, Some("agent-a"), None, None, None).unwrap();
     assert_eq!(a.len(), 1);
     assert!(a[0].content.contains("agent-a"));
 
-    let all = db.list_filtered(100, 0, None, None, None).unwrap();
+    let all = db.list_filtered(100, 0, None, None, None, None).unwrap();
     assert_eq!(all.len(), 3);
 }
 
@@ -926,16 +926,16 @@ fn list_filtered_combined() {
     db.insert(MemoryInput::new("b-buf").namespace("b").tags(vec!["lesson".into()])).unwrap();
 
     // namespace=a AND layer=2
-    let r = db.list_filtered(100, 0, Some("a"), Some(2), None).unwrap();
+    let r = db.list_filtered(100, 0, Some("a"), Some(2), None, None).unwrap();
     assert_eq!(r.len(), 1);
     assert!(r[0].content.contains("a-working"));
 
     // namespace=a AND tag=lesson
-    let r = db.list_filtered(100, 0, Some("a"), None, Some("lesson")).unwrap();
+    let r = db.list_filtered(100, 0, Some("a"), None, Some("lesson"), None).unwrap();
     assert_eq!(r.len(), 1);
 
     // tag=lesson across all namespaces
-    let r = db.list_filtered(100, 0, None, None, Some("lesson")).unwrap();
+    let r = db.list_filtered(100, 0, None, None, Some("lesson"), None).unwrap();
     assert_eq!(r.len(), 2);
 }
 
@@ -1005,7 +1005,7 @@ fn delete_namespace_removes_only_matching() {
     let deleted = db.delete_namespace("cleanup-ns").unwrap();
     assert_eq!(deleted, 2);
 
-    let remaining = db.list_filtered(100, 0, None, None, None).unwrap();
+    let remaining = db.list_filtered(100, 0, None, None, None, None).unwrap();
     assert_eq!(remaining.len(), 2);
     assert!(remaining.iter().all(|m| m.namespace != "cleanup-ns"));
 }
@@ -1028,11 +1028,11 @@ fn list_filtered_pagination() {
         db.insert(MemoryInput::new(format!("item {i}"))).unwrap();
     }
 
-    let page1 = db.list_filtered(2, 0, None, None, None).unwrap();
+    let page1 = db.list_filtered(2, 0, None, None, None, None).unwrap();
     assert_eq!(page1.len(), 2);
-    let page2 = db.list_filtered(2, 2, None, None, None).unwrap();
+    let page2 = db.list_filtered(2, 2, None, None, None, None).unwrap();
     assert_eq!(page2.len(), 2);
-    let page3 = db.list_filtered(2, 4, None, None, None).unwrap();
+    let page3 = db.list_filtered(2, 4, None, None, None, None).unwrap();
     assert_eq!(page3.len(), 1);
 
     // No overlap between pages

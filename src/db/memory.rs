@@ -496,7 +496,7 @@ impl MemoryDB {
 
     /// List all memories with pagination.
     pub fn list_all(&self, limit: usize, offset: usize) -> Result<Vec<Memory>, EngramError> {
-        self.list_filtered(limit, offset, None, None, None)
+        self.list_filtered(limit, offset, None, None, None, None)
     }
 
     pub fn list_all_ns(
@@ -505,10 +505,10 @@ impl MemoryDB {
         offset: usize,
         ns: Option<&str>,
     ) -> Result<Vec<Memory>, EngramError> {
-        self.list_filtered(limit, offset, ns, None, None)
+        self.list_filtered(limit, offset, ns, None, None, None)
     }
 
-    /// List memories with optional namespace, layer, and tag filters — all pushed to SQL.
+    /// List memories with optional namespace, layer, tag, and kind filters — all pushed to SQL.
     pub fn list_filtered(
         &self,
         limit: usize,
@@ -516,6 +516,7 @@ impl MemoryDB {
         ns: Option<&str>,
         layer: Option<u8>,
         tag: Option<&str>,
+        kind: Option<&str>,
     ) -> Result<Vec<Memory>, EngramError> {
         let conn = self.conn()?;
 
@@ -536,6 +537,10 @@ impl MemoryDB {
                 "EXISTS (SELECT 1 FROM json_each(memories.tags) WHERE json_each.value = ?{})",
                 params_vec.len()
             ));
+        }
+        if let Some(k) = kind {
+            params_vec.push(Box::new(k.to_string()));
+            clauses.push(format!("kind = ?{}", params_vec.len()));
         }
 
         params_vec.push(Box::new(limit as i64));
@@ -566,6 +571,7 @@ impl MemoryDB {
         ns: Option<&str>,
         layer: Option<u8>,
         tag: Option<&str>,
+        kind: Option<&str>,
     ) -> Result<usize, EngramError> {
         let conn = self.conn()?;
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -585,6 +591,10 @@ impl MemoryDB {
                 "EXISTS (SELECT 1 FROM json_each(memories.tags) WHERE json_each.value = ?{})",
                 params_vec.len()
             ));
+        }
+        if let Some(k) = kind {
+            params_vec.push(Box::new(k.to_string()));
+            clauses.push(format!("kind = ?{}", params_vec.len()));
         }
 
         let mut sql = String::from("SELECT COUNT(*) FROM memories");

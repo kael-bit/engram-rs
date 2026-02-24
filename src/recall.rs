@@ -251,7 +251,7 @@ pub fn recall(
     // must never be excluded by prefiltering. A query like "我叫什么" might
     // not match any FTS terms in the identity memory but should still find it
     // via semantic similarity.
-    for m in db.list_filtered(200, 0, ns, Some(3), None)
+    for m in db.list_filtered(200, 0, ns, Some(3), None, None)
         .unwrap_or_default()
     {
         candidate_ids.insert(m.id.clone());

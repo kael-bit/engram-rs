@@ -741,3 +741,71 @@ async fn resume_compact_includes_kind() {
     assert_eq!(proc_mem.unwrap()["kind"].as_str(), Some("procedural"),
         "compact output should include kind field for non-semantic memories");
 }
+
+#[tokio::test]
+async fn list_memories_total_respects_tag_filter() {
+    let app = router(test_state(None));
+
+    // Create memories: 2 with tag "alpha", 3 without
+    for i in 0..2 {
+        let body = serde_json::json!({"content": format!("tagged {i}"), "tags": ["alpha"], "skip_dedup": true});
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    }
+    for i in 0..3 {
+        let body = serde_json::json!({"content": format!("plain {i}"), "tags": ["beta"], "skip_dedup": true});
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    }
+
+    // Unfiltered: total should be 5
+    let resp = app.clone().oneshot(
+        Request::builder().uri("/memories").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    let j = body_json(resp).await;
+    assert_eq!(j["total"].as_i64().unwrap(), 5);
+
+    // Filtered by tag=alpha: total should be 2
+    let resp = app.clone().oneshot(
+        Request::builder().uri("/memories?tag=alpha").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    let j = body_json(resp).await;
+    assert_eq!(j["count"].as_i64().unwrap(), 2);
+    assert_eq!(j["total"].as_i64().unwrap(), 2, "total must match filtered count");
+}
+
+#[tokio::test]
+async fn list_memories_total_respects_kind_filter() {
+    let app = router(test_state(None));
+
+    let body = serde_json::json!({"content": "a procedure", "kind": "procedural", "skip_dedup": true});
+    app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    for i in 0..2 {
+        let body = serde_json::json!({"content": format!("semantic {i}"), "skip_dedup": true});
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    }
+
+    let resp = app.clone().oneshot(
+        Request::builder().uri("/memories?kind=procedural").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    let j = body_json(resp).await;
+    assert_eq!(j["count"].as_i64().unwrap(), 1);
+    assert_eq!(j["total"].as_i64().unwrap(), 1, "total must reflect kind filter");
+}
+
+#[tokio::test]
+async fn list_memories_total_respects_layer_filter() {
+    let app = router(test_state(None));
+
+    let body = serde_json::json!({"content": "core mem", "layer": 3, "skip_dedup": true});
+    app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    for i in 0..2 {
+        let body = serde_json::json!({"content": format!("buf {i}"), "skip_dedup": true});
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    }
+
+    let resp = app.clone().oneshot(
+        Request::builder().uri("/memories?layer=3").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    let j = body_json(resp).await;
+    assert_eq!(j["count"].as_i64().unwrap(), 1);
+    assert_eq!(j["total"].as_i64().unwrap(), 1, "total must reflect layer filter");
+}
