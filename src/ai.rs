@@ -259,17 +259,29 @@ const EXPAND_PROMPT: &str = "Given a search query for a PERSONAL knowledge base 
     generate 3-5 alternative search phrases that would help find relevant stored notes. \
     Bridge abstraction levels: abstract→concrete, concrete→abstract. \
     Example: 可观测性 → 日志系统 Loki Grafana 监控告警. \
+    Example: alice是谁 → alice的身份 alice的角色 我和alice的关系. \
     Focus on rephrasing the INTENT, not listing random related technologies. \
     If the query asks about a tool/library choice, rephrase as: why/decision/migration/选择/替换. \
-    Output one phrase per line, no numbering. Same language as input.";
+    NEVER output explanations, commentary, or bullet points with dashes. Output ONLY search phrases, one per line. \
+    Even for very short queries, always produce search phrases. Same language as input.";
 
 /// Generate alternative query phrasings for better recall coverage.
 pub async fn expand_query(cfg: &AiConfig, query: &str) -> Vec<String> {
     match llm_chat_as(cfg, "expand", EXPAND_PROMPT, query).await {
         Ok(text) => text
             .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty() && l.len() > 2)
+            .map(|l| l.trim().trim_start_matches("- ").trim().to_string())
+            .filter(|l| {
+                // Skip empty, too short, or meta-commentary lines
+                !l.is_empty() && l.len() > 2
+                    && !l.contains("过于简洁")
+                    && !l.contains("缺乏上下文")
+                    && !l.contains("无法生成")
+                    && !l.starts_with("这个查询")
+                    && !l.starts_with("该查询")
+                    && !l.starts_with("注意")
+                    && !l.starts_with("Note:")
+            })
             .take(5)
             .collect(),
         Err(_) => vec![],
@@ -558,18 +570,45 @@ mod tests {
     #[test]
     fn expand_output_parsing() {
         // Simulates what expand_query does to LLM output
-        let raw = "连接池实现方案\nr2d2 SQLite pool\n\nab\n数据库并发访问\n";
-        let parsed: Vec<String> = raw
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty() && l.len() > 2)
-            .take(5)
-            .collect();
+        let parse = |raw: &str| -> Vec<String> {
+            raw.lines()
+                .map(|l| l.trim().trim_start_matches("- ").trim().to_string())
+                .filter(|l| {
+                    !l.is_empty() && l.len() > 2
+                        && !l.contains("过于简洁")
+                        && !l.contains("缺乏上下文")
+                        && !l.contains("无法生成")
+                        && !l.starts_with("这个查询")
+                        && !l.starts_with("该查询")
+                        && !l.starts_with("注意")
+                        && !l.starts_with("Note:")
+                })
+                .take(5)
+                .collect()
+        };
+
+        // Normal case
+        let parsed = parse("连接池实现方案\nr2d2 SQLite pool\n\nab\n数据库并发访问\n");
         assert_eq!(parsed, vec![
             "连接池实现方案",
             "r2d2 SQLite pool",
             "数据库并发访问",
         ]);
-        // "ab" filtered out (len <= 2)
+
+        // Meta-commentary filtered out
+        let parsed = parse("这个查询过于简洁，无法生成有意义的替代搜索短语。\n\"alice是谁\" 缺乏上下文，可能指：\n- 某个具体的人名\n- 项目/产品代号\n- 团队成员昵称");
+        assert_eq!(parsed, vec![
+            "某个具体的人名",
+            "项目/产品代号",
+            "团队成员昵称",
+        ]);
+
+        // Dash-prefixed lines cleaned
+        let parsed = parse("- alice的身份信息\n- alice是什么角色\n- 关于alice的描述");
+        assert_eq!(parsed, vec![
+            "alice的身份信息",
+            "alice是什么角色",
+            "关于alice的描述",
+        ]);
     }
 }
