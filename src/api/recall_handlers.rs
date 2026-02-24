@@ -497,7 +497,34 @@ pub(super) async fn do_resume(
     // Core: 45% cap of total budget
     let core_cap = if budget_val == 0 { usize::MAX } else { budget_val * 45 / 100 };
     let mut core_budget = main_budget.min(core_cap);
-    let core_out = fit_section(&core, &mut core_budget, compact);
+
+    // Estimate cost of full Core listing. If it would blow the budget,
+    // check for a pre-computed summary from consolidation.
+    let core_overhead = if compact { 20usize } else { 250 };
+    let core_total_cost: usize = core.iter()
+        .map(|m| m.content.len() + core_overhead)
+        .sum();
+
+    let (core_out, core_summary_used) = if core_total_cost > core_budget && core.len() >= 10 {
+        // Try the cached summary
+        let db_sum = state.db.clone();
+        let summary = tokio::task::spawn_blocking(move || db_sum.get_meta("core_summary"))
+            .await
+            .unwrap_or(None);
+        if let Some(ref s) = summary {
+            if s.len() + core_overhead < core_budget {
+                core_budget -= s.len() + core_overhead;
+                (vec![], true)
+            } else {
+                // Summary itself doesn't fit — fall back to hard truncation
+                (fit_section(&core, &mut core_budget, compact), false)
+            }
+        } else {
+            (fit_section(&core, &mut core_budget, compact), false)
+        }
+    } else {
+        (fit_section(&core, &mut core_budget, compact), false)
+    };
     budget_left = budget_left.saturating_sub(main_budget.min(core_cap) - core_budget);
 
     // Sessions + next_actions come before Working — continuity matters more
@@ -554,15 +581,35 @@ pub(super) async fn do_resume(
         });
     }
 
+    // Read the summary text if we decided to use it
+    let core_summary_text = if core_summary_used {
+        let db_s = state.db.clone();
+        tokio::task::spawn_blocking(move || db_s.get_meta("core_summary"))
+            .await.unwrap_or(None)
+    } else {
+        None
+    };
+
+    let core_json = if let Some(ref summary) = core_summary_text {
+        // Single summary entry instead of individual memories
+        serde_json::json!([{"content": summary, "kind": "summary", "tags": ["core-summary"]}])
+    } else {
+        serde_json::json!(to_json(&core_out))
+    };
+
+    let core_count = if core_summary_used { core.len() } else { core_out.len() };
+
     Ok(Json(serde_json::json!({
-        "core": to_json(&core_out),
+        "core": core_json,
         "working": to_json(&working_out),
         "buffer": to_json(&buffer_out),
         "recent": to_json(&recent_out),
         "sessions": to_json(&sessions_out),
         "next_actions": parsed_actions,
         "hours": hours,
-        "core_count": core_out.len(),
+        "core_count": core_count,
+        "core_total": core.len(),
+        "core_summary_used": core_summary_used,
         "working_count": working_out.len(),
         "buffer_count": buffer_out.len(),
         "recent_count": recent_out.len(),
