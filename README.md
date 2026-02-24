@@ -180,7 +180,7 @@ The proxy is selective — routine task details are skipped. Only user preferenc
 
 ### Session Recovery
 
-One call to restore agent context on wake-up:
+One call to restore agent context on wake-up or after context compaction:
 
 ```bash
 # Full resume
@@ -193,6 +193,11 @@ curl 'http://localhost:3917/resume?hours=4&compact=true&budget=16000'
 Returns structured sections: `core` (identity/permanent), `working` (active context), `recent` (time-windowed), `sessions` (session notes), `next_actions` (tagged next-action).
 
 `compact=true` strips metadata, `budget=N` caps total output characters (default 16000, ~4K tokens). When budget is tight, top items stay full-length while lower-priority items compress to one-line summaries. Core memories are relevance-filtered against current session context — identity and constraints always included, unrelated knowledge is omitted.
+
+**When to call resume:**
+- On session start (new conversation, fresh context)
+- After context compaction (summaries are lossy — resume restores details)
+- On heartbeat / cron wake-up
 
 ### Namespace Isolation
 
