@@ -95,9 +95,18 @@ label { font-size:11px; color:#888; }
 .pager button:disabled { opacity:.3; }
 .card { background:#1a1a1a; border:1px solid #252525; border-radius:6px; padding:14px 16px; margin-bottom:10px; }
 
+.ns-bar { padding:6px 8px; border-bottom:1px solid #252525; }
+.ns-label { font-size:9px; color:#555; text-transform:uppercase; letter-spacing:.5px; margin-bottom:3px; }
+.ns-cur { font-size:11px; font-weight:600; color:#5b9cf5; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ns-sel { width:100%; background:#1a1a1a; border:1px solid #2a2a2a; border-radius:4px; padding:3px 6px; color:#ccc; font-size:11px; outline:none; cursor:pointer; }
+.ns-sel:focus { border-color:#555; }
+.ns-inp { width:100%; background:#1a1a1a; border:1px solid #2a2a2a; border-radius:4px; padding:3px 6px; color:#ccc; font-size:11px; outline:none; margin-top:4px; display:none; }
+.ns-inp:focus { border-color:#5b9cf5; }
+.ns-inp.show { display:block; }
+
 @media(max-width:768px) {
   .sidebar { width:48px; }
-  .sidebar h1, .nav .nl, .nav .ct, .sidebar-footer, .nav-group-label { display:none; }
+  .sidebar h1, .nav .nl, .nav .ct, .sidebar-footer, .nav-group-label, .ns-bar { display:none; }
   .detail { width:100%; }
 }
 </style>
@@ -106,6 +115,15 @@ label { font-size:11px; color:#888; }
 <div class="app">
 <div class="sidebar">
   <h1>engram<small id="ver"></small></h1>
+  <div class="ns-bar">
+    <div class="ns-label">Namespace</div>
+    <div class="ns-cur" id="nsCurrent">default</div>
+    <select class="ns-sel" id="nsSelect" onchange="onNsSelect(this.value)">
+      <option value="default">default</option>
+      <option value="__custom__">✚ Custom...</option>
+    </select>
+    <input class="ns-inp" id="nsInput" type="text" placeholder="namespace name" onkeydown="if(event.key==='Enter')applyCustomNs()">
+  </div>
   <div class="nav-group">
     <div class="nav-group-label">Memory</div>
     <ul class="nav" id="nav">
@@ -168,8 +186,10 @@ function toast(msg,ok=true){
 
 async function api(path,opts={}){
   const tk=localStorage.getItem('engram_token')||'';
+  const ns=localStorage.getItem('engram_namespace')||'';
   const h={'Content-Type':'application/json',...opts.headers};
   if(tk)h['Authorization']='Bearer '+tk;
+  if(ns&&ns!=='default')h['X-Namespace']=ns;
   const res=await fetch(A+path,{...opts,headers:h});
   if(res.status===401){
     const t=prompt('Auth token:');
@@ -181,6 +201,70 @@ async function api(path,opts={}){
   try{return JSON.parse(text);}catch{return text;}
 }
 
+/* --- Namespace management --- */
+let knownNs=['default'];
+
+function getCurNs(){return localStorage.getItem('engram_namespace')||'default';}
+
+function updateNsUI(){
+  const ns=getCurNs();
+  document.getElementById('nsCurrent').textContent=ns;
+  const sel=document.getElementById('nsSelect');
+  sel.value=knownNs.includes(ns)?ns:'__custom__';
+}
+
+function updateNsList(statsData){
+  if(statsData&&statsData.namespaces){
+    const names=Object.keys(statsData.namespaces).sort();
+    if(names.length) knownNs=names;
+  }
+  const sel=document.getElementById('nsSelect');
+  const cur=getCurNs();
+  sel.innerHTML=knownNs.map(n=>'<option value="'+esc(n)+'">'+esc(n)+'</option>').join('')+
+    '<option value="__custom__">✚ Custom...</option>';
+  if(knownNs.includes(cur)) sel.value=cur;
+  else sel.value='__custom__';
+  updateNsUI();
+}
+
+function onNsSelect(v){
+  const inp=document.getElementById('nsInput');
+  if(v==='__custom__'){
+    inp.classList.add('show');inp.value='';inp.focus();
+    return;
+  }
+  inp.classList.remove('show');
+  setNamespace(v);
+}
+
+function applyCustomNs(){
+  const v=document.getElementById('nsInput').value.trim();
+  if(!v)return;
+  document.getElementById('nsInput').classList.remove('show');
+  if(!knownNs.includes(v))knownNs.push(v);
+  const sel=document.getElementById('nsSelect');
+  sel.innerHTML=knownNs.map(n=>'<option value="'+esc(n)+'">'+esc(n)+'</option>').join('')+
+    '<option value="__custom__">✚ Custom...</option>';
+  setNamespace(v);
+}
+
+function setNamespace(ns){
+  const prev=getCurNs();
+  if(ns===prev)return;
+  localStorage.setItem('engram_namespace',ns);
+  updateNsUI();
+  toast('Namespace → '+ns);
+  refresh();
+}
+
+// Restore saved namespace on load
+(function initNs(){
+  const saved=getCurNs();
+  if(saved&&saved!=='default'){
+    document.getElementById('nsCurrent').textContent=saved;
+  }
+})();
+
 async function loadStats(){
   const[s,h]=await Promise.all([api('/stats'),api('/health')]);
   stats=s;health=h;
@@ -189,6 +273,15 @@ async function loadStats(){
   document.getElementById('c-wrk').textContent=s.working;
   document.getElementById('c-cor').textContent=s.core;
   document.getElementById('ver').textContent=' v'+(h.version||'?');
+  // Fetch global stats (without namespace header) to get full namespace list
+  try{
+    const tk=localStorage.getItem('engram_token')||'';
+    const gh={'Content-Type':'application/json'};
+    if(tk)gh['Authorization']='Bearer '+tk;
+    const gRes=await fetch(A+'/stats',{headers:gh});
+    const gStats=await gRes.json();
+    updateNsList(gStats);
+  }catch(_){updateNsList(s);}
 }
 
 async function loadMem(){
@@ -776,7 +869,11 @@ async function doExtract(){
 }
 async function doExport(embed){
   const tk=localStorage.getItem('engram_token')||'';
-  const res=await fetch(A+'/export'+(embed?'?embed=true':''),{headers:tk?{'Authorization':'Bearer '+tk}:{}});
+  const ns=localStorage.getItem('engram_namespace')||'';
+  const hdrs={};
+  if(tk)hdrs['Authorization']='Bearer '+tk;
+  if(ns&&ns!=='default')hdrs['X-Namespace']=ns;
+  const res=await fetch(A+'/export'+(embed?'?embed=true':''),{headers:hdrs});
   const blob=await res.blob();const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);a.download='engram-export.json';a.click();toast('Downloaded');
 }
@@ -903,8 +1000,10 @@ async function testMemoryCrud(){
     // verify 404
     try{
       const tk=localStorage.getItem('engram_token')||'';
+      const ns=localStorage.getItem('engram_namespace')||'';
       const h={'Content-Type':'application/json'};
       if(tk)h['Authorization']='Bearer '+tk;
+      if(ns&&ns!=='default')h['X-Namespace']=ns;
       const res=await fetch(A+'/memories/'+m.id,{headers:h});
       assert(res.status===404,'delete: expected 404 got '+res.status);
     }catch(e){if(e.message.startsWith('delete:'))throw e;}
