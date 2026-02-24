@@ -95,6 +95,16 @@ impl<'a> RuleChecker<'a> {
             };
         }
 
+        // Rule: never delete lesson/audit/procedural memories (unless exact duplicates — handled by merge)
+        if mem.tags.iter().any(|t| t == "lesson" || t == "audit" || t == "sandbox")
+            || mem.kind.as_deref() == Some("procedural")
+        {
+            return OpGrade {
+                op: op.clone(), grade: Grade::Bad,
+                reason: format!("deleting protected memory (tags: {:?}, kind: {:?})", mem.tags, mem.kind),
+            };
+        }
+
         // Rule: never delete recently modified memories (24h)
         // Uses modified_at — immune to resume touch inflation on last_accessed.
         let mod_age_h = if mem.modified_at > 0 {
@@ -208,12 +218,20 @@ impl<'a> RuleChecker<'a> {
             };
         }
 
-        // Rule: promoting to Core with ac=0 is suspicious (no proven value)
+        // Rule: promoting to Core with ac=0 is suspicious UNLESS recently created with lesson/constraint content
         if to == 3 && mem.access_count == 0 {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Marginal,
-                reason: "promoting to Core with zero accesses — unproven value".into(),
-            };
+            let age_h = (self.now_ms - mem.created_at) as f64 / 3_600_000.0;
+            let is_lesson_content = mem.tags.iter().any(|t| t == "lesson" || t == "constraint")
+                || mem.content.to_lowercase().contains("lesson")
+                || mem.content.to_lowercase().contains("教训")
+                || mem.content.to_lowercase().contains("原则")
+                || mem.content.to_lowercase().contains("严禁");
+            if !(age_h < 48.0 && is_lesson_content) {
+                return OpGrade {
+                    op: op.clone(), grade: Grade::Marginal,
+                    reason: "promoting to Core with zero accesses — unproven value".into(),
+                };
+            }
         }
 
         // Rule: promoting gate-rejected-final should not happen
