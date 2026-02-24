@@ -697,11 +697,11 @@ mod tests {
     }
 
     #[test]
-    fn strip_boilerplate_removes_code_blocks() {
+    fn strip_boilerplate_keeps_code_blocks() {
         let input = "User: hey\n```bash\ncurl http://localhost:3917/stats\n```\nUser: done";
         let result = strip_boilerplate(input);
         assert!(result.contains("hey"));
-        assert!(!result.contains("curl"));
+        assert!(result.contains("curl"), "code blocks should be preserved — they contain useful output");
         assert!(result.contains("done"));
     }
 
@@ -722,12 +722,12 @@ mod tests {
     }
 
     #[test]
-    fn strip_boilerplate_handles_nested_code_blocks() {
+    fn strip_boilerplate_keeps_nested_code_blocks() {
         let input = "User: test\n```json\n{\"key\": \"value\"}\n```\nmore text\n```python\nprint('hi')\n```\nUser: end";
         let result = strip_boilerplate(input);
         assert!(result.contains("test"));
-        assert!(!result.contains("key"));
-        assert!(!result.contains("print"));
+        assert!(result.contains("key"), "code blocks preserved");
+        assert!(result.contains("print"), "code blocks preserved");
         assert!(result.contains("end"));
     }
 
