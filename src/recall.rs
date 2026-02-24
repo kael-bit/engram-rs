@@ -404,14 +404,8 @@ pub fn recall(
             continue;
         }
         let tokens = estimate_tokens(&sm.memory.content);
-        if total_tokens + tokens > budget {
-            // always return at least one result, unless budget is explicitly 0
-            if budget == 0 {
-                break;
-            }
-            if !selected.is_empty() {
-                continue;
-            }
+        if total_tokens + tokens > budget && (budget == 0 || !selected.is_empty()) {
+            break;
         }
         if selected.len() >= limit {
             break;
