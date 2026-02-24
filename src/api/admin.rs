@@ -259,7 +259,7 @@ pub(super) async fn do_import(
 
     Ok(Json(serde_json::json!({
         "imported": imported,
-        "skipped": memories_val.as_array().map(|a| a.len()).unwrap_or(0).saturating_sub(imported),
+        "skipped": memories_val.as_array().map(std::vec::Vec::len).unwrap_or(0).saturating_sub(imported),
     })))
 }
 

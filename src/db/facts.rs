@@ -79,7 +79,7 @@ impl MemoryDB {
     /// By default only returns active facts (valid_until IS NULL).
     pub fn query_facts(&self, entity: &str, namespace: &str, include_superseded: bool) -> Result<Vec<Fact>, EngramError> {
         let tokens: Vec<&str> = entity.split(|c: char| c.is_whitespace() || c == '的' || c == '，' || c == ',')
-            .map(|s| s.trim())
+            .map(str::trim)
             .filter(|s| !s.is_empty())
             .collect();
         if tokens.is_empty() {
@@ -247,7 +247,7 @@ impl MemoryDB {
                 source: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
                 tags: {
                     let raw: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
-                    if raw.is_empty() { vec![] } else { raw.split(',').map(|s| s.to_string()).collect() }
+                    if raw.is_empty() { vec![] } else { raw.split(',').map(std::string::ToString::to_string).collect() }
                 },
                 namespace: row.get::<_, Option<String>>(10)?.unwrap_or_else(|| "default".into()),
                 repetition_count: row.get::<_, Option<i64>>(11)?.unwrap_or(0),

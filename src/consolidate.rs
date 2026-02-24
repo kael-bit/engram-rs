@@ -1056,7 +1056,7 @@ fn parse_audit_ops(
             "promote" => {
                 if let (Some(id), Some(to)) = (
                     item.get("id").and_then(|v| v.as_str()).and_then(&resolve),
-                    item.get("to").and_then(|v| v.as_u64()).map(|n| n as u8),
+                    item.get("to").and_then(serde_json::Value::as_u64).map(|n| n as u8),
                 ) {
                     if (1..=3).contains(&to) { ops.push(AuditOp::Promote { id, to }); }
                 }
@@ -1064,7 +1064,7 @@ fn parse_audit_ops(
             "demote" => {
                 if let (Some(id), Some(to)) = (
                     item.get("id").and_then(|v| v.as_str()).and_then(&resolve),
-                    item.get("to").and_then(|v| v.as_u64()).map(|n| n as u8),
+                    item.get("to").and_then(serde_json::Value::as_u64).map(|n| n as u8),
                 ) {
                     if (1..=3).contains(&to) { ops.push(AuditOp::Demote { id, to }); }
                 }
@@ -1080,7 +1080,7 @@ fn parse_audit_ops(
                     .map(|a| a.iter().filter_map(|v| v.as_str().and_then(&resolve)).collect())
                     .unwrap_or_default();
                 let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let layer = item.get("layer").and_then(|v| v.as_u64()).unwrap_or(2) as u8;
+                let layer = item.get("layer").and_then(serde_json::Value::as_u64).unwrap_or(2) as u8;
                 let tags: Vec<String> = item.get("tags")
                     .and_then(|v| v.as_array())
                     .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())

@@ -54,7 +54,7 @@ fn get_namespace(headers: &axum::http::HeaderMap) -> Option<String> {
     headers
         .get("x-namespace")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .filter(|s| !s.is_empty())
 }
 

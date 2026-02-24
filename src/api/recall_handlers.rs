@@ -375,7 +375,7 @@ pub(super) async fn do_recall(
     }
 
     let do_rerank =
-        req.rerank.unwrap_or(false) && state.ai.as_ref().is_some_and(|c| c.has_llm());
+        req.rerank.unwrap_or(false) && state.ai.as_ref().is_some_and(super::super::ai::AiConfig::has_llm);
     let query_text = req.query.clone();
     let final_limit = req.limit.unwrap_or(20).min(100);
 
@@ -387,7 +387,7 @@ pub(super) async fn do_recall(
         if cfg.has_embed() {
             // check cache first
             let cached = {
-                let mut cache = state.embed_cache.lock().unwrap_or_else(|e| e.into_inner());
+                let mut cache = state.embed_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 cache.get(&query_text).cloned()
             };
             if let Some(emb) = cached {
@@ -398,7 +398,7 @@ pub(super) async fn do_recall(
                     Ok(mut v) => {
                         let emb = v.pop();
                         if let Some(ref e) = emb {
-                            let mut cache = state.embed_cache.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut cache = state.embed_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                             cache.put(query_text.clone(), e.clone());
                         }
                         emb
@@ -418,7 +418,7 @@ pub(super) async fn do_recall(
 
     let explicit_expand = req.expand;
     let do_expand =
-        explicit_expand.unwrap_or(false) && state.ai.as_ref().is_some_and(|c| c.has_llm());
+        explicit_expand.unwrap_or(false) && state.ai.as_ref().is_some_and(super::super::ai::AiConfig::has_llm);
     let expanded = if do_expand {
         if let Some(ref cfg) = state.ai {
             let q = ai::expand_query(cfg, &query_text).await;
@@ -446,7 +446,7 @@ pub(super) async fn do_recall(
     // auto-expand: if expand wasn't explicitly set and top result is weak, retry with expansion
     let auto_expanded;
     if explicit_expand.is_none()
-        && state.ai.as_ref().is_some_and(|c| c.has_llm())
+        && state.ai.as_ref().is_some_and(super::super::ai::AiConfig::has_llm)
         && result.memories.first().is_none_or(|m| m.relevance < 0.4)
     {
         if let Some(ref cfg) = state.ai {

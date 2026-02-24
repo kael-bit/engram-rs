@@ -339,7 +339,7 @@ pub fn recall(
             words.iter()
                 .map(|w| w.trim())
                 .filter(|w| w.chars().count() >= 2)
-                .map(|w| w.to_lowercase())
+                .map(str::to_lowercase)
                 .collect()
         };
 

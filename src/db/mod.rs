@@ -605,7 +605,7 @@ fn tokenize_for_dedup(text: &str) -> std::collections::HashSet<String> {
         // Latin + kana/hangul bigrams
         let mut tokens: std::collections::HashSet<String> = text
             .split_whitespace()
-            .map(|w| w.to_lowercase())
+            .map(str::to_lowercase)
             .collect();
         let chars: Vec<char> = text.chars().collect();
         for i in 0..chars.len().saturating_sub(1) {

@@ -32,7 +32,7 @@ impl MemoryDB {
             let namespace: String = row.get(2)?;
             Ok((id, VecEntry { emb: crate::ai::bytes_to_embedding(&blob), namespace }))
         })
-        .map(|iter| iter.filter_map(|r| r.ok()).collect())
+        .map(|iter| iter.filter_map(std::result::Result::ok).collect())
         .unwrap_or_default();
 
         if let Ok(mut idx) = self.vec_index.write() {
@@ -86,7 +86,7 @@ impl MemoryDB {
             Ok(mem)
         })
         .map(|iter| {
-            iter.filter_map(|r| r.ok())
+            iter.filter_map(std::result::Result::ok)
                 .filter_map(|m| {
                     let emb = m.embedding.clone()?;
                     Some((m, emb))
@@ -179,7 +179,7 @@ impl MemoryDB {
         stmt.query_map(params![limit as i64], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .map(|rows| rows.filter_map(std::result::Result::ok).collect())
         .unwrap_or_default()
     }
 

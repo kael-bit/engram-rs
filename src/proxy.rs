@@ -20,7 +20,7 @@ static PROXY_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static PROXY_EXTRACTED: AtomicU64 = AtomicU64::new(0);
 
 pub fn proxy_stats(db: Option<&db::MemoryDB>) -> (u64, u64, usize) {
-    let buffered = db.map(|d| d.proxy_turn_count()).unwrap_or(0);
+    let buffered = db.map(super::db::MemoryDB::proxy_turn_count).unwrap_or(0);
     (
         PROXY_REQUESTS.load(Ordering::Relaxed),
         PROXY_EXTRACTED.load(Ordering::Relaxed),

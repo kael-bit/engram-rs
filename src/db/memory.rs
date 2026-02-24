@@ -248,7 +248,7 @@ impl MemoryDB {
         let pattern = format!("{}%", prefix);
         let mut stmt = conn.prepare("SELECT id FROM memories WHERE id LIKE ?1 LIMIT 2")?;
         let ids: Vec<String> = stmt.query_map(params![pattern], |row| row.get(0))?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
         match ids.len() {
             0 => Err(EngramError::NotFound),
@@ -282,7 +282,7 @@ impl MemoryDB {
         // Collect IDs to remove from vec index
         let mut stmt = conn.prepare("SELECT id FROM memories WHERE namespace = ?1")?;
         let ids: Vec<String> = stmt.query_map(params![ns], |row| row.get(0))?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
         drop(stmt);
 
@@ -329,7 +329,7 @@ impl MemoryDB {
                 source: row.get(8)?,
                 kind: row.get(9)?,
             })
-        })?.filter_map(|r| r.ok()).collect();
+        })?.filter_map(std::result::Result::ok).collect();
         Ok(rows)
     }
 
@@ -447,10 +447,10 @@ impl MemoryDB {
             sql += &format!(" AND namespace = ?{}", params.len());
         }
         sql += " ORDER BY importance DESC LIMIT ?2 OFFSET ?3";
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(std::convert::AsRef::as_ref).collect();
         let Ok(mut stmt) = conn.prepare(&sql) else { return vec![]; };
         stmt.query_map(param_refs.as_slice(), row_to_memory_meta)
-            .map(|iter| iter.filter_map(|r| r.ok()).collect())
+            .map(|iter| iter.filter_map(std::result::Result::ok).collect())
             .unwrap_or_default()
     }
 
@@ -465,7 +465,7 @@ impl MemoryDB {
         };
         stmt.query_map([], row_to_memory_meta)
             .map(|iter| {
-                iter.filter_map(|r| r.ok())
+                iter.filter_map(std::result::Result::ok)
                     .filter(|m| {
                         let hours = (now - m.last_accessed) as f64 / 3_600_000.0;
                         let score = m.importance * (-m.decay_rate * hours / 168.0).exp();
@@ -532,10 +532,10 @@ impl MemoryDB {
 
         let mut stmt = conn.prepare(&sql)?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
+            params_vec.iter().map(std::convert::AsRef::as_ref).collect();
         let rows: Vec<Memory> = stmt
             .query_map(param_refs.as_slice(), row_to_memory)?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
         Ok(rows)
     }
@@ -589,10 +589,10 @@ impl MemoryDB {
 
         let mut stmt = conn.prepare(&sql)?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
+            params_vec.iter().map(std::convert::AsRef::as_ref).collect();
         let rows = stmt
             .query_map(param_refs.as_slice(), row_to_memory)?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
         Ok(rows)
     }
@@ -607,7 +607,7 @@ impl MemoryDB {
                  ORDER BY created_at DESC",
             )?;
             let rows = stmt.query_map(params![pattern, ns], row_to_memory)?
-                .filter_map(|r| r.ok())
+                .filter_map(std::result::Result::ok)
                 .collect();
             Ok(rows)
         } else {
@@ -616,7 +616,7 @@ impl MemoryDB {
                  ORDER BY created_at DESC",
             )?;
             let rows = stmt.query_map(params![pattern], row_to_memory)?
-                .filter_map(|r| r.ok())
+                .filter_map(std::result::Result::ok)
                 .collect();
             Ok(rows)
         }
@@ -796,7 +796,7 @@ impl MemoryDB {
                 "UPDATE memories SET {} WHERE id=?",
                 set_clauses.join(", ")
             );
-            let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
+            let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(std::convert::AsRef::as_ref).collect();
             self.conn()?.execute(&sql, params.as_slice())?;
         }
 
@@ -834,7 +834,7 @@ impl MemoryDB {
         let mapper = if include { row_to_memory_with_embedding } else { row_to_memory };
         let rows = stmt
             .query_map([], mapper)?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
         Ok(rows)
     }
