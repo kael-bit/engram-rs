@@ -300,7 +300,7 @@ function card(m,score,rel){
   return`<div class="mc" data-id="${m.id}">
     <div class="ct">${esc((m.content||'').slice(0,280))}${m.content&&m.content.length>280?'…':''}</div>
     <div class="meta"><span class="lb l${m.layer}">${ln(m.layer)}</span>${sc}${rl}${kind}
-      <span>imp ${(m.importance||0).toFixed(2)}</span><span>×${m.access_count||0}</span>
+      <span>imp ${(m.importance||0).toFixed(2)}</span><span>ac ${m.access_count||0}</span>${m.repetition_count?`<span>rep ${m.repetition_count}</span>`:''}
       <span>${ago(m.created_at)}</span>${tags}</div></div>`;
 }
 
