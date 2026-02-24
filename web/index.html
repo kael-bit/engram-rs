@@ -254,7 +254,7 @@ function changeSort(v){sortBy=v;page=0;switchView(curView);}
 function applyFilter(){
   const q=(document.getElementById('flt')||{}).value||'';
   let mems=getMem();
-  if(q){const ql=q.toLowerCase();mems=mems.filter(m=>(m.content||'').toLowerCase().includes(ql)||(m.tags||[]).some(t=>t.toLowerCase().includes(ql))||m.id.startsWith(ql));}
+  if(q){const ql=q.toLowerCase();mems=mems.filter(m=>(m.content||'').toLowerCase().includes(ql)||(m.tags||[]).some(t=>t.toLowerCase().includes(ql))||m.id.startsWith(ql)||(m.kind||'').toLowerCase().includes(ql));}
   const el=document.getElementById('memList');
   if(el){el.innerHTML=sortMem(mems).slice(0,PP).map(m=>card(m)).join('')||'<div class="empty">No matches</div>';bindCards();}
 }
