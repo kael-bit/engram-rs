@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::debug;
 
+use crate::error::EngramError;
+
+fn ai_err(msg: impl Into<String>) -> EngramError {
+    EngramError::AiBackend(msg.into())
+}
+
 const AI_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
@@ -151,12 +157,12 @@ struct ToolCallFunction {
 
 /// Send a chat completion request, return the response text.
 #[allow(dead_code)]
-pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String, String> {
+pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String, EngramError> {
     llm_chat_as(cfg, "", system, user).await
 }
 
 /// Like llm_chat but uses a component-specific model if configured.
-pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &str) -> Result<String, String> {
+pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &str) -> Result<String, EngramError> {
     let model = cfg.model_for(component).to_string();
     let req = ChatRequest {
         model,
@@ -177,17 +183,17 @@ pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &s
     let resp = builder
         .send()
         .await
-        .map_err(|e| format!("LLM request failed: {e}"))?;
+        .map_err(|e| ai_err(format!("LLM request failed: {e}")))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("LLM returned {status}: {body}"));
+        return Err(ai_err(format!("LLM returned {status}: {body}")));
     }
 
     let chat: ChatResponse = resp
         .json()
         .await
-        .map_err(|e| format!("LLM response parse failed: {e}"))?;
+        .map_err(|e| ai_err(format!("LLM response parse failed: {e}")))?;
     Ok(chat
         .choices
         .first()
@@ -205,7 +211,7 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
     fn_name: &str,
     fn_desc: &str,
     parameters: serde_json::Value,
-) -> Result<T, String> {
+) -> Result<T, EngramError> {
     let model = cfg.model_for(component).to_string();
     let req = ChatRequest {
         model,
@@ -233,26 +239,26 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
     let resp = builder
         .send()
         .await
-        .map_err(|e| format!("LLM tool call failed: {e}"))?;
+        .map_err(|e| ai_err(format!("LLM tool call failed: {e}")))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("LLM returned {status}: {body}"));
+        return Err(ai_err(format!("LLM returned {status}: {body}")));
     }
 
     let chat: ChatResponse = resp
         .json()
         .await
-        .map_err(|e| format!("LLM tool response parse failed: {e}"))?;
+        .map_err(|e| ai_err(format!("LLM tool response parse failed: {e}")))?;
 
     let args = chat.choices.first()
         .and_then(|c| c.message.tool_calls.as_ref())
         .and_then(|tc| tc.first())
         .map(|tc| tc.function.arguments.clone())
-        .ok_or_else(|| "no tool call in response".to_string())?;
+        .ok_or_else(|| ai_err("no tool call in response"))?;
 
     serde_json::from_str(&args)
-        .map_err(|e| format!("tool call arguments parse failed: {e}: {args}"))
+        .map_err(|e| ai_err(format!("tool call arguments parse failed: {e}: {args}")))
 }
 
 const EXPAND_PROMPT: &str = "Given a search query for a PERSONAL knowledge base (notes, decisions, logs), \
@@ -345,7 +351,7 @@ HARD REJECT — NEVER extract these as memories (they are scaffolding, not knowl
 pub async fn extract_memories(
     cfg: &AiConfig,
     text: &str,
-) -> Result<Vec<ExtractedMemory>, String> {
+) -> Result<Vec<ExtractedMemory>, EngramError> {
     debug!(model = %cfg.model_for("extract"), "extracting memories");
 
     let schema = serde_json::json!({
@@ -432,7 +438,7 @@ struct EmbedData {
 pub async fn get_embeddings(
     cfg: &AiConfig,
     texts: &[String],
-) -> Result<Vec<Vec<f64>>, String> {
+) -> Result<Vec<Vec<f64>>, EngramError> {
     if texts.is_empty() {
         return Ok(vec![]);
     }
@@ -450,25 +456,25 @@ pub async fn get_embeddings(
     let resp = builder
         .send()
         .await
-        .map_err(|e| format!("embedding request failed: {e}"))?;
+        .map_err(|e| ai_err(format!("embedding request failed: {e}")))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("embedding API returned {status}: {body}"));
+        return Err(ai_err(format!("embedding API returned {status}: {body}")));
     }
 
     let embed_resp: EmbedResponse = resp
         .json()
         .await
-        .map_err(|e| format!("embedding response parse failed: {e}"))?;
+        .map_err(|e| ai_err(format!("embedding response parse failed: {e}")))?;
 
     let embeddings: Vec<Vec<f64>> = embed_resp.data.into_iter().map(|d| d.embedding).collect();
     if embeddings.len() != texts.len() {
-        return Err(format!(
+        return Err(ai_err(format!(
             "embedding count mismatch: sent {} texts, got {} embeddings",
             texts.len(),
             embeddings.len()
-        ));
+        )));
     }
     Ok(embeddings)
 }

@@ -431,7 +431,7 @@ struct GateResult {
     kind: Option<String>,
 }
 
-async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<(bool, Option<String>), String> {
+async fn llm_promotion_gate(cfg: &AiConfig, content: &str) -> Result<(bool, Option<String>), EngramError> {
     let truncated = if content.len() > 500 {
         &content[..content.char_indices().take(500).last()
             .map(|(i, c)| i + c.len_utf8()).unwrap_or(500)]
@@ -1259,13 +1259,13 @@ Your job: reorganize them. Output a JSON array of operations.
 
 /// Full audit: reviews Core+Working memories using the gate model.
 /// Chunks automatically if total prompt would exceed ~100K chars.
-pub async fn audit_memories(cfg: &AiConfig, db: &crate::SharedDB) -> Result<AuditResult, String> {
+pub async fn audit_memories(cfg: &AiConfig, db: &crate::SharedDB) -> Result<AuditResult, EngramError> {
     let db2 = db.clone();
     let (core, working) = tokio::task::spawn_blocking(move || {
         let c = db2.list_by_layer_meta(crate::db::Layer::Core, 500, 0).unwrap_or_default();
         let w = db2.list_by_layer_meta(crate::db::Layer::Working, 500, 0).unwrap_or_default();
         (c, w)
-    }).await.map_err(|e| format!("spawn failed: {e}"))?;
+    }).await.map_err(|e| EngramError::Internal(format!("spawn failed: {e}")))?;
 
     let all: Vec<&crate::db::Memory> = core.iter().chain(working.iter()).collect();
 

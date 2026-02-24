@@ -32,7 +32,7 @@ pub(super) async fn do_audit(
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let ai = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
     let result = consolidate::audit_memories(ai, &state.db).await
-        .map_err(EngramError::AiBackend)?;
+        ?;
     Ok(Json(serde_json::to_value(result).unwrap_or_default()))
 }
 
@@ -148,7 +148,7 @@ pub(super) async fn do_extract(
 
     let extracted = ai::extract_memories(cfg, &req.text)
         .await
-        .map_err(EngramError::AiBackend)?;
+        ?;
 
     let auto_embed = req.auto_embed.unwrap_or(true);
     let mut memories = Vec::new();

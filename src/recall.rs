@@ -2,6 +2,7 @@
 
 use crate::ai::{self, AiConfig};
 use crate::db::{is_cjk, Layer, Memory, MemoryDB, ScoredMemory};
+use crate::error::EngramError;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
@@ -612,7 +613,7 @@ pub async fn quick_semantic_dup(
     ai_cfg: &AiConfig,
     db: &MemoryDB,
     content: &str,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, EngramError> {
     quick_semantic_dup_threshold(ai_cfg, db, content, 0.78).await
 }
 
@@ -623,9 +624,9 @@ pub async fn quick_semantic_dup_threshold(
     db: &MemoryDB,
     content: &str,
     threshold: f64,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, EngramError> {
     let embeddings = ai::get_embeddings(ai_cfg, &[content.to_string()]).await?;
-    let emb = embeddings.first().ok_or("no embedding returned")?;
+    let emb = embeddings.first().ok_or_else(|| EngramError::AiBackend("no embedding returned".into()))?;
     let candidates = db.search_semantic(emb, 5);
     for (id, score) in &candidates {
         if *score > threshold {
