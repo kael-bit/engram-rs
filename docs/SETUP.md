@@ -104,8 +104,11 @@ Then add to the project's `CLAUDE.md`:
 
 You have persistent memory via engram MCP tools.
 
-### Every session start
+### Every session start or after context compaction
 Call `engram_resume` with hours=6 to restore context. Read the core and working sections — that's who you are and what you were doing.
+
+Compaction summaries are lossy — they drop details, lessons, and recent decisions.
+After any compaction event, immediately call `engram_resume` before continuing.
 
 ### When to store what
 
@@ -145,10 +148,12 @@ No build step needed. Add to the project's `CLAUDE.md`:
 You have persistent memory via engram at http://localhost:3917
 Auth: Bearer YOUR_API_KEY
 
-### Every session start (DO THIS FIRST)
+### Every session start or after context compaction (DO THIS FIRST)
 ```bash
 curl -sf -H "Authorization: Bearer YOUR_API_KEY" "http://localhost:3917/resume?hours=6&compact=true"
 ```
+
+Compaction summaries are lossy. After any compaction event, call resume again to restore details.
 
 ### When to store what
 
@@ -205,12 +210,15 @@ Add to `AGENTS.md` in the workspace:
 
 engram is your memory. Without it, every session starts from zero.
 
-### Every wake-up / heartbeat
+### Every wake-up / heartbeat / post-compaction
 Restore context first — nothing else matters until you know who you are:
   curl -s http://localhost:3917/resume?hours=6&compact=true
 
 Read the core section (identity, constraints, lessons) and working section (active context).
 If there are next_actions, that's your todo list.
+
+Compaction summaries are lossy — they drop details, lessons, and recent decisions.
+After any compaction event, resume from engram before continuing the conversation.
 
 ### When to store what
 
