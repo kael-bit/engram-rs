@@ -20,27 +20,26 @@ Before doing anything, ask:
 
 ## Step 1: Install engram
 
-### From source (Rust required)
+```bash
+# Linux / macOS
+curl -L https://github.com/kael-bit/engram-rs/releases/latest/download/engram-linux-x86_64 -o engram
+chmod +x engram
+sudo mv engram /usr/local/bin/
+
+# Windows (PowerShell)
+Invoke-WebRequest -Uri https://github.com/kael-bit/engram-rs/releases/latest/download/engram-windows-x86_64.exe -OutFile engram.exe
+```
+
+<details>
+<summary>Build from source (optional)</summary>
 
 ```bash
 git clone https://github.com/kael-bit/engram-rs.git
 cd engram-rs
 cargo build --release
+# Binary at ./target/release/engram (~9MB)
 ```
-
-Binary will be at `./target/release/engram` (~9MB).
-
-### Pre-built binary
-
-Download from [Releases](https://github.com/kael-bit/engram-rs/releases/latest):
-
-```bash
-# Linux
-curl -L https://github.com/kael-bit/engram-rs/releases/latest/download/engram-linux-x86_64 -o engram
-chmod +x engram
-
-# Windows — download engram-windows-x86_64.exe from the Releases page
-```
+</details>
 
 ## Step 2: Start engram
 
