@@ -244,6 +244,20 @@ pub struct FactInput {
     pub valid_from: Option<i64>,
 }
 
+/// A single step in a fact chain: subject → predicate → object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FactTriple {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+}
+
+/// An ordered chain of fact triples representing a multi-hop path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FactChain {
+    pub path: Vec<FactTriple>,
+}
+
 fn validate_fact_input(input: &FactInput) -> Result<(), EngramError> {
     if input.subject.trim().is_empty() || input.predicate.trim().is_empty() || input.object.trim().is_empty() {
         return Err(EngramError::Validation("fact subject/predicate/object must not be empty".into()));

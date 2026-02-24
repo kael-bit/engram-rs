@@ -13,6 +13,17 @@ const WEIGHT_RELEVANCE: f64 = 0.6;
 const WEIGHT_IMPORTANCE: f64 = 0.2;
 const WEIGHT_RECENCY: f64 = 0.2;
 
+/// Detect short CJK queries where cosine similarity is unreliable.
+///
+/// `text-embedding-3-small` produces uniformly high cosine scores for short
+/// Chinese queries (< 10 chars), making discrimination poor.  For these cases
+/// FTS keyword matching is a stronger signal than cosine.
+#[allow(dead_code)] // used by future CJK-aware recall path
+fn is_short_cjk_query(query: &str) -> bool {
+    let char_count = query.chars().count();
+    char_count > 0 && char_count < 10 && query.chars().any(is_cjk)
+}
+
 /// Recall request parameters.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct RecallRequest {
@@ -67,6 +78,9 @@ pub struct RecallResponse {
     /// LLM-expanded query variants, if expand was requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expanded_queries: Option<Vec<String>>,
+    /// Multi-hop fact chains discovered from entities in the query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fact_chains: Option<Vec<crate::db::FactChain>>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -283,6 +297,11 @@ pub fn recall(
     }
 
     // FTS keyword search
+    //
+    // Short CJK queries get a stronger FTS contribution because
+    // text-embedding-3-small produces uniformly high cosine scores for them,
+    // making keyword matching the more reliable discrimination signal.
+    let short_cjk = is_short_cjk_query(&req.query);
     let max_bm25 = fts.iter().map(|r| r.1).fold(0.001_f64, f64::max);
 
     for (id, bm25) in &fts {
@@ -292,10 +311,16 @@ pub fn recall(
             // Use the higher of: boosted semantic, or FTS-derived relevance floor.
             // This prevents CJK embedding weakness from burying keyword-confirmed results.
             if let Some(sm) = scored.iter_mut().find(|s| &s.memory.id == id) {
-                let semantic_boosted = sm.relevance * (1.0 + fts_rel * 0.3);
+                let fts_boost = if short_cjk { 0.6 } else { 0.3 };
+                let semantic_boosted = sm.relevance * (1.0 + fts_rel * fts_boost);
                 // Floor prevents keyword-confirmed results from sinking below a minimum,
                 // but shouldn't dominate — keep it modest so semantic ranking wins.
-                let fts_floor = 0.35 + fts_rel * 0.25; // top FTS hit → 0.6 floor
+                // For short CJK, raise the floor so keyword-confirmed results stay high.
+                let fts_floor = if short_cjk {
+                    0.50 + fts_rel * 0.35 // top FTS hit → 0.85 floor
+                } else {
+                    0.35 + fts_rel * 0.25 // top FTS hit → 0.6 floor
+                };
                 sm.relevance = semantic_boosted.max(fts_floor).min(1.0);
                 let rescored = score_memory(&sm.memory, sm.relevance);
                 sm.score = rescored.score;
@@ -308,8 +333,8 @@ pub fn recall(
                 continue;
             }
             // FTS-only hits: keyword match without semantic confirmation.
-            // Cap relevance — keyword presence alone is a weaker signal than cosine.
-            let capped = fts_rel * 0.5;
+            // For short CJK queries, trust FTS more — cosine is unreliable.
+            let capped = if short_cjk { fts_rel * 0.7 } else { fts_rel * 0.5 };
             seen.insert(id.clone());
             scored.push(score_memory(&mem, capped));
         }
@@ -389,6 +414,29 @@ pub fn recall(
         }
     }
 
+    // Multi-hop graph traversal: expand from entities found in direct facts.
+    // Gives richer context by following entity relationships (e.g. alice→company→location).
+    let mut all_chains = Vec::new();
+    if !fact_results.is_empty() {
+        let fact_ns = req.namespace.as_deref().unwrap_or("default");
+        let mut hop_entities = HashSet::new();
+        for fact in &fact_results {
+            hop_entities.insert(fact.subject.clone());
+        }
+        for entity in &hop_entities {
+            if let Ok(chains) = db.query_multihop(entity, 2, fact_ns) {
+                // Only keep chains with depth > 1 (single-hop is already covered above)
+                for chain in chains {
+                    if chain.path.len() > 1 {
+                        all_chains.push(chain);
+                    }
+                }
+            }
+        }
+    }
+
+    let fact_chains = if all_chains.is_empty() { None } else { Some(all_chains) };
+
     // Sort based on requested order
     match sort_by {
         "recent" => scored.sort_by(|a, b| {
@@ -465,6 +513,7 @@ pub fn recall(
         limit,
         time_filter,
         expanded_queries: None,
+        fact_chains,
     }
 }
 
@@ -1364,5 +1413,77 @@ mod tests {
         assert_eq!(with_offset.offset, 0);
         assert_eq!(without_offset.offset, 0);
         assert_eq!(with_offset.total, without_offset.total);
+    }
+
+    // --- short CJK query detection and boosting ---
+
+    #[test]
+    fn short_cjk_detection() {
+        // Mixed CJK+ASCII, short → true
+        assert!(is_short_cjk_query("sky是谁"));
+        // Pure CJK, short → true
+        assert!(is_short_cjk_query("部署流程"));
+        // Single CJK char with ASCII → true
+        assert!(is_short_cjk_query("proxy怎么用"));
+        // Pure ASCII, no CJK → false
+        assert!(!is_short_cjk_query("how to deploy"));
+        // Long CJK query (>= 10 chars) → false
+        assert!(!is_short_cjk_query("这是一个非常长的查询字符串"));
+        // Empty → false
+        assert!(!is_short_cjk_query(""));
+        // Short ASCII only → false
+        assert!(!is_short_cjk_query("hi"));
+    }
+
+    #[test]
+    fn short_cjk_fts_boost_higher() {
+        // Verify that the FTS dual-hit boost multiplier is larger for short CJK
+        // queries than for regular queries (0.6 vs 0.3).
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+
+        let base_relevance: f64 = 0.7;
+        let fts_rel: f64 = 1.0; // top FTS hit
+
+        // Regular query boost: 1 + 1.0 * 0.3 = 1.3
+        let regular_boosted = (base_relevance * (1.0 + fts_rel * 0.3)).min(1.0);
+        let regular_score = score_combined(0.8, regular_boosted, now_ms);
+
+        // Short CJK boost: 1 + 1.0 * 0.6 = 1.6
+        let cjk_boosted = (base_relevance * (1.0 + fts_rel * 0.6)).min(1.0);
+        let cjk_score = score_combined(0.8, cjk_boosted, now_ms);
+
+        assert!(cjk_boosted > regular_boosted,
+            "short CJK FTS boost ({cjk_boosted}) should exceed regular ({regular_boosted})");
+        assert!(cjk_score > regular_score,
+            "short CJK score ({cjk_score}) should exceed regular ({regular_score})");
+    }
+
+    #[test]
+    fn short_cjk_fts_floor_higher() {
+        // For short CJK queries the FTS relevance floor for dual-hit results
+        // should be higher so keyword-confirmed results don't sink.
+        let fts_rel = 1.0; // top FTS hit
+
+        let regular_floor = 0.35 + fts_rel * 0.25; // 0.6
+        let cjk_floor = 0.50 + fts_rel * 0.35;     // 0.85
+
+        assert!(cjk_floor > regular_floor,
+            "short CJK floor ({cjk_floor}) should exceed regular floor ({regular_floor})");
+    }
+
+    #[test]
+    fn short_cjk_fts_only_cap_higher() {
+        // FTS-only results (no semantic confirmation) should have a higher
+        // relevance cap for short CJK queries (0.7) vs regular (0.5).
+        let fts_rel = 1.0;
+
+        let regular_cap = fts_rel * 0.5;
+        let cjk_cap = fts_rel * 0.7;
+
+        assert!(cjk_cap > regular_cap,
+            "short CJK FTS-only cap ({cjk_cap}) should exceed regular ({regular_cap})");
     }
 }

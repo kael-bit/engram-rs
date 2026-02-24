@@ -217,6 +217,61 @@ impl MemoryDB {
         Ok(rows.flatten().collect())
     }
 
+    /// Walk the fact graph starting from `entity`, up to `hops` levels deep.
+    ///
+    /// At each level, finds all active facts where the current entity is the subject,
+    /// then follows each object as the next entity. Tracks visited entities to avoid
+    /// cycles. Returns all discovered chains as `FactChain`s.
+    pub fn query_multihop(&self, entity: &str, hops: usize, ns: &str) -> Result<Vec<FactChain>, EngramError> {
+        let hops = hops.clamp(1, 3);
+        let conn = self.conn()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT subject, predicate, object FROM facts \
+             WHERE LOWER(subject) = LOWER(?1) AND namespace = ?2 AND valid_until IS NULL"
+        )?;
+
+        // BFS-style traversal: (current_entity, path_so_far)
+        let mut queue: Vec<(String, Vec<FactTriple>)> = vec![(entity.to_string(), vec![])];
+        let mut chains: Vec<FactChain> = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        visited.insert(entity.to_lowercase());
+
+        for _depth in 0..hops {
+            let mut next_queue = Vec::new();
+
+            for (current, path) in &queue {
+                let rows = stmt.query_map(rusqlite::params![current, ns], |row| {
+                    Ok(FactTriple {
+                        subject: row.get(0)?,
+                        predicate: row.get(1)?,
+                        object: row.get(2)?,
+                    })
+                })?;
+
+                for triple in rows.flatten() {
+                    let mut new_path = path.clone();
+                    let obj_lower = triple.object.to_lowercase();
+                    new_path.push(triple);
+                    chains.push(FactChain { path: new_path.clone() });
+
+                    // Only follow this object if we haven't visited it yet
+                    if visited.insert(obj_lower) {
+                        let next_entity = new_path.last().unwrap().object.clone();
+                        next_queue.push((next_entity, new_path));
+                    }
+                }
+            }
+
+            if next_queue.is_empty() {
+                break;
+            }
+            queue = next_queue;
+        }
+
+        Ok(chains)
+    }
+
     /// Return Working/Core memories that have no linked facts yet.
     pub fn memories_without_facts(&self, namespace: &str, limit: usize) -> Result<Vec<Memory>, EngramError> {
         let conn = self.conn()?;

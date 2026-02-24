@@ -114,6 +114,7 @@ pub fn router(state: AppState) -> Router {
         .route("/export", get(do_export))
         .route("/facts", post(create_facts).get(query_facts))
         .route("/facts/all", get(list_all_facts))
+        .route("/facts/graph", get(query_graph))
         .route("/facts/conflicts", get(get_fact_conflicts))
         .route("/facts/history", get(get_fact_history))
         .route("/facts/{id}", delete(delete_fact))
@@ -223,6 +224,7 @@ async fn index(State(state): State<AppState>) -> Json<serde_json::Value> {
             "POST /facts": "insert fact triples",
             "GET /facts?entity=X": "query facts by entity",
             "GET /facts/all": "list all facts",
+            "GET /facts/graph?entity=X&hops=2": "multi-hop graph traversal from entity",
             "GET /facts/conflicts?subject=X&predicate=Y": "check fact conflicts",
             "GET /facts/history?subject=X&predicate=Y": "fact history with superseded entries",
             "DELETE /facts/:id": "delete a fact",

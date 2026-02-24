@@ -142,3 +142,31 @@ pub(super) async fn list_all_facts(
     let facts = blocking(move || db.list_facts(&ns, limit, offset)).await??;
     Ok(Json(serde_json::json!({ "facts": facts, "count": facts.len() })))
 }
+
+#[derive(Deserialize)]
+pub(super) struct GraphQuery {
+    entity: Option<String>,
+    hops: Option<usize>,
+    ns: Option<String>,
+}
+
+pub(super) async fn query_graph(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<GraphQuery>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let ns = q.ns.or_else(|| get_namespace(&headers)).unwrap_or_else(|| "default".into());
+    let entity = q.entity.ok_or_else(|| EngramError::Validation("entity parameter is required".into()))?;
+    let hops = q.hops.unwrap_or(2).clamp(1, 3);
+
+    let db = state.db.clone();
+    let ent = entity.clone();
+    let chains = blocking(move || db.query_multihop(&ent, hops, &ns)).await??;
+
+    Ok(Json(serde_json::json!({
+        "entity": entity,
+        "hops": hops,
+        "chains": chains,
+        "count": chains.len(),
+    })))
+}
