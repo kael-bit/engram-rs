@@ -10,6 +10,7 @@ mod error;
 mod proxy;
 mod recall;
 mod safety;
+pub(crate) mod util;
 
 use clap::Parser;
 use std::sync::Arc;

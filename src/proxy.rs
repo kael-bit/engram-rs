@@ -8,7 +8,7 @@ use futures::StreamExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, error, info, warn};
 
-use crate::{ai, db, AppState};
+use crate::{ai, db, util::truncate_chars, AppState};
 
 // Sliding window thresholds: flush when enough context accumulates.
 const WINDOW_MAX_TURNS: usize = 8;
@@ -307,7 +307,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         debug!("proxy: context too thin after stripping boilerplate");
         return;
     }
-    let preview: String = filtered.chars().take(12000).collect();
+    let preview = truncate_chars(&filtered, 12000);
 
     // Fetch recent buffer memories so the LLM can skip already-known concepts
     let recent_mems = state.db.list_since(
@@ -319,7 +319,7 @@ async fn extract_from_context(state: AppState, context: &str) {
     } else {
         let lines: Vec<String> = recent_mems.iter()
             .map(|m| {
-                let truncated: String = m.content.chars().take(120).collect();
+                let truncated = truncate_chars(&m.content, 120);
                 format!("- {}", truncated)
             })
             .collect();
@@ -411,7 +411,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         info!(
             kind = entry.kind.as_deref().unwrap_or("none"),
             "proxy: extracted → {}",
-            entry.content.chars().take(100).collect::<String>()
+            truncate_chars(&entry.content, 100)
         );
     }
 
@@ -427,7 +427,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         if batch_contents.iter().any(|prev| {
             crate::db::jaccard_similar(prev, &entry.content, 0.5)
         }) {
-            info!("proxy: dedup/intra-batch skip: {}", entry.content.chars().take(60).collect::<String>());
+            info!("proxy: dedup/intra-batch skip: {}", truncate_chars(&entry.content, 60));
             continue;
         }
 
@@ -450,7 +450,7 @@ async fn extract_from_context(state: AppState, context: &str) {
             }
             info!(
                 "proxy: dedup/semantic skip (reinforced): {}",
-                entry.content.chars().take(60).collect::<String>()
+                truncate_chars(&entry.content, 60)
             );
             continue;
         }
@@ -590,7 +590,7 @@ fn extract_last_user_msg(raw: &[u8]) -> String {
                     let content = msg.get("content");
                     // Plain string content
                     if let Some(s) = content.and_then(|c| c.as_str()) {
-                        return s.chars().take(6000).collect();
+                        return truncate_chars(s, 6000);
                     }
                     // Array of content blocks (vision, tool results, etc.)
                     if let Some(blocks) = content.and_then(|c| c.as_array()) {
@@ -604,7 +604,7 @@ fn extract_last_user_msg(raw: &[u8]) -> String {
                             }
                         }
                         if !out.is_empty() {
-                            return out.chars().take(6000).collect();
+                            return truncate_chars(&out, 6000);
                         }
                     }
                 }
@@ -644,7 +644,7 @@ fn extract_assistant_msg(raw: &[u8]) -> String {
             }
         }
         if !assembled.is_empty() {
-            return assembled.chars().take(6000).collect();
+            return truncate_chars(&assembled, 6000);
         }
     }
 
@@ -655,7 +655,7 @@ fn extract_assistant_msg(raw: &[u8]) -> String {
             .pointer("/choices/0/message/content")
             .and_then(|c| c.as_str())
         {
-            return content.chars().take(6000).collect();
+            return truncate_chars(content, 6000);
         }
         // Anthropic format
         if let Some(blocks) = v.get("content").and_then(|c| c.as_array()) {
@@ -668,7 +668,7 @@ fn extract_assistant_msg(raw: &[u8]) -> String {
                 }
             }
             if !out.is_empty() {
-                return out.chars().take(6000).collect();
+                return truncate_chars(&out, 6000);
             }
         }
     }

@@ -272,7 +272,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
 
     // Drop decayed Buffer/Working entries — but skip anything we just promoted,
     // procedural memories, or lessons (they don't decay).
-    for mem in db.get_decayed_meta(decay_threshold) {
+    for mem in db.get_decayed(decay_threshold) {
         let is_lesson = mem.tags.iter().any(|t| t == "lesson");
         if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson {
             continue;
@@ -416,11 +416,7 @@ fn dedup_buffer(db: &MemoryDB) -> usize {
 
             // Transfer access count and unique tags
             let total_access = keep.access_count + discard.access_count;
-            let mut tags = keep.tags.clone();
-            for t in &discard.tags {
-                if !tags.contains(t) { tags.push(t.clone()); }
-            }
-            tags.truncate(20);
+            let tags = merge_tags(&keep.tags, &[&discard.tags], 20);
 
             let imp = keep.importance.max(discard.importance);
             let _ = db.update_fields(&keep.id, None, None, Some(imp), Some(&tags));
@@ -516,6 +512,7 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
 ///
 /// When `promote_newer_to` is Some, the newer memory gets promoted to that layer
 /// (used when a buffer item supersedes a Working/Core item).
+#[allow(clippy::too_many_arguments)]
 async fn try_reconcile_pair(
     db: &SharedDB, cfg: &AiConfig,
     a: &Memory, a_emb: &[f64], b: &Memory, b_emb: &[f64],
@@ -605,14 +602,7 @@ fn merge_tags(base: &[String], others: &[&[String]], cap: usize) -> Vec<String> 
     merged
 }
 
-fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max).collect();
-        format!("{truncated}…")
-    }
-}
+use crate::util::truncate_chars;
 
 fn format_ts(ms: i64) -> String {
     // Simple relative time format — no chrono dependency needed

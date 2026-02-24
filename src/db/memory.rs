@@ -476,8 +476,9 @@ impl MemoryDB {
         }
     }
 
-    /// Like `get_decayed` but excludes the embedding blob.
-    pub(crate) fn get_decayed_meta(&self, threshold: f64) -> Vec<Memory> {
+    /// Find memories below a decay score threshold (Buffer/Working only).
+    /// Uses meta-only query — embeddings not needed for decay checks.
+    pub(crate) fn get_decayed(&self, threshold: f64) -> Vec<Memory> {
         let now = now_ms();
         let Ok(conn) = self.conn() else { return vec![]; };
         let sql = format!("SELECT {META_COLS} FROM memories WHERE layer < 3");
@@ -641,26 +642,6 @@ impl MemoryDB {
                 .collect();
             Ok(rows)
         }
-    }
-
-    /// Find memories whose decay score has fallen below a threshold.
-    pub fn get_decayed(&self, threshold: f64) -> Vec<Memory> {
-        let now = now_ms();
-        let Ok(conn) = self.conn() else { return vec![]; };
-        let Ok(mut stmt) = conn.prepare("SELECT * FROM memories WHERE layer < 3") else {
-            return vec![];
-        };
-        stmt.query_map([], row_to_memory)
-            .map(|iter| {
-                iter.filter_map(|r| r.ok())
-                    .filter(|m| {
-                        let hours = (now - m.last_accessed) as f64 / 3_600_000.0;
-                        let score = m.importance * (-m.decay_rate * hours / 168.0).exp();
-                        score < threshold
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 
     /// Promote a memory to a higher layer.
