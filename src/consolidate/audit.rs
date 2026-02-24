@@ -75,7 +75,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
     if all.len() <= max_per_batch {
         // single batch
         let prompt = format_audit_prompt(&core, &working);
-        let result = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
+        let result = ai::llm_chat_as(cfg, "audit", AUDIT_SYSTEM, &prompt).await?;
         if let Some(ref u) = result.usage {
             let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
             let _ = db.log_llm_call("audit", &result.model, u.prompt_tokens, u.completion_tokens, cached, result.duration_ms);
@@ -105,7 +105,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
                     crate::util::short_id(&m.id), m.importance, m.access_count, tags, preview));
             }
 
-            let result = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
+            let result = ai::llm_chat_as(cfg, "audit", AUDIT_SYSTEM, &prompt).await?;
             if let Some(ref u) = result.usage {
                 let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
                 let _ = db.log_llm_call("audit", &result.model, u.prompt_tokens, u.completion_tokens, cached, result.duration_ms);

@@ -331,7 +331,8 @@ Engram uses LLMs for several tasks with different requirements. You can assign a
 
 | Role | Env var(s) | Needs | Recommended |
 |------|-----------|-------|-------------|
-| **Judgment** — Core promotion gate, memory audit | `ENGRAM_GATE_MODEL` | Distinguishing lessons from changelogs, deciding what's permanent | Claude Sonnet, GPT-4o |
+| **Judgment** — Core promotion gate | `ENGRAM_GATE_MODEL` | Distinguishing lessons from changelogs, deciding what's permanent | Claude Sonnet, GPT-4o |
+| **Judgment** — Memory audit | `ENGRAM_AUDIT_MODEL` | Reviewing memory quality, merge/demote/delete decisions | *(falls back to GATE_MODEL)* |
 | **Light judgment** — Proxy extraction | `ENGRAM_PROXY_MODEL` | Spotting decisions/constraints in conversation, skipping noise | Gemini Flash, Claude Haiku |
 | **Text processing** — Merge, rerank, query expansion, triage | `ENGRAM_MERGE_MODEL`, `ENGRAM_RERANK_MODEL`, `ENGRAM_EXPAND_MODEL`, `ENGRAM_EXTRACT_MODEL` | Text transformation, no judgment calls | GPT-4o-mini, GPT-5-mini |
 

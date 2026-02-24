@@ -31,6 +31,38 @@ const RECONCILE_PROMPT: &str = "You are comparing two memory entries about poten
 /// (0.55-0.78) to find topically related but not near-duplicate pairs.
 /// Near-duplicates (>0.78) are handled by merge_similar instead.
 pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
+    // Skip if nothing changed since last reconcile
+    let db_check = db.clone();
+    let should_run = tokio::task::spawn_blocking(move || {
+        let last_run = db_check.get_meta("reconcile_fingerprint").unwrap_or_default();
+        let stats_result: Result<(i64, i64), _> = db_check.conn().and_then(|c| {
+            c.query_row(
+                "SELECT COUNT(*), COALESCE(MAX(modified_at),0) FROM memories WHERE layer IN (2,3)",
+                [], |r| Ok((r.get(0)?, r.get(1)?))
+            ).map_err(Into::into)
+        });
+        match stats_result {
+            Ok((count, max_mod)) => {
+                let fingerprint = format!("{}:{}", count, max_mod);
+                if Some(fingerprint.as_str()) == last_run.as_deref() {
+                    debug!("reconcile: no changes since last run, skipping");
+                    None
+                } else {
+                    Some(fingerprint)
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "reconcile: failed to check fingerprint");
+                Some(String::new())
+            }
+        }
+    }).await.unwrap_or(Some(String::new()));
+
+    let fingerprint = match should_run {
+        Some(fp) => fp,
+        None => return (0, vec![]),
+    };
+
     let db2 = db.clone();
     let all = tokio::task::spawn_blocking(move || db2.get_all_with_embeddings())
         .await
@@ -149,7 +181,7 @@ async fn try_reconcile_pair(
     struct ReconcileDecision { decision: String }
 
     let result: ReconcileDecision = match ai::llm_tool_call(
-        cfg, "gate", RECONCILE_PROMPT, &user_msg,
+        cfg, "merge", RECONCILE_PROMPT, &user_msg,
         "reconcile_decision", "Decide how to reconcile two memories",
         schema,
     ).await {

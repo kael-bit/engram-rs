@@ -303,7 +303,7 @@ pub async fn sandbox_audit(cfg: &AiConfig, db: &SharedDB, auto_apply: bool) -> R
     let prompt = format_sandbox_prompt(&core, &working);
 
     // Call LLM (same model as gate — the audit model)
-    let result = crate::ai::llm_chat_as(cfg, "gate", super::audit::AUDIT_SYSTEM_PUB, &prompt).await?;
+    let result = crate::ai::llm_chat_as(cfg, "audit", super::audit::AUDIT_SYSTEM_PUB, &prompt).await?;
     if let Some(ref u) = result.usage {
         let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
         let _ = db.log_llm_call("sandbox_audit", &result.model, u.prompt_tokens, u.completion_tokens, cached, result.duration_ms);

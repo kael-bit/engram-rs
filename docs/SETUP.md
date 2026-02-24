@@ -52,7 +52,7 @@ With LLM features, engram needs three classes of models:
 
 | Role | What it does | Env var | Budget pick | Quality pick |
 |------|-------------|---------|-------------|-------------|
-| **Judgment** | Decides what memories are permanent (gate, audit) | `ENGRAM_GATE_MODEL` | Claude Haiku | Claude Sonnet |
+| **Judgment** | Decides what memories are permanent (gate), reviews memory quality (audit) | `ENGRAM_GATE_MODEL`, `ENGRAM_AUDIT_MODEL` | Claude Haiku | Claude Sonnet |
 | **Light judgment** | Extracts memories from conversations (proxy) | `ENGRAM_PROXY_MODEL` | GPT-4o-mini | Gemini Flash |
 | **Text processing** | Merges text, expands queries, reranks (merge, rerank, expand) | `ENGRAM_LLM_MODEL` | GPT-4o-mini | GPT-4o-mini |
 

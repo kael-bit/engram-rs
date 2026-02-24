@@ -29,6 +29,7 @@ pub struct AiConfig {
     pub expand_model: Option<String>,
     pub proxy_model: Option<String>,
     pub gate_model: Option<String>,
+    pub audit_model: Option<String>,
 }
 
 impl AiConfig {
@@ -40,6 +41,7 @@ impl AiConfig {
             "expand" => self.expand_model.as_deref(),
             "proxy" => self.proxy_model.as_deref(),
             "gate" => self.gate_model.as_deref(),
+            "audit" => self.audit_model.as_deref().or(self.gate_model.as_deref()),
             _ => None,
         };
         m.unwrap_or(&self.llm_model)
@@ -83,6 +85,7 @@ impl AiConfig {
             expand_model: std::env::var("ENGRAM_EXPAND_MODEL").ok(),
             proxy_model: std::env::var("ENGRAM_PROXY_MODEL").ok(),
             gate_model: std::env::var("ENGRAM_GATE_MODEL").ok(),
+            audit_model: std::env::var("ENGRAM_AUDIT_MODEL").ok(),
         })
     }
 
