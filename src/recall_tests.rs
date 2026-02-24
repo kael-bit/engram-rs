@@ -157,6 +157,7 @@ fn time_filter_since() {
         namespace: "default".into(),
         embedding: None,
         kind: "semantic".into(),
+        modified_at: now - 86_400_000,
     };
     let recent = Memory {
         id: "new-one".into(),
@@ -173,6 +174,7 @@ fn time_filter_since() {
         namespace: "default".into(),
         embedding: None,
         kind: "semantic".into(),
+        modified_at: now - 1000,
     };
     db.import(&[old, recent]).unwrap();
 

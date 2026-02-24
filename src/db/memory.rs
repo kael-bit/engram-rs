@@ -93,8 +93,8 @@ impl MemoryDB {
         self.conn()?.execute(
             "INSERT INTO memories \
              (id, content, layer, importance, created_at, last_accessed, \
-              access_count, decay_rate, source, tags, namespace, kind) \
-             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11)",
+              access_count, decay_rate, source, tags, namespace, kind, modified_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11,?12)",
             params![
                 id,
                 input.content,
@@ -107,6 +107,7 @@ impl MemoryDB {
                 tags_json,
                 namespace,
                 kind,
+                now,
             ],
         )?;
 
@@ -136,6 +137,7 @@ impl MemoryDB {
             namespace,
             embedding: None,
             kind,
+            modified_at: now,
         })
     }
 
@@ -171,11 +173,11 @@ impl MemoryDB {
                 conn.execute(
                     "INSERT INTO memories \
                      (id, content, layer, importance, created_at, last_accessed, \
-                      access_count, decay_rate, source, tags, namespace, kind) \
-                     VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11)",
+                      access_count, decay_rate, source, tags, namespace, kind, modified_at) \
+                     VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11,?12)",
                     params![
                         id, input.content, layer_val, importance, now, now,
-                        decay, source, tags_json, namespace, kind
+                        decay, source, tags_json, namespace, kind, now
                     ],
                 )?;
                 let processed = append_segmented(&input.content);
@@ -199,6 +201,7 @@ impl MemoryDB {
                     namespace,
                     embedding: None,
                     kind,
+                    modified_at: now,
                 });
             }
             Ok(())
@@ -869,6 +872,9 @@ impl MemoryDB {
         }
 
         if !set_clauses.is_empty() {
+            // Any real field change bumps modified_at
+            set_clauses.push("modified_at=?".into());
+            values.push(Box::new(crate::db::now_ms()));
             values.push(Box::new(id.to_string()));
             let sql = format!(
                 "UPDATE memories SET {} WHERE id=?",
@@ -893,8 +899,8 @@ impl MemoryDB {
     /// Update just the kind field for a memory.
     pub fn update_kind(&self, id: &str, kind: &str) -> Result<(), EngramError> {
         self.conn()?.execute(
-            "UPDATE memories SET kind = ?1 WHERE id = ?2",
-            params![kind, id],
+            "UPDATE memories SET kind = ?1, modified_at = ?3 WHERE id = ?2",
+            params![kind, id, crate::db::now_ms()],
         )?;
         Ok(())
     }
@@ -952,8 +958,8 @@ impl MemoryDB {
                 conn.execute(
                     "INSERT INTO memories \
                      (id, content, layer, importance, created_at, last_accessed, \
-                      access_count, repetition_count, decay_rate, source, tags, namespace, embedding, kind) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                      access_count, repetition_count, decay_rate, source, tags, namespace, embedding, kind, modified_at) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
                     params![
                         actual_id,
                         m.content,
@@ -969,6 +975,7 @@ impl MemoryDB {
                         m.namespace,
                         m.embedding.as_ref().map(|e| crate::ai::embedding_to_bytes(e)),
                         m.kind,
+                        m.modified_at.max(m.created_at), // fallback for old exports without modified_at
                     ],
                 )?;
                 let processed = append_segmented(&m.content);

@@ -17,6 +17,7 @@ fn make_mem(id: &str, layer: Layer, importance: f64, emb: Vec<f32>) -> (Memory, 
             namespace: "default".into(),
             embedding: None,
             kind: "semantic".into(),
+            modified_at: 0,
         },
         emb,
     )
@@ -102,6 +103,7 @@ fn mem_with_ts(
         namespace: "default".into(),
         embedding: None,
         kind: "semantic".into(),
+        modified_at: created_ms,
     }
 }
 

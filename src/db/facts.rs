@@ -308,6 +308,7 @@ impl MemoryDB {
                 repetition_count: row.get::<_, Option<i64>>(11)?.unwrap_or(0),
                 kind: row.get::<_, Option<String>>(12)?.unwrap_or_else(|| "semantic".into()),
                 embedding: None,
+                modified_at: 0,
             })
         })?;
         Ok(rows.flatten().collect())

@@ -28,11 +28,14 @@ Your job: reorganize them. Output a JSON array of operations.
 - {"op":"delete","id":"<8-char-id>"} — remove (duplicate, obsolete, or garbage)
 
 ## HARD RULES (violations make the audit worthless)
-1. NEVER delete or merge memories with age < 24h — they were just accessed
+1. NEVER delete or merge memories with mod < 1d — they were recently modified
 2. NEVER delete identity, constraint, or lesson-tagged memories
 3. NEVER demote directly to Buffer (to:1) — use Working (to:2) as intermediate
 4. Prefer demote over delete — deletion is irreversible
 5. Only merge TRUE duplicates (same fact restated). Related ≠ duplicate.
+
+Each memory shows: age=days since creation, mod=days since last real edit (content/layer/tags change).
+Note: `mod` is NOT affected by read/recall — only actual edits update it.
 
 ## Guidelines
 - Core should be SMALL: identity, values, lessons, key relationships, strategic constraints
@@ -121,17 +124,27 @@ fn format_audit_prompt(core: &[Memory], working: &[Memory]) -> String {
     for m in core {
         let tags = m.tags.join(",");
         let age_d = (now - m.created_at) as f64 / 86_400_000.0;
+        let mod_d = if m.modified_at > 0 {
+            (now - m.modified_at) as f64 / 86_400_000.0
+        } else {
+            age_d
+        };
         let preview: String = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, {:.1}d old, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.importance, m.access_count, age_d, tags, preview));
+        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
+            crate::util::short_id(&m.id), m.importance, m.access_count, age_d, mod_d, tags, preview));
     }
     prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
     for m in working {
         let tags = m.tags.join(",");
         let age_d = (now - m.created_at) as f64 / 86_400_000.0;
+        let mod_d = if m.modified_at > 0 {
+            (now - m.modified_at) as f64 / 86_400_000.0
+        } else {
+            age_d
+        };
         let preview: String = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, {:.1}d old, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.importance, m.access_count, age_d, tags, preview));
+        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
+            crate::util::short_id(&m.id), m.importance, m.access_count, age_d, mod_d, tags, preview));
     }
     prompt
 }

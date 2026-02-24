@@ -105,6 +105,10 @@ pub struct Memory {
     pub embedding: Option<Vec<f32>>,
     #[serde(default = "default_kind", skip_serializing_if = "is_default_kind")]
     pub kind: String,
+    /// Timestamp of last real modification (content, layer, tags, kind change).
+    /// Not updated by touch/access — only by actual edits.
+    #[serde(default)]
+    pub modified_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -445,7 +449,8 @@ CREATE TABLE IF NOT EXISTS memories (
     tags TEXT NOT NULL DEFAULT '[]',
     namespace TEXT NOT NULL DEFAULT 'default',
     embedding BLOB,
-    kind TEXT NOT NULL DEFAULT 'semantic'
+    kind TEXT NOT NULL DEFAULT 'semantic',
+    modified_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_layer ON memories(layer);
@@ -606,6 +611,11 @@ impl MemoryDB {
         if conn.prepare("SELECT kind FROM memories LIMIT 0").is_err() {
             conn.execute("ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'semantic'", [])?;
         }
+        if conn.prepare("SELECT modified_at FROM memories LIMIT 0").is_err() {
+            conn.execute("ALTER TABLE memories ADD COLUMN modified_at INTEGER NOT NULL DEFAULT 0", [])?;
+            // Backfill: set modified_at = created_at for existing rows
+            conn.execute("UPDATE memories SET modified_at = created_at WHERE modified_at = 0", [])?;
+        }
         drop(conn);
         let db = Self { pool, vec_index: RwLock::new(vec::VecIndex::new()) };
         db.rebuild_fts()?;
@@ -682,6 +692,7 @@ fn row_to_memory_meta(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
         namespace: row.get::<_, String>("namespace").unwrap_or_else(|_| "default".into()),
         embedding: None,
         kind: row.get::<_, String>("kind").unwrap_or_else(|_| "semantic".into()),
+        modified_at: row.get::<_, i64>("modified_at").unwrap_or(0),
     })
 }
 
@@ -709,6 +720,7 @@ fn row_to_memory_impl(row: &rusqlite::Row, include_embedding: bool) -> rusqlite:
         namespace: row.get::<_, String>("namespace").unwrap_or_else(|_| "default".into()),
         embedding,
         kind: row.get::<_, String>("kind").unwrap_or_else(|_| "semantic".into()),
+        modified_at: row.get::<_, i64>("modified_at").unwrap_or(0),
     })
 }
 

@@ -93,14 +93,17 @@ impl<'a> RuleChecker<'a> {
             };
         }
 
-        // Rule: never delete recently created memories (24h)
-        // Note: we use created_at, not last_accessed — resume touches all memories
-        // which inflates last_accessed and would make this rule trigger on everything.
-        let age_h = (self.now_ms - mem.created_at) as f64 / 3_600_000.0;
-        if age_h < 24.0 {
+        // Rule: never delete recently modified memories (24h)
+        // Uses modified_at — immune to resume touch inflation on last_accessed.
+        let mod_age_h = if mem.modified_at > 0 {
+            (self.now_ms - mem.modified_at) as f64 / 3_600_000.0
+        } else {
+            (self.now_ms - mem.created_at) as f64 / 3_600_000.0
+        };
+        if mod_age_h < 24.0 {
             return OpGrade {
                 op: op.clone(), grade: Grade::Bad,
-                reason: format!("deleting memory created {:.1}h ago (< 24h)", age_h),
+                reason: format!("deleting memory modified {:.1}h ago (< 24h)", mod_age_h),
             };
         }
 
@@ -324,19 +327,29 @@ fn format_sandbox_prompt(core: &[Memory], working: &[Memory]) -> String {
     for m in core {
         let tags = m.tags.join(",");
         let age_d = (now - m.created_at) as f64 / 86_400_000.0;
+        let mod_d = if m.modified_at > 0 {
+            (now - m.modified_at) as f64 / 86_400_000.0
+        } else {
+            age_d
+        };
         let preview = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, {:.1}d old, kind={}, tags=[{}]) {}\n",
+        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, kind={}, tags=[{}]) {}\n",
             crate::util::short_id(&m.id), m.importance,
-            m.access_count, age_d, m.kind, tags, preview));
+            m.access_count, age_d, mod_d, m.kind, tags, preview));
     }
     prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
     for m in working {
         let tags = m.tags.join(",");
         let age_d = (now - m.created_at) as f64 / 86_400_000.0;
+        let mod_d = if m.modified_at > 0 {
+            (now - m.modified_at) as f64 / 86_400_000.0
+        } else {
+            age_d
+        };
         let preview = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, {:.1}d old, kind={}, tags=[{}]) {}\n",
+        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, kind={}, tags=[{}]) {}\n",
             crate::util::short_id(&m.id), m.importance,
-            m.access_count, age_d, m.kind, tags, preview));
+            m.access_count, age_d, mod_d, m.kind, tags, preview));
     }
     prompt
 }
