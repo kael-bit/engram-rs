@@ -1682,6 +1682,52 @@ mod tests {
     }
 
     #[test]
+    fn distilled_tag_blocks_buffer_promotion() {
+        let db = test_db();
+        let now = crate::db::now_ms();
+
+        // Buffer memory with enough accesses but tagged distilled — blocked
+        let mut distilled = mem_with_ts("distilled-note", Layer::Buffer, 0.5, 8, now - 1000, now);
+        distilled.tags = vec!["session".into(), "distilled".into()];
+        distilled.source = "session".into();
+
+        // Identical stats without distilled tag — should promote
+        let mut normal = mem_with_ts("normal-note", Layer::Buffer, 0.5, 8, now - 1000, now);
+        normal.tags = vec![];
+
+        db.import(&[distilled, normal]).unwrap();
+
+        let r = consolidate_sync(&db, None);
+        assert_eq!(r.promoted, 1, "only the non-distilled should promote");
+        let d = db.get("distilled-note").unwrap().unwrap();
+        assert_eq!(d.layer, Layer::Buffer, "distilled must stay in Buffer");
+        let n = db.get("normal-note").unwrap().unwrap();
+        assert_eq!(n.layer, Layer::Working, "normal should promote to Working");
+    }
+
+    #[test]
+    fn auto_distilled_blocks_core_promotion() {
+        let db = test_db();
+        let now = crate::db::now_ms();
+
+        // Working memory with auto-distilled tag — high score, should NOT be a candidate
+        let mut ad = mem_with_ts("project-status", Layer::Working, 0.7, 20, now - 1000, now);
+        ad.tags = vec!["project-status".into(), "auto-distilled".into()];
+        ad.repetition_count = 5;
+
+        // Working memory without auto-distilled — should be a candidate
+        let mut normal = mem_with_ts("real-lesson", Layer::Working, 0.7, 20, now - 1000, now);
+        normal.repetition_count = 5;
+
+        db.import(&[ad, normal]).unwrap();
+
+        let r = consolidate_sync(&db, None);
+        let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(!ids.contains(&"project-status"), "auto-distilled must not be a Core candidate");
+        assert!(ids.contains(&"real-lesson"), "normal Working should be a candidate");
+    }
+
+    #[test]
     fn gate_result_parses_kind() {
         // Simulate the parsing logic from llm_promotion_gate
         let parse = |response: &str| -> GateResult {
