@@ -1,31 +1,22 @@
 # engram
 
-A biologically-inspired memory engine for AI agents — store, forget, and recall like a brain.
+Persistent memory for AI agents. Store, forget, and recall like a brain.
 
 ## Why?
 
-Most agent memory solutions dump everything into a vector database and call it a day. That doesn't map well to how memory actually works — some things should be forgotten, some things should stick, and retrieval should be context-aware.
+Most agent memory is just a vector database. Everything stays forever, retrieval is dumb similarity search, and there's no concept of what matters.
 
-engram uses a three-layer model based on [Atkinson-Shiffrin memory theory](https://en.wikipedia.org/wiki/Atkinson%E2%80%93Shiffrin_memory_model):
+engram is different. It uses a three-layer model inspired by [how human memory actually works](https://en.wikipedia.org/wiki/Atkinson%E2%80%93Shiffrin_memory_model):
 
-| Layer | Role | Decay |
-|-------|------|-------|
-| **Buffer** (L1) | Transient context | Fast (~1 day half-life) |
-| **Working** (L2) | Active knowledge | Moderate (~5 day half-life) |
-| **Core** (L3) | Identity & principles | Near-zero |
+| Layer | Role | Behavior |
+|-------|------|----------|
+| **Buffer** | Short-term context | Decays in ~24h unless reinforced |
+| **Working** | Active knowledge | Promoted from buffer by usage + LLM triage |
+| **Core** | Identity & principles | Earned through repeated access, LLM quality gate |
 
-Memories promote upward through access frequency (Ebbinghaus-style reinforcement), and decay naturally when neglected. You don't manage layers — store everything as buffer, and the system promotes what sticks:
+You just store memories. The system figures out what's important and promotes it. Unused memories fade naturally. Lessons and procedures persist indefinitely.
 
-- **Buffer → Working**: LLM triage during consolidation evaluates buffer memories with usage signal (accessed at least once, older than 1 hour) and promotes those containing durable knowledge. Fallback: reinforcement score ≥ 5.0 (access + repetition × 2.5), OR lesson/procedural memories auto-promote after 2h cooldown
-- **Working → Core**: reinforcement score ≥ 3.0, importance ≥ 0.6, passes LLM quality gate (also auto-classifies kind)
-- **Buffer TTL**: 24 hours — unaccessed buffer entries are dropped; rescued to Working if access score ≥ half threshold OR importance ≥ 0.7
-- **Procedural** memories and **lessons** (`tag=lesson`) are exempt from TTL — they persist indefinitely
-- **Session notes** (`source=session`) and `ephemeral`-tagged memories never promote to Core
-- **Session distillation**: when 3+ session notes accumulate, consolidation synthesizes a project status snapshot into Working (tagged `auto-distilled`, blocked from Core promotion). Namespace-aware — multi-agent setups get per-namespace summaries
-- **Gate retry**: memories rejected by the Core promotion gate get a `gate-rejected` tag and a second chance after 24 hours
-- Each recall bumps importance by 0.02 (capped at 1.0); `/resume` touches Core/Working memories
-- Near-duplicate insertions count as repetition (2.5× weight)
-
+Single binary, ~9 MB, no Docker, no Python, no external database.
 ## How It Works
 
 ```mermaid
