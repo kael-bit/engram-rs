@@ -369,15 +369,28 @@ pub(super) async fn do_resume(
         taken
     };
 
-    // Core gets at most 60% of budget to leave room for working context.
-    let core_cap = if budget_val == 0 { usize::MAX } else { budget_val * 60 / 100 };
-    let mut core_budget = budget_left.min(core_cap);
-    let core_out = take_budget(&core, &mut core_budget, compact);
-    budget_left = budget_left.saturating_sub(budget_left.min(core_cap) - core_budget);
+    // Reserve 20% for recent context (sessions + recent + buffer) so they
+    // never get starved by Core/Working bloat.
+    let recent_reserve = if budget_val == 0 { 0 } else { budget_val * 20 / 100 };
+    let main_budget = budget_left.saturating_sub(recent_reserve);
 
-    let working_out = take_budget(&working, &mut budget_left, compact);
-    let next_tagged_out = take_budget(&next_actions, &mut budget_left, compact);
-    let sessions_out = take_budget(&sessions, &mut budget_left, compact);
+    // Core: 45% cap of total budget
+    let core_cap = if budget_val == 0 { usize::MAX } else { budget_val * 45 / 100 };
+    let mut core_budget = main_budget.min(core_cap);
+    let core_out = take_budget(&core, &mut core_budget, compact);
+    budget_left = budget_left.saturating_sub(main_budget.min(core_cap) - core_budget);
+
+    // Sessions + next_actions come before Working — continuity matters more
+    let mut session_budget = budget_left.saturating_sub(recent_reserve);
+    let sessions_out = take_budget(&sessions, &mut session_budget, compact);
+    let next_tagged_out = take_budget(&next_actions, &mut session_budget, compact);
+    budget_left = budget_left.saturating_sub(budget_left.saturating_sub(recent_reserve) - session_budget);
+
+    let mut working_budget = budget_left.saturating_sub(recent_reserve);
+    let working_out = take_budget(&working, &mut working_budget, compact);
+    budget_left = budget_left.saturating_sub(budget_left.saturating_sub(recent_reserve) - working_budget);
+
+    // Recent context gets whatever is left (at least the reserved 20%)
     let recent_out = take_budget(&recent, &mut budget_left, compact);
     let buffer_out = take_budget(&buffer, &mut budget_left, compact);
 
@@ -406,14 +419,13 @@ pub(super) async fn do_resume(
         parsed_actions.retain(|a| seen.insert(a.clone()));
     }
 
-    // Touch all memories served by resume — they're actively being used.
-    // Buffer memories that make it into resume output have already been filtered
-    // by importance/recency, so touching them is justified reinforcement.
+    // Only touch Buffer memories — they need access_count to get promoted.
+    // Core is stable (touching inflates access_count to 200+ meaninglessly).
+    // Working shouldn't be touched: it resets last_accessed which prevents
+    // gate-rejected items from ever decaying.
     {
         let db = state.db.clone();
-        let ids: Vec<String> = core_out.iter()
-            .chain(working_out.iter())
-            .chain(buffer_out.iter())
+        let ids: Vec<String> = buffer_out.iter()
             .map(|m| m.id.clone()).collect();
         tokio::task::spawn_blocking(move || {
             for id in &ids {
