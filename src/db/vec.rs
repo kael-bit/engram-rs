@@ -63,6 +63,17 @@ impl MemoryDB {
         }
     }
 
+    /// Get embeddings for a set of IDs from the in-memory vec index.
+    pub fn get_embeddings_by_ids(&self, ids: &[String]) -> Vec<(String, Vec<f64>)> {
+        let idx = match self.vec_index.read() {
+            Ok(idx) => idx,
+            Err(_) => return vec![],
+        };
+        ids.iter()
+            .filter_map(|id| idx.get(id).map(|e| (id.clone(), e.emb.clone())))
+            .collect()
+    }
+
     pub fn set_embedding(&self, id: &str, embedding: &[f64]) -> Result<(), EngramError> {
         let bytes = crate::ai::embedding_to_bytes(embedding);
         self.conn()?.execute(

@@ -308,6 +308,88 @@ pub(super) async fn do_resume(
         next_actions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         next_actions.truncate(3);
 
+        // Core relevance filtering: use recent context (buffer + sessions) as
+        // signal for what matters right now. Core memories unrelated to current
+        // context are excluded — they're not deleted, just not in this resume.
+        // Always-relevant: lesson, identity, procedural tags or kind.
+        let core = if buffer.is_empty() && sessions.is_empty() && recent.is_empty() {
+            // Fresh session with no context — return all Core unfiltered
+            core
+        } else {
+            let context_ids: Vec<String> = buffer.iter()
+                .chain(sessions.iter())
+                .chain(recent.iter())
+                .map(|m| m.id.clone())
+                .collect();
+            let context_embeds = d.get_embeddings_by_ids(&context_ids);
+
+            if context_embeds.is_empty() {
+                core // no embeddings available, skip filtering
+            } else {
+                // Compute centroid of context embeddings
+                let dim = context_embeds[0].1.len();
+                let mut centroid = vec![0.0f64; dim];
+                for (_, emb) in &context_embeds {
+                    for (i, v) in emb.iter().enumerate() {
+                        if i < dim { centroid[i] += v; }
+                    }
+                }
+                let n = context_embeds.len() as f64;
+                for v in &mut centroid {
+                    *v /= n;
+                }
+
+                let core_ids: Vec<String> = core.iter().map(|m| m.id.clone()).collect();
+                let core_embeds = d.get_embeddings_by_ids(&core_ids);
+                let core_embed_map: std::collections::HashMap<&str, &Vec<f64>> = core_embeds.iter()
+                    .map(|(id, emb)| (id.as_str(), emb))
+                    .collect();
+
+                // Identity and hard constraints are always included — agent
+                // needs to know who it is and what it can't do.
+                // Everything else (including lessons) gets relevance-filtered
+                // with lessons getting a lower threshold.
+                let is_identity = |m: &db::Memory| -> bool {
+                    m.tags.iter().any(|t| matches!(t.as_str(), "identity" | "constraint" | "bootstrap"))
+                };
+                let is_lesson_or_proc = |m: &db::Memory| -> bool {
+                    m.kind == "procedural"
+                        || m.tags.iter().any(|t| matches!(t.as_str(),
+                            "lesson" | "procedural" | "preference"))
+                };
+
+                let mut scored: Vec<(db::Memory, f64)> = core.into_iter().map(|m| {
+                    if is_identity(&m) {
+                        (m, 1.0)
+                    } else {
+                        let sim = core_embed_map.get(m.id.as_str())
+                            .map(|emb| ai::cosine_similarity(&centroid, emb))
+                            .unwrap_or(0.5);
+                        let boosted = if is_lesson_or_proc(&m) { sim + 0.15 } else { sim };
+                        debug!(id = %&m.id[..8], sim = format!("{sim:.3}"),
+                            boosted = format!("{boosted:.3}"),
+                            content = %crate::util::truncate_chars(&m.content, 40),
+                            "core relevance");
+                        (m, boosted)
+                    }
+                }).collect();
+
+                scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                let threshold = 0.35;
+                let total_core = scored.len();
+                let filtered: Vec<db::Memory> = scored.into_iter()
+                    .filter(|(_, score)| *score >= threshold)
+                    .map(|(m, _)| m)
+                    .collect();
+                if filtered.len() < total_core {
+                    debug!(total = total_core, kept = filtered.len(),
+                        dropped = total_core - filtered.len(),
+                        threshold, "core relevance filtering");
+                }
+                filtered
+            }
+        };
+
         (core, working, buffer, recent, sessions, next_actions)
     })
     .await?;
@@ -348,25 +430,64 @@ pub(super) async fn do_resume(
         }
     };
 
-    // Apply budget: fill sections in priority order, stop when budget exhausted
-    // Default 8000 chars (~2K tokens). 0 = unlimited.
-    let budget_val = q.budget.unwrap_or(8000);
+    // Apply budget with proportional content truncation.
+    // Default 16000 chars (~4K tokens). 0 = unlimited.
+    let budget_val = q.budget.unwrap_or(16_000);
     let mut budget_left = if budget_val == 0 { usize::MAX } else { budget_val };
 
-    let take_budget = |mems: &[db::Memory], budget: &mut usize, compact: bool| -> Vec<db::Memory> {
-        if *budget == 0 { return vec![]; }
-        let mut taken = Vec::new();
-        for m in mems {
-            let cost = if compact {
-                m.content.len() + m.tags.iter().map(|t| t.len() + 3).sum::<usize>() + 20
-            } else {
-                m.content.len() + 250
-            };
-            if cost > *budget && !taken.is_empty() { break; }
-            *budget = budget.saturating_sub(cost);
-            taken.push(m.clone());
+    // Fit memories into budget. When total exceeds budget, keep the most
+    // important items at full length and compress the rest to one-line
+    // summaries rather than truncating everything proportionally.
+    let fit_section = |mems: &[db::Memory], budget: &mut usize, compact: bool| -> Vec<db::Memory> {
+        if *budget == 0 || mems.is_empty() { return vec![]; }
+
+        let overhead = if compact { 20usize } else { 250 };
+        let total_cost: usize = mems.iter()
+            .map(|m| m.content.len() + if compact { m.tags.iter().map(|t| t.len() + 3).sum::<usize>() } else { 0 } + overhead)
+            .sum();
+
+        if total_cost <= *budget {
+            *budget -= total_cost;
+            return mems.to_vec();
         }
-        taken
+
+        // Budget is tight. Strategy: keep as many items at full length as
+        // possible, then compress remaining to one-line (~60 char) summaries.
+        let summary_len = 60;
+        let mut result = Vec::new();
+        let mut spent = 0usize;
+
+        for (i, m) in mems.iter().enumerate() {
+            let tag_cost = if compact { m.tags.iter().map(|t| t.len() + 3).sum::<usize>() } else { 0 };
+            let full_cost = m.content.len() + tag_cost + overhead;
+
+            // How much would remaining items cost if compressed?
+            let remaining_compressed: usize = mems[i+1..].iter()
+                .map(|r| summary_len + if compact { r.tags.iter().map(|t| t.len() + 3).sum::<usize>() } else { 0 } + overhead)
+                .sum();
+
+            if spent + full_cost + remaining_compressed <= *budget {
+                // Fits at full length with room for compressed rest
+                spent += full_cost;
+                result.push(m.clone());
+            } else {
+                // Compress this and all remaining items
+                let mut item = m.clone();
+                let first_line = m.content.lines().next().unwrap_or(&m.content);
+                if first_line.len() > summary_len {
+                    let boundary = first_line.floor_char_boundary(summary_len.saturating_sub(1));
+                    item.content = format!("{}…", &first_line[..boundary]);
+                } else if first_line.len() < m.content.len() {
+                    item.content = format!("{}…", first_line);
+                }
+                let cost = item.content.len() + tag_cost + overhead;
+                if spent + cost > *budget && !result.is_empty() { break; }
+                spent += cost;
+                result.push(item);
+            }
+        }
+        *budget = budget.saturating_sub(spent);
+        result
     };
 
     // Reserve 20% for recent context (sessions + recent + buffer) so they
@@ -377,22 +498,22 @@ pub(super) async fn do_resume(
     // Core: 45% cap of total budget
     let core_cap = if budget_val == 0 { usize::MAX } else { budget_val * 45 / 100 };
     let mut core_budget = main_budget.min(core_cap);
-    let core_out = take_budget(&core, &mut core_budget, compact);
+    let core_out = fit_section(&core, &mut core_budget, compact);
     budget_left = budget_left.saturating_sub(main_budget.min(core_cap) - core_budget);
 
     // Sessions + next_actions come before Working — continuity matters more
     let mut session_budget = budget_left.saturating_sub(recent_reserve);
-    let sessions_out = take_budget(&sessions, &mut session_budget, compact);
-    let next_tagged_out = take_budget(&next_actions, &mut session_budget, compact);
+    let sessions_out = fit_section(&sessions, &mut session_budget, compact);
+    let next_tagged_out = fit_section(&next_actions, &mut session_budget, compact);
     budget_left = budget_left.saturating_sub(budget_left.saturating_sub(recent_reserve) - session_budget);
 
     let mut working_budget = budget_left.saturating_sub(recent_reserve);
-    let working_out = take_budget(&working, &mut working_budget, compact);
+    let working_out = fit_section(&working, &mut working_budget, compact);
     budget_left = budget_left.saturating_sub(budget_left.saturating_sub(recent_reserve) - working_budget);
 
     // Recent context gets whatever is left (at least the reserved 20%)
-    let recent_out = take_budget(&recent, &mut budget_left, compact);
-    let buffer_out = take_budget(&buffer, &mut budget_left, compact);
+    let recent_out = fit_section(&recent, &mut budget_left, compact);
+    let buffer_out = fit_section(&buffer, &mut budget_left, compact);
 
     // Parse next_actions from session memory content + explicitly tagged next-action memories.
     let mut parsed_actions: Vec<String> = Vec::new();

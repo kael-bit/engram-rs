@@ -317,6 +317,27 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         }
     }
 
+    // Working gate-rejected TTL: memories that were rejected by the Core
+    // promotion gate should eventually expire if they're not being actively
+    // recalled. 7-day TTL since last access (not creation — gives them a
+    // chance to prove value through recall hits).
+    let gate_rejected_ttl = 7 * 86_400 * 1000; // 7 days in ms
+    for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list working for gate-rejected TTL failed"); vec![] }) {
+        if !mem.tags.iter().any(|t| t == "gate-rejected") { continue; }
+        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" { continue; }
+        if mem.tags.iter().any(|t| t == "lesson") { continue; }
+        let since_access = now - mem.last_accessed;
+        if since_access > gate_rejected_ttl {
+            if db.delete(&mem.id).unwrap_or(false) {
+                dropped_ids.push(mem.id.clone());
+                decayed += 1;
+                info!(id = %mem.id, content = %truncate_chars(&mem.content, 50),
+                    days_since_access = since_access / 86_400_000,
+                    "gate-rejected Working memory expired");
+            }
+        }
+    }
+
     // Drop decayed Buffer/Working entries — but skip anything we just promoted,
     // procedural memories, or lessons (they don't decay).
     for mem in db.get_decayed(decay_threshold).unwrap_or_else(|e| { warn!(error = %e, "get_decayed failed"); vec![] }) {
