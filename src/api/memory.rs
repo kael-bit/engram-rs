@@ -240,11 +240,14 @@ pub(super) async fn list_memories(
         )?;
 
         let count = memories.len();
-        let stats = d.stats();
+        let total = match q.ns.as_deref() {
+            Some(ns) => d.stats_ns(ns).total,
+            None => d.stats().total,
+        };
         Ok::<_, EngramError>(serde_json::json!({
             "memories": memories,
             "count": count,
-            "total": stats.total,
+            "total": total,
             "limit": limit,
             "offset": offset,
         }))
