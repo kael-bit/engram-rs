@@ -327,14 +327,13 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         if promoted_ids.contains(&mem.id) || mem.kind == "procedural" { continue; }
         if mem.tags.iter().any(|t| t == "lesson") { continue; }
         let since_access = now - mem.last_accessed;
-        if since_access > gate_rejected_ttl {
-            if db.delete(&mem.id).unwrap_or(false) {
+        if since_access > gate_rejected_ttl
+            && db.delete(&mem.id).unwrap_or(false) {
                 dropped_ids.push(mem.id.clone());
                 decayed += 1;
                 info!(id = %mem.id, content = %truncate_chars(&mem.content, 50),
                     days_since_access = since_access / 86_400_000,
                     "gate-rejected Working memory expired");
-            }
         }
     }
 
@@ -528,7 +527,7 @@ async fn triage_buffer(
             let tags = m.tags.join(", ");
             user_msg.push_str(&format!(
                 "[{}] (ac={}, tags=[{}]) {}\n\n",
-                &m.id[..8], m.access_count, tags, preview
+                crate::util::short_id(&m.id), m.access_count, tags, preview
             ));
         }
 
@@ -681,7 +680,7 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
     }
 
     let mut reconciled = 0;
-    let mut removed_ids: Vec<String> = Vec::new();
+    let mut removed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Pass 1: Within Working/Core — newer supersedes older on same topic.
     for i in 0..wc.len() {
@@ -692,7 +691,7 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
                 db, cfg, &wc[i].0, &wc[i].1, &wc[j].0, &wc[j].1,
                 None, &removed_ids,
             ).await {
-                removed_ids.push(id);
+                removed_ids.insert(id);
                 reconciled += 1;
             }
         }
@@ -714,7 +713,7 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
                 db, cfg, &target.0, &target.1, &buf.0, &buf.1,
                 Some(target.0.layer), &removed_ids,
             ).await {
-                removed_ids.push(id);
+                removed_ids.insert(id);
                 reconciled += 1;
                 break; // one buffer replaces at most one WC item
             }
@@ -724,7 +723,7 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
     if reconciled > 0 {
         info!(reconciled, "reconciliation complete");
     }
-    (reconciled, removed_ids)
+    (reconciled, removed_ids.into_iter().collect())
 }
 
 /// Try to reconcile a pair of memories. Returns the removed (older) memory's ID on success.
@@ -736,7 +735,7 @@ async fn try_reconcile_pair(
     db: &SharedDB, cfg: &AiConfig,
     a: &Memory, a_emb: &[f64], b: &Memory, b_emb: &[f64],
     promote_newer_to: Option<Layer>,
-    already_removed: &[String],
+    already_removed: &std::collections::HashSet<String>,
 ) -> Option<String> {
     if already_removed.contains(&a.id) || already_removed.contains(&b.id) {
         return None;
@@ -1269,7 +1268,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &crate::db::MemoryDB) -> Result<
                 let tags = m.tags.join(",");
                 let preview: String = truncate_chars(&m.content, 200);
                 prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
-                    &m.id[..8], m.importance, m.access_count, tags, preview));
+                    crate::util::short_id(&m.id), m.importance, m.access_count, tags, preview));
             }
 
             let response = ai::llm_chat_as(cfg, "gate", AUDIT_SYSTEM, &prompt).await?;
@@ -1290,14 +1289,14 @@ fn format_audit_prompt(core: &[crate::db::Memory], working: &[crate::db::Memory]
         let tags = m.tags.join(",");
         let preview: String = truncate_chars(&m.content, 200);
         prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
-            &m.id[..8], m.importance, m.access_count, tags, preview));
+            crate::util::short_id(&m.id), m.importance, m.access_count, tags, preview));
     }
     prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
     for m in working {
         let tags = m.tags.join(",");
         let preview: String = truncate_chars(&m.content, 200);
         prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
-            &m.id[..8], m.importance, m.access_count, tags, preview));
+            crate::util::short_id(&m.id), m.importance, m.access_count, tags, preview));
     }
     prompt
 }
@@ -1306,7 +1305,7 @@ fn format_layer_summary(name: &str, memories: &[crate::db::Memory]) -> String {
     let mut s = format!("## {} Layer ({} memories, shown for context — do NOT reorganize these)\n", name, memories.len());
     for m in memories {
         let preview: String = truncate_chars(&m.content, 80);
-        s.push_str(&format!("- [{}] {}\n", &m.id[..8], preview));
+        s.push_str(&format!("- [{}] {}\n", crate::util::short_id(&m.id), preview));
     }
     s
 }
@@ -1388,7 +1387,7 @@ fn parse_audit_ops(
     let mut id_map = std::collections::HashMap::new();
     for m in core.iter().chain(working.iter()) {
         if m.id.len() >= 8 {
-            id_map.insert(m.id[..8].to_string(), m.id.clone());
+            id_map.insert(crate::util::short_id(&m.id).to_string(), m.id.clone());
         }
     }
 
@@ -1494,7 +1493,7 @@ async fn extract_facts_batch(db: &SharedDB, cfg: &AiConfig, limit: usize) -> usi
             let sentinel = crate::db::FactInput {
                 subject: "_no_facts".into(),
                 predicate: "_scanned".into(),
-                object: mem.id[..8].to_string(),
+                object: crate::util::short_id(&mem.id).to_string(),
                 memory_id: Some(mem.id.clone()),
                 valid_from: None,
             };

@@ -302,7 +302,7 @@ impl MemoryDB {
                 source: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
                 tags: {
                     let raw: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
-                    if raw.is_empty() { vec![] } else { raw.split(',').map(std::string::ToString::to_string).collect() }
+                    if raw.is_empty() { vec![] } else { serde_json::from_str(&raw).unwrap_or_default() }
                 },
                 namespace: row.get::<_, Option<String>>(10)?.unwrap_or_else(|| "default".into()),
                 repetition_count: row.get::<_, Option<i64>>(11)?.unwrap_or(0),

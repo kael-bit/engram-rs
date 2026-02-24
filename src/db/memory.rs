@@ -151,7 +151,6 @@ impl MemoryDB {
                     tracing::warn!(error = %e, "batch: skipping invalid input");
                     continue;
                 }
-                let _importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
                 let now = now_ms();
                 let layer_val = input.layer.unwrap_or(1);
                 let layer: Layer = match layer_val.try_into() {

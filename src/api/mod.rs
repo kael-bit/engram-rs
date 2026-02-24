@@ -129,17 +129,22 @@ pub fn router(state: AppState) -> Router {
 
     // Proxy route — transparent forwarding, no auth (clients bring their own API keys).
     // 10MB body limit covers large prompts.
+    // flush/window are management endpoints — they need auth.
     let proxy_route = Router::new()
         .route("/proxy/{*path}", axum::routing::any(crate::proxy::handle))
+        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024));
+    let proxy_admin = Router::new()
         .route("/proxy/flush", axum::routing::post(proxy_flush))
         .route("/proxy/window", axum::routing::get(proxy_window))
-        .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024));
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth))
+        .layer(RequestBodyLimitLayer::new(64 * 1024));
 
     // 64KB for normal operations, 32MB for import, 10MB for proxy
     public
         .merge(protected)
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .merge(import_route)
+        .merge(proxy_admin)
         .merge(proxy_route)
         .with_state(state)
 }

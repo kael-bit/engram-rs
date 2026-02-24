@@ -53,32 +53,39 @@ impl MemoryDB {
     /// Drain all turns for a session, returning concatenated content.
     pub fn drain_proxy_session(&self, session_key: &str) -> Result<String, EngramError> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
+        // Transaction ensures SELECT + DELETE is atomic — no data loss
+        // under concurrent access.
+        let tx = conn.unchecked_transaction()?;
+        let mut stmt = tx.prepare(
             "SELECT content FROM proxy_turns WHERE session_key = ?1 ORDER BY id ASC"
         )?;
         let turns: Vec<String> = stmt
             .query_map(params![session_key], |row| row.get(0))?
             .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
+        drop(stmt);
         if !turns.is_empty() {
-            conn.execute("DELETE FROM proxy_turns WHERE session_key = ?1", params![session_key])?;
+            tx.execute("DELETE FROM proxy_turns WHERE session_key = ?1", params![session_key])?;
         }
+        tx.commit()?;
         Ok(turns.join("\n---\n"))
     }
 
     /// Drain all sessions, returning (session_key, context) pairs.
     pub fn drain_all_proxy_turns(&self) -> Result<Vec<(String, String)>, EngramError> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
+        let tx = conn.unchecked_transaction()?;
+        let mut stmt = tx.prepare(
             "SELECT DISTINCT session_key FROM proxy_turns"
         )?;
         let keys: Vec<String> = stmt
             .query_map([], |row| row.get(0))?
             .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
+        drop(stmt);
         let mut results = Vec::new();
         for key in keys {
-            let mut turn_stmt = conn.prepare(
+            let mut turn_stmt = tx.prepare(
                 "SELECT content FROM proxy_turns WHERE session_key = ?1 ORDER BY id ASC"
             )?;
             let turns: Vec<String> = turn_stmt
@@ -89,7 +96,8 @@ impl MemoryDB {
                 results.push((key, turns.join("\n---\n")));
             }
         }
-        conn.execute("DELETE FROM proxy_turns", [])?;
+        tx.execute("DELETE FROM proxy_turns", [])?;
+        tx.commit()?;
         Ok(results)
     }
 

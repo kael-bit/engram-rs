@@ -121,8 +121,12 @@ pub async fn handle(
         .and_then(|v| v.to_str().ok())
         .map(|s| {
             let token = s.strip_prefix("Bearer ").unwrap_or(s).trim();
-            if token.len() > 16 { token[token.len()-16..].to_string() }
-            else { token.to_string() }
+            // Use char boundary to avoid panic on multi-byte UTF-8
+            let start = token.char_indices()
+                .rev().nth(15)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            token[start..].to_string()
         })
         .unwrap_or_else(|| "default".into());
 
