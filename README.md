@@ -506,7 +506,7 @@ engram runs autonomously — no cron or external scheduler needed:
 | `POST` | `/memories/batch` | Batch create |
 | `GET` | `/memories` | List (`?layer=N&tag=X&ns=X&limit=50&offset=0`) |
 | `GET` | `/memories/:id` | Get by id (prefix match supported) |
-| `PATCH` | `/memories/:id` | Update content/tags/importance |
+| `PATCH` | `/memories/:id` | Update content/tags/importance/kind |
 | `DELETE` | `/memories/:id` | Delete |
 | `DELETE` | `/memories` | Batch delete (`{"ids": [...]}` or `{"namespace": "x"}`) |
 | `GET` | `/trash` | List soft-deleted memories (`?limit=100&offset=0`) |

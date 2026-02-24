@@ -327,18 +327,22 @@ server.tool(
 
 server.tool(
   "engram_update",
-  "Update a memory's metadata (importance, tags, layer). Content is immutable — use supersedes to replace.",
+  "Update a memory's content, metadata (importance, tags, layer, kind). Use supersedes on store to replace with history.",
   {
     id: z.string().describe("Memory ID to update"),
+    content: z.string().optional().describe("New content text"),
     importance: z.number().min(0).max(1).optional().describe("New importance value"),
     tags: z.array(z.string()).optional().describe("Replace tags"),
     layer: z.number().int().min(1).max(3).optional().describe("Move to layer: 1=buffer, 2=working, 3=core"),
+    kind: z.enum(["semantic", "episodic", "procedural"]).optional().describe("Memory type"),
   },
-  async ({ id, importance, tags, layer }: { id: string; importance?: number; tags?: string[]; layer?: number }) => {
+  async ({ id, content, importance, tags, layer, kind }: { id: string; content?: string; importance?: number; tags?: string[]; layer?: number; kind?: string }) => {
     const body: Record<string, unknown> = {};
+    if (content !== undefined) body.content = content;
     if (importance !== undefined) body.importance = importance;
     if (tags !== undefined) body.tags = tags;
     if (layer !== undefined) body.layer = layer;
+    if (kind !== undefined) body.kind = kind;
     const result = await engramMethod("PATCH", `/memories/${encodeURIComponent(id)}`, body);
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
