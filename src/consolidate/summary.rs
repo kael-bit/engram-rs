@@ -70,9 +70,10 @@ pub(super) async fn update_core_summary(db: &SharedDB, cfg: &AiConfig) {
 
     // Hard cap: if LLM ignored the length instruction, truncate at sentence boundary
     let summary = if summary.len() > 2000 {
-        let boundary = summary[..2000].rfind(['\u{3002}', '.', '\n'])
-            .unwrap_or(1997);
-        format!("{}…", &summary[..boundary])
+        let safe = crate::util::truncate_chars(&summary, 2000);
+        let boundary = safe.rfind(['\u{3002}', '.', '\n'])
+            .unwrap_or(safe.len().saturating_sub(3));
+        format!("{}…", &safe[..boundary])
     } else {
         summary
     };
