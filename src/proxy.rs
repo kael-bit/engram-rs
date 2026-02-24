@@ -179,7 +179,6 @@ async fn stream_response(
     extract: bool,
 ) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, std::io::Error>>(32);
-    let state_clone = state.clone();
     let extract_ok = status.is_success() && extract;
 
     tokio::spawn(async move {
@@ -204,7 +203,7 @@ async fn stream_response(
         drop(tx);
 
         if extract_ok && !buf.is_empty() {
-            buffer_exchange(state_clone, req_capture, buf, session_key).await;
+            buffer_exchange(state, req_capture, buf, session_key).await;
         }
     });
 
