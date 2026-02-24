@@ -142,16 +142,6 @@ curl 'http://localhost:3917/facts/history?subject=alice&predicate=role'
 
 Facts are also extracted automatically when using `/extract` or the LLM proxy.
 
-### Injection Protection
-
-Memories get injected into LLM context windows. Malicious content stored as a memory could act as a prompt injection. engram protects against this:
-
-- **On insert**: content is scored for injection risk. High-risk memories (score ≥ 0.7) are tagged `suspicious`.
-- **On recall**: suspicious memories are automatically downranked in scoring.
-- **On output**: special tokens (`<|im_start|>`, `[INST]`, `<<SYS>>`, etc.) are stripped from recall/resume responses.
-
-Detection covers instruction overrides, role-play injection, model-specific control tokens, and XML/tag escaping attempts.
-
 ### Hybrid Search
 
 Recall combines multiple signals:
@@ -262,7 +252,6 @@ engram runs autonomously — no cron or external scheduler needed:
 | `GET` | `/triggers/:action` | Pre-action recall |
 | `POST` | `/consolidate` | Maintenance cycle (`{"merge": true}` for LLM merge) |
 | `POST` | `/audit` | LLM-powered memory reorganization (requires AI) |
-| `POST` | `/sanitize` | Check text for injection risk (`{"content": "..."}`) |
 | `POST` | `/extract` | LLM text → structured memories |
 | `POST` | `/repair` | Fix FTS index + backfill embeddings |
 | `POST` | `/vacuum` | Reclaim disk space |

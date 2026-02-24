@@ -72,8 +72,6 @@ pub(super) async fn do_repair(
     })))
 }
 
-// /sanitize endpoint removed — injection detection was security theater
-
 #[derive(Deserialize)]
 pub(super) struct VacuumQuery {
     full: Option<bool>,

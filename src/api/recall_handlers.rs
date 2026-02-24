@@ -173,8 +173,7 @@ pub(super) struct ResumeQuery {
 }
 
 /// Fetch memories tagged with `trigger:{action}`. Used for pre-action
-/// safety checks — e.g. before `git push`, recall lessons about what
-/// not to commit.
+/// recall — e.g. before `git push`, recall lessons about what not to commit.
 pub(super) async fn get_triggers(
     State(state): State<AppState>,
     Path(action): Path<String>,
