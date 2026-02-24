@@ -33,8 +33,8 @@ pub(crate) fn parse_next_actions(content: &str) -> Vec<String> {
                 continue;
             }
             // Split by comma, Chinese comma, newline, or semicolon
-            for item in text.split(|c: char| c == ',' || c == '\n' || c == '、' || c == ';' || c == '；') {
-                let trimmed = item.trim().trim_end_matches(|c: char| c == '.' || c == '。');
+            for item in text.split([',', '\n', '、', ';', '；']) {
+                let trimmed = item.trim().trim_end_matches(['.', '。']);
                 let trimmed = trimmed.trim();
                 if !trimmed.is_empty() {
                     actions.push(trimmed.to_string());

@@ -552,17 +552,8 @@ fn strip_boilerplate(text: &str) -> String {
 
     let mut lines: Vec<&str> = Vec::new();
     let mut skip_block = false;
-    let mut in_code_block = false;
 
     for line in text.lines() {
-        // Track fenced code blocks — skip entire blocks
-        if line.starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if in_code_block {
-            continue;
-        }
 
         if markers.iter().any(|m| line.contains(m)) {
             skip_block = true;

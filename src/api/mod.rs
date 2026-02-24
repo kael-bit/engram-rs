@@ -1037,4 +1037,108 @@ mod tests {
             "safe memory (idx {safe_idx}) should rank above risky (idx {risky_idx})"
         );
     }
+
+    // ── parse_next_actions unit tests ──────────────────────────────
+
+    use super::recall_handlers::parse_next_actions;
+
+    #[test]
+    fn parse_next_comma_separated() {
+        let actions = parse_next_actions("Session: refactored auth. Next: write integration tests, deploy to staging");
+        assert_eq!(actions, vec!["write integration tests", "deploy to staging"]);
+    }
+
+    #[test]
+    fn parse_next_chinese_markers() {
+        let actions = parse_next_actions("做了X和Y。下一步：写测试、部署");
+        assert_eq!(actions, vec!["写测试", "部署"]);
+    }
+
+    #[test]
+    fn parse_next_chinese_colon_half() {
+        let actions = parse_next_actions("完成重构。下一步:写测试, 部署");
+        assert_eq!(actions, vec!["写测试", "部署"]);
+    }
+
+    #[test]
+    fn parse_next_multiline() {
+        let actions = parse_next_actions("Session recap.\nNext:\nwrite tests\ndeploy to staging\nupdate docs");
+        assert_eq!(actions, vec!["write tests", "deploy to staging", "update docs"]);
+    }
+
+    #[test]
+    fn parse_next_todo_marker() {
+        let actions = parse_next_actions("Did a bunch of stuff. TODO: fix bug, add logging");
+        assert_eq!(actions, vec!["fix bug", "add logging"]);
+    }
+
+    #[test]
+    fn parse_next_daiban_marker() {
+        let actions = parse_next_actions("完成了重构。待办：写测试、更新文档");
+        assert_eq!(actions, vec!["写测试", "更新文档"]);
+    }
+
+    #[test]
+    fn parse_next_no_marker() {
+        let actions = parse_next_actions("Just did some work, nothing special");
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn parse_next_dedup() {
+        let actions = parse_next_actions("Next: write tests, deploy, write tests");
+        assert_eq!(actions, vec!["write tests", "deploy"]);
+    }
+
+    #[tokio::test]
+    async fn resume_parses_next_actions_from_session_content() {
+        let app = router(test_state(None));
+
+        // Session memory with "Next:" in content (no next-action tag)
+        let body = serde_json::json!({
+            "content": "Session: refactored auth module. Next: write integration tests, deploy to staging",
+            "source": "session",
+            "importance": 0.6
+        });
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        let resp = app.oneshot(
+            Request::builder().uri("/resume?hours=1").body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+
+        let next = j["next_actions"].as_array().unwrap();
+        assert!(next.iter().any(|v| v.as_str().unwrap_or("") == "write integration tests"),
+            "should parse 'write integration tests' from session content, got: {:?}", next);
+        assert!(next.iter().any(|v| v.as_str().unwrap_or("") == "deploy to staging"),
+            "should parse 'deploy to staging' from session content, got: {:?}", next);
+    }
+
+    #[tokio::test]
+    async fn resume_compact_includes_kind() {
+        let app = router(test_state(None));
+
+        // Procedural memory
+        let body = serde_json::json!({
+            "content": "Deploy: test, build, stop, copy, start",
+            "layer": 3,
+            "importance": 0.9,
+            "kind": "procedural"
+        });
+        app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+
+        let resp = app.oneshot(
+            Request::builder().uri("/resume?hours=1&compact=true").body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+
+        let core = j["core"].as_array().unwrap();
+        assert!(!core.is_empty(), "should have core memories");
+        let proc_mem = core.iter().find(|m| m["content"].as_str().unwrap_or("").contains("Deploy"));
+        assert!(proc_mem.is_some(), "should find the procedural memory");
+        assert_eq!(proc_mem.unwrap()["kind"].as_str(), Some("procedural"),
+            "compact output should include kind field for non-semantic memories");
+    }
 }
