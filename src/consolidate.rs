@@ -456,193 +456,52 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
             vec![]
         });
 
-    // Only reconcile Working and Core layers (Buffer is too transient)
-    let candidates: Vec<&(Memory, Vec<f64>)> = all
+    let wc: Vec<&(Memory, Vec<f64>)> = all
         .iter()
         .filter(|(m, e)| !e.is_empty() && (m.layer == Layer::Working || m.layer == Layer::Core))
         .collect();
 
-    if candidates.len() < 2 {
+    if wc.len() < 2 {
         return (0, vec![]);
     }
 
     let mut reconciled = 0;
     let mut removed_ids: Vec<String> = Vec::new();
-    let one_hour_ms: i64 = 3600 * 1000;
 
-    // Find pairs with moderate similarity (related but not duplicate)
-    for i in 0..candidates.len() {
-        if removed_ids.contains(&candidates[i].0.id) {
-            continue;
-        }
-        for j in (i + 1)..candidates.len() {
-            if removed_ids.contains(&candidates[j].0.id) {
-                continue;
-            }
-
-            let sim = cosine_similarity(&candidates[i].1, &candidates[j].1);
-
-            // Skip near-duplicates (merge handles those) and unrelated pairs
-            if !(0.55..=0.78).contains(&sim) {
-                continue;
-            }
-
-            let (older, newer) = if candidates[i].0.created_at <= candidates[j].0.created_at {
-                (&candidates[i].0, &candidates[j].0)
-            } else {
-                (&candidates[j].0, &candidates[i].0)
-            };
-
-            // Only consider pairs with meaningful time gap
-            if (newer.created_at - older.created_at) < one_hour_ms {
-                continue;
-            }
-
-            // Same namespace only
-            if older.namespace != newer.namespace {
-                continue;
-            }
-
-            // Ask LLM to judge the relationship
-            let user_msg = format!(
-                "OLDER (created {}):\n{}\n\nNEWER (created {}):\n{}",
-                format_ts(older.created_at),
-                truncate_chars(&older.content, 400),
-                format_ts(newer.created_at),
-                truncate_chars(&newer.content, 400),
-            );
-
-            match ai::llm_chat_as(cfg, "gate", RECONCILE_PROMPT, &user_msg).await {
-                Ok(resp) => {
-                    let decision = resp.trim().to_uppercase();
-                    if decision.starts_with("UPDATE") || decision.starts_with("ABSORB") {
-                        // Newer supersedes older: transfer any unique tags, then delete old
-                        let new_tags = merge_tags(&newer.tags, &[&older.tags], 20);
-
-                        // Bump newer's importance if older had higher
-                        let imp = newer.importance.max(older.importance);
-                        let access = newer.access_count + older.access_count;
-
-                        let newer_id = newer.id.clone();
-                        let older_id = older.id.clone();
-                        let db2 = db.clone();
-                        let update_result = tokio::task::spawn_blocking(move || {
-                            db2.update_fields(&newer_id, None, None, Some(imp), Some(&new_tags))?;
-                            db2.set_access_count(&newer_id, access)?;
-                            db2.delete(&older_id)?;
-                            Ok::<_, EngramError>(())
-                        }).await;
-
-                        match update_result {
-                            Ok(Ok(())) => {
-                                info!(
-                                    newer = %newer.id,
-                                    older = %older.id,
-                                    sim = format!("{:.3}", sim),
-                                    decision = %decision,
-                                    "reconciled: newer supersedes older"
-                                );
-                                removed_ids.push(older.id.clone());
-                                reconciled += 1;
-                            }
-                            Ok(Err(e)) => warn!(error = %e, "reconcile update failed"),
-                            Err(e) => warn!(error = %e, "reconcile task panicked"),
-                        }
-                    } else {
-                        debug!(
-                            older = %older.id,
-                            newer = %newer.id,
-                            "reconcile: keeping both (different topics)"
-                        );
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "reconcile LLM call failed, skipping pair");
-                }
+    // Pass 1: Within Working/Core — newer supersedes older on same topic.
+    for i in 0..wc.len() {
+        if removed_ids.contains(&wc[i].0.id) { continue; }
+        for j in (i + 1)..wc.len() {
+            if removed_ids.contains(&wc[j].0.id) { continue; }
+            if let Some(id) = try_reconcile_pair(
+                db, cfg, &wc[i].0, &wc[i].1, &wc[j].0, &wc[j].1,
+                None, &removed_ids,
+            ).await {
+                removed_ids.push(id);
+                reconciled += 1;
             }
         }
     }
 
-    // Pass 2: Buffer → Working/Core reconciliation.
-    // When a buffer item updates an existing higher-layer memory, promote and supersede.
+    // Pass 2: Buffer → Working/Core — buffer item updates a higher-layer memory.
     let buffers: Vec<&(Memory, Vec<f64>)> = all
         .iter()
         .filter(|(m, e)| !e.is_empty() && m.layer == Layer::Buffer && !removed_ids.contains(&m.id))
         .collect();
 
     for buf in &buffers {
-        if removed_ids.contains(&buf.0.id) {
-            continue;
-        }
-        for wc in &candidates {
-            if removed_ids.contains(&wc.0.id) {
-                continue;
-            }
-            let sim = cosine_similarity(&buf.1, &wc.1);
-            if !(0.55..=0.78).contains(&sim) {
-                continue;
-            }
-            // Buffer is always newer than the Working/Core item it might update
-            if buf.0.created_at <= wc.0.created_at {
-                continue;
-            }
-            if (buf.0.created_at - wc.0.created_at) < one_hour_ms {
-                continue;
-            }
-            if buf.0.namespace != wc.0.namespace {
-                continue;
-            }
-
-            let user_msg = format!(
-                "OLDER (created {}, layer={}):\n{}\n\nNEWER (created {}, layer=buffer):\n{}",
-                format_ts(wc.0.created_at),
-                match wc.0.layer { Layer::Core => "core", Layer::Working => "working", _ => "buffer" },
-                truncate_chars(&wc.0.content, 400),
-                format_ts(buf.0.created_at),
-                truncate_chars(&buf.0.content, 400),
-            );
-
-            match ai::llm_chat_as(cfg, "gate", RECONCILE_PROMPT, &user_msg).await {
-                Ok(resp) => {
-                    let decision = resp.trim().to_uppercase();
-                    if decision.starts_with("UPDATE") || decision.starts_with("ABSORB") {
-                        let target_layer = wc.0.layer; // promote buffer to the old item's layer
-                        let new_tags = merge_tags(&buf.0.tags, &[&wc.0.tags], 20);
-                        let imp = buf.0.importance.max(wc.0.importance);
-                        let access = buf.0.access_count + wc.0.access_count;
-
-                        let buf_id = buf.0.id.clone();
-                        let wc_id = wc.0.id.clone();
-                        let db2 = db.clone();
-                        let update_result = tokio::task::spawn_blocking(move || {
-                            db2.promote(&buf_id, target_layer)?;
-                            db2.update_fields(&buf_id, None, None, Some(imp), Some(&new_tags))?;
-                            db2.set_access_count(&buf_id, access)?;
-                            db2.delete(&wc_id)?;
-                            Ok::<_, EngramError>(())
-                        }).await;
-
-                        match update_result {
-                            Ok(Ok(())) => {
-                                info!(
-                                    buffer = %buf.0.id,
-                                    replaced = %wc.0.id,
-                                    target_layer = ?target_layer,
-                                    sim = format!("{:.3}", sim),
-                                    "reconciled: buffer supersedes higher-layer"
-                                );
-                                removed_ids.push(wc.0.id.clone());
-                                reconciled += 1;
-                            }
-                            Ok(Err(e)) => warn!(error = %e, "buffer reconcile update failed"),
-                            Err(e) => warn!(error = %e, "buffer reconcile task panicked"),
-                        }
-                        break; // one buffer can only replace one WC item
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "buffer reconcile LLM call failed, skipping");
-                }
+        if removed_ids.contains(&buf.0.id) { continue; }
+        for target in &wc {
+            if removed_ids.contains(&target.0.id) { continue; }
+            // Buffer must be newer than the target
+            if buf.0.created_at <= target.0.created_at { continue; }
+            if let Some(id) = try_reconcile_pair(
+                db, cfg, &target.0, &target.1, &buf.0, &buf.1,
+                Some(target.0.layer), &removed_ids,
+            ).await {
+                removed_ids.push(id);
+                reconciled += 1;
+                break; // one buffer replaces at most one WC item
             }
         }
     }
@@ -650,8 +509,86 @@ async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>
     if reconciled > 0 {
         info!(reconciled, "reconciliation complete");
     }
-
     (reconciled, removed_ids)
+}
+
+/// Try to reconcile a pair of memories. Returns the removed (older) memory's ID on success.
+///
+/// When `promote_newer_to` is Some, the newer memory gets promoted to that layer
+/// (used when a buffer item supersedes a Working/Core item).
+async fn try_reconcile_pair(
+    db: &SharedDB, cfg: &AiConfig,
+    a: &Memory, a_emb: &[f64], b: &Memory, b_emb: &[f64],
+    promote_newer_to: Option<Layer>,
+    already_removed: &[String],
+) -> Option<String> {
+    if already_removed.contains(&a.id) || already_removed.contains(&b.id) {
+        return None;
+    }
+
+    let sim = cosine_similarity(a_emb, b_emb);
+    if !(0.55..=0.78).contains(&sim) { return None; }
+
+    let (older, newer) = if a.created_at <= b.created_at { (a, b) } else { (b, a) };
+
+    let one_hour_ms: i64 = 3600 * 1000;
+    if (newer.created_at - older.created_at) < one_hour_ms { return None; }
+    if older.namespace != newer.namespace { return None; }
+
+    let user_msg = format!(
+        "OLDER (created {}, layer={}):\n{}\n\nNEWER (created {}, layer={}):\n{}",
+        format_ts(older.created_at),
+        layer_label(older.layer),
+        truncate_chars(&older.content, 400),
+        format_ts(newer.created_at),
+        layer_label(newer.layer),
+        truncate_chars(&newer.content, 400),
+    );
+
+    let resp = match ai::llm_chat_as(cfg, "gate", RECONCILE_PROMPT, &user_msg).await {
+        Ok(r) => r,
+        Err(e) => { warn!(error = %e, "reconcile LLM call failed"); return None; }
+    };
+
+    let decision = resp.trim().to_uppercase();
+    if !decision.starts_with("UPDATE") && !decision.starts_with("ABSORB") {
+        debug!(older = %older.id, newer = %newer.id, "reconcile: keeping both");
+        return None;
+    }
+
+    let new_tags = merge_tags(&newer.tags, &[&older.tags], 20);
+    let imp = newer.importance.max(older.importance);
+    let access = newer.access_count + older.access_count;
+
+    let newer_id = newer.id.clone();
+    let older_id = older.id.clone();
+    let db2 = db.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        if let Some(layer) = promote_newer_to {
+            db2.promote(&newer_id, layer)?;
+        }
+        db2.update_fields(&newer_id, None, None, Some(imp), Some(&new_tags))?;
+        db2.set_access_count(&newer_id, access)?;
+        db2.delete(&older_id)?;
+        Ok::<_, EngramError>(())
+    }).await;
+
+    match result {
+        Ok(Ok(())) => {
+            info!(
+                newer = %newer.id, older = %older.id,
+                sim = format!("{:.3}", sim), decision = %decision,
+                "reconciled: newer supersedes older"
+            );
+            Some(older.id.clone())
+        }
+        Ok(Err(e)) => { warn!(error = %e, "reconcile update failed"); None }
+        Err(e) => { warn!(error = %e, "reconcile task panicked"); None }
+    }
+}
+
+fn layer_label(l: Layer) -> &'static str {
+    match l { Layer::Core => "core", Layer::Working => "working", _ => "buffer" }
 }
 
 /// Merge tags from multiple sources, deduplicating and capping at `cap`.
