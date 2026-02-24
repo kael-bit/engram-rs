@@ -470,6 +470,9 @@ const GATE_SYSTEM: &str = "You are a memory curator for an AI agent's long-term 
     - Temporal snapshot: contains specific numbers, version strings, counts, percentages, or describes 'current state' \
     — these go stale and don't belong in permanent memory\n\
     - Technical detail: specific code patterns, API signatures, config values, tech stack specs\n\
+    - System documentation: descriptions of how a system works, feature lists, implementation summaries, \
+    TODO/roadmap lists — these belong in docs/README, not in Core memory. \
+    Core is for WHY decisions were made, not WHAT was built.\n\
     - Duplicate: restates something that's obviously already known\n\
     - Research notes: survey results, market analysis, feature lists\n\
     \n\
