@@ -489,20 +489,9 @@ pub(super) async fn do_resume(
     let recent_out = fit_section(&recent, &mut budget_left, compact);
     let buffer_out = fit_section(&buffer, &mut budget_left, compact);
 
-    // Only touch Buffer memories — they need access_count to get promoted.
-    // Core is stable (touching inflates access_count to 200+ meaninglessly).
-    // Working shouldn't be touched: it resets last_accessed which prevents
-    // gate-rejected items from ever decaying.
-    {
-        let db = state.db.clone();
-        let ids: Vec<String> = buffer_out.iter()
-            .map(|m| m.id.clone()).collect();
-        tokio::task::spawn_blocking(move || {
-            for id in &ids {
-                let _ = db.touch(id);
-            }
-        });
-    }
+    // Resume does NOT touch any memories. Only real recall (query-driven
+    // retrieval) should increment access_count. Resume is a context dump,
+    // not evidence of utility.
 
     // Read the summary text if we decided to use it
     let core_summary_text = if core_summary_used {
