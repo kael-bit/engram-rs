@@ -11,6 +11,11 @@ pub(crate) const AUDIT_SYSTEM_PUB: &str = AUDIT_SYSTEM;
 const AUDIT_SYSTEM: &str = r#"You are reviewing an AI agent's memory store. You see ALL memories organized by layer.
 Your job: reorganize them. Output a JSON array of operations.
 
+## Metadata
+- `ac` = access count (how often recalled)
+- `age` = hours since last accessed (age=2h means accessed 2 hours ago)
+- `imp` = importance (0.0-1.0)
+
 ## Layers
 - Core (3): Permanent. Identity, values, key relationships, hard-won lessons, strategic goals.
 - Working (2): Useful but not permanent. Project context, recent learnings, operational knowledge.
@@ -19,17 +24,20 @@ Your job: reorganize them. Output a JSON array of operations.
 ## Operations (output as JSON array)
 - {"op":"promote","id":"<8-char-id>","to":3} — move to Core (only for truly permanent knowledge)
 - {"op":"demote","id":"<8-char-id>","to":2} or {"op":"demote","id":"<8-char-id>","to":1}
-
 - {"op":"merge","ids":["id1","id2"],"content":"merged text","layer":2,"tags":["tag1"]}
 - {"op":"delete","id":"<8-char-id>"} — remove (duplicate, obsolete, or garbage)
+
+## HARD RULES (violations make the audit worthless)
+1. NEVER delete or merge memories with age < 24h — they were just accessed
+2. NEVER delete identity, constraint, or lesson-tagged memories
+3. NEVER demote directly to Buffer (to:1) — use Working (to:2) as intermediate
+4. Prefer demote over delete — deletion is irreversible
+5. Only merge TRUE duplicates (same fact restated). Related ≠ duplicate.
 
 ## Guidelines
 - Core should be SMALL: identity, values, lessons, key relationships, strategic constraints
 - Technical details, bug fixes, version notes, config values → Working at most
-- Near-duplicate memories → merge into one, keep the best content
-- Session logs older than a few days with no unique insight → delete
-- Merge memories that express the SAME fact or lesson redundantly. Don't merge merely related memories.
-- NEVER delete or merge a memory that was updated recently (within 24h) — the user may have just edited it.
+- Merge memories that express the SAME fact or lesson redundantly
 - Output ONLY a valid JSON array. Empty array [] if no changes needed."#;
 
 /// Full audit: reviews Core+Working memories using the gate model.
@@ -107,20 +115,23 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
 }
 
 fn format_audit_prompt(core: &[Memory], working: &[Memory]) -> String {
+    let now = crate::db::now_ms();
     let mut prompt = String::with_capacity(16_000);
     prompt.push_str("## Core Layer\n");
     for m in core {
         let tags = m.tags.join(",");
+        let age_h = (now - m.last_accessed) as f64 / 3_600_000.0;
         let preview: String = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.importance, m.access_count, tags, preview));
+        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.0}h, tags=[{}]) {}\n",
+            crate::util::short_id(&m.id), m.importance, m.access_count, age_h, tags, preview));
     }
     prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
     for m in working {
         let tags = m.tags.join(",");
+        let age_h = (now - m.last_accessed) as f64 / 3_600_000.0;
         let preview: String = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.importance, m.access_count, tags, preview));
+        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.0}h, tags=[{}]) {}\n",
+            crate::util::short_id(&m.id), m.importance, m.access_count, age_h, tags, preview));
     }
     prompt
 }

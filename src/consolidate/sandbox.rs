@@ -316,22 +316,25 @@ pub async fn sandbox_audit(cfg: &AiConfig, db: &SharedDB) -> Result<SandboxResul
 }
 
 fn format_sandbox_prompt(core: &[Memory], working: &[Memory]) -> String {
+    let now = crate::db::now_ms();
     let mut prompt = String::with_capacity(16_000);
     prompt.push_str("## Core Layer\n");
     for m in core {
         let tags = m.tags.join(",");
+        let age_h = (now - m.last_accessed) as f64 / 3_600_000.0;
         let preview = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (L{}, imp={:.1}, ac={}, kind={}, tags=[{}]) {}\n",
+        prompt.push_str(&format!("- [{}] (L{}, imp={:.1}, ac={}, age={:.0}h, kind={}, tags=[{}]) {}\n",
             crate::util::short_id(&m.id), m.layer as u8, m.importance,
-            m.access_count, m.kind, tags, preview));
+            m.access_count, age_h, m.kind, tags, preview));
     }
     prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
     for m in working {
         let tags = m.tags.join(",");
+        let age_h = (now - m.last_accessed) as f64 / 3_600_000.0;
         let preview = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (L{}, imp={:.1}, ac={}, kind={}, tags=[{}]) {}\n",
+        prompt.push_str(&format!("- [{}] (L{}, imp={:.1}, ac={}, age={:.0}h, kind={}, tags=[{}]) {}\n",
             crate::util::short_id(&m.id), m.layer as u8, m.importance,
-            m.access_count, m.kind, tags, preview));
+            m.access_count, age_h, m.kind, tags, preview));
     }
     prompt
 }
