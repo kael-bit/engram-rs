@@ -531,9 +531,11 @@ impl MemoryDB {
             clauses.push(format!("layer = ?{}", params_vec.len()));
         }
         if let Some(t) = tag {
-            let pattern = format!("%\"{}\"%" , t.replace('"', ""));
-            params_vec.push(Box::new(pattern));
-            clauses.push(format!("tags LIKE ?{}", params_vec.len()));
+            params_vec.push(Box::new(t.to_string()));
+            clauses.push(format!(
+                "EXISTS (SELECT 1 FROM json_each(memories.tags) WHERE json_each.value = ?{})",
+                params_vec.len()
+            ));
         }
 
         params_vec.push(Box::new(limit as i64));
@@ -617,23 +619,24 @@ impl MemoryDB {
 
     /// List memories that have a specific tag (exact match).
     pub fn list_by_tag(&self, tag: &str, ns: Option<&str>) -> Result<Vec<Memory>, EngramError> {
-        let pattern = format!("%\"{}\"%", tag.replace('"', ""));
         let conn = self.conn()?;
         if let Some(ns) = ns {
             let mut stmt = conn.prepare(
-                "SELECT * FROM memories WHERE tags LIKE ?1 AND namespace = ?2 \
-                 ORDER BY created_at DESC",
+                "SELECT * FROM memories WHERE \
+                 EXISTS (SELECT 1 FROM json_each(memories.tags) WHERE json_each.value = ?1) \
+                 AND namespace = ?2 ORDER BY created_at DESC",
             )?;
-            let rows = stmt.query_map(params![pattern, ns], row_to_memory)?
+            let rows = stmt.query_map(params![tag, ns], row_to_memory)?
                 .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
                 .collect();
             Ok(rows)
         } else {
             let mut stmt = conn.prepare(
-                "SELECT * FROM memories WHERE tags LIKE ?1 \
+                "SELECT * FROM memories WHERE \
+                 EXISTS (SELECT 1 FROM json_each(memories.tags) WHERE json_each.value = ?1) \
                  ORDER BY created_at DESC",
             )?;
-            let rows = stmt.query_map(params![pattern], row_to_memory)?
+            let rows = stmt.query_map(params![tag], row_to_memory)?
                 .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
                 .collect();
             Ok(rows)
