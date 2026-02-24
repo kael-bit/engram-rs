@@ -93,8 +93,6 @@ pub struct Memory {
     pub namespace: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Vec<f64>>,
-    #[serde(skip)]
-    pub risk_score: f64,
     #[serde(default = "default_kind", skip_serializing_if = "is_default_kind")]
     pub kind: String,
 }
@@ -437,7 +435,6 @@ CREATE TABLE IF NOT EXISTS memories (
     tags TEXT NOT NULL DEFAULT '[]',
     namespace TEXT NOT NULL DEFAULT 'default',
     embedding BLOB,
-    risk_score REAL NOT NULL DEFAULT 0.0,
     kind TEXT NOT NULL DEFAULT 'semantic'
 );
 
@@ -590,12 +587,6 @@ impl MemoryDB {
                 [],
             )?;
         }
-        if conn.prepare("SELECT risk_score FROM memories LIMIT 0").is_err() {
-            conn.execute(
-                "ALTER TABLE memories ADD COLUMN risk_score REAL NOT NULL DEFAULT 0.0",
-                [],
-            )?;
-        }
         if conn.prepare("SELECT valid_from FROM facts LIMIT 0").is_err() {
             conn.execute("ALTER TABLE facts ADD COLUMN valid_from INTEGER", [])?;
             conn.execute("ALTER TABLE facts ADD COLUMN valid_until INTEGER", [])?;
@@ -679,7 +670,6 @@ fn row_to_memory_meta(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
         tags: serde_json::from_str(&tags_str).unwrap_or_default(),
         namespace: row.get::<_, String>("namespace").unwrap_or_else(|_| "default".into()),
         embedding: None,
-        risk_score: row.get::<_, f64>("risk_score").unwrap_or(0.0),
         kind: row.get::<_, String>("kind").unwrap_or_else(|_| "semantic".into()),
     })
 }
@@ -707,7 +697,6 @@ fn row_to_memory_impl(row: &rusqlite::Row, include_embedding: bool) -> rusqlite:
         tags: serde_json::from_str(&tags_str).unwrap_or_default(),
         namespace: row.get::<_, String>("namespace").unwrap_or_else(|_| "default".into()),
         embedding,
-        risk_score: row.get::<_, f64>("risk_score").unwrap_or(0.0),
         kind: row.get::<_, String>("kind").unwrap_or_else(|_| "semantic".into()),
     })
 }

@@ -128,10 +128,6 @@ fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {
     let mut score =
         (WEIGHT_IMPORTANCE * mem.importance + WEIGHT_RECENCY * recency + WEIGHT_RELEVANCE * relevance) * bonus;
 
-    if mem.risk_score > 0.5 {
-        score *= 1.0 - (mem.risk_score * 0.5);
-    }
-
     // Cap at 1.0 — scores above 1 confuse callers and threshold logic
     score = score.min(1.0);
 
@@ -498,10 +494,6 @@ pub fn recall(
         None
     };
 
-    // Sanitize output content to strip dangerous tokens
-    for sm in &mut selected {
-        sm.memory.content = crate::safety::sanitize_for_output(&sm.memory.content);
-    }
 
     RecallResponse {
         memories: selected,

@@ -81,24 +81,20 @@ impl MemoryDB {
         let layer: Layer = layer_val.try_into()?;
         let id = Uuid::new_v4().to_string();
         let source = input.source.unwrap_or_else(|| "api".into());
-        let mut tags = input.tags.unwrap_or_default();
+        let tags = input.tags.unwrap_or_default();
 
         let namespace = input.namespace.unwrap_or_else(|| "default".into());
         let kind = input.kind.unwrap_or_else(|| "semantic".into());
 
         let decay = if kind == "procedural" { 0.01 } else { layer.default_decay() };
 
-        let risk_score = crate::safety::assess_injection_risk(&input.content);
-        if risk_score >= 0.7 && !tags.contains(&"suspicious".to_string()) {
-            tags.push("suspicious".into());
-        }
         let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
 
         self.conn()?.execute(
             "INSERT INTO memories \
              (id, content, layer, importance, created_at, last_accessed, \
-              access_count, decay_rate, source, tags, namespace, risk_score, kind) \
-             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11,?12)",
+              access_count, decay_rate, source, tags, namespace, kind) \
+             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11)",
             params![
                 id,
                 input.content,
@@ -110,7 +106,6 @@ impl MemoryDB {
                 source,
                 tags_json,
                 namespace,
-                risk_score,
                 kind,
             ],
         )?;
@@ -140,7 +135,6 @@ impl MemoryDB {
             tags,
             namespace,
             embedding: None,
-            risk_score,
             kind,
         })
     }
@@ -167,26 +161,22 @@ impl MemoryDB {
                 let id = Uuid::new_v4().to_string();
                 let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
                 let source = input.source.unwrap_or_else(|| "api".into());
-                let mut tags = input.tags.unwrap_or_default();
+                let tags = input.tags.unwrap_or_default();
                 let namespace = input.namespace.unwrap_or_else(|| "default".into());
                 let kind = input.kind.unwrap_or_else(|| "semantic".into());
 
                 let decay = if kind == "procedural" { 0.01 } else { layer.default_decay() };
 
-                let risk_score = crate::safety::assess_injection_risk(&input.content);
-                if risk_score >= 0.7 && !tags.contains(&"suspicious".to_string()) {
-                    tags.push("suspicious".into());
-                }
                 let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
 
                 conn.execute(
                     "INSERT INTO memories \
                      (id, content, layer, importance, created_at, last_accessed, \
-                      access_count, decay_rate, source, tags, namespace, risk_score, kind) \
-                     VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11,?12)",
+                      access_count, decay_rate, source, tags, namespace, kind) \
+                     VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11)",
                     params![
                         id, input.content, layer_val, importance, now, now,
-                        decay, source, tags_json, namespace, risk_score, kind
+                        decay, source, tags_json, namespace, kind
                     ],
                 )?;
                 let processed = append_segmented(&input.content);
@@ -209,7 +199,6 @@ impl MemoryDB {
                     tags,
                     namespace,
                     embedding: None,
-                    risk_score,
                     kind,
                 });
             }
@@ -912,8 +901,8 @@ impl MemoryDB {
                 conn.execute(
                     "INSERT INTO memories \
                      (id, content, layer, importance, created_at, last_accessed, \
-                      access_count, repetition_count, decay_rate, source, tags, namespace, embedding, risk_score, kind) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                      access_count, repetition_count, decay_rate, source, tags, namespace, embedding, kind) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
                     params![
                         actual_id,
                         m.content,
@@ -928,7 +917,6 @@ impl MemoryDB {
                         tags_json,
                         m.namespace,
                         m.embedding.as_ref().map(|e| crate::ai::embedding_to_bytes(e)),
-                        m.risk_score,
                         m.kind,
                     ],
                 )?;

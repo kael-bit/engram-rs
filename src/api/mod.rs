@@ -108,7 +108,6 @@ pub fn router(state: AppState) -> Router {
         .route("/consolidate", post(do_consolidate))
         .route("/audit", post(do_audit))
         .route("/repair", post(do_repair))
-        .route("/sanitize", post(do_sanitize))
         .route("/vacuum", post(do_vacuum))
         .route("/extract", post(do_extract))
         .route("/export", get(do_export))
@@ -214,7 +213,6 @@ async fn index(State(state): State<AppState>) -> Json<serde_json::Value> {
             "POST /consolidate": "run maintenance cycle",
             "POST /audit": "LLM-powered memory reorganization (uses ENGRAM_GATE_MODEL)",
             "POST /repair": "auto-repair FTS index; ?force=true for full rebuild",
-            "POST /sanitize": "check text for prompt injection risk, returns risk_score and cleaned content",
             "POST /vacuum": "reclaim disk space (?full=true for full vacuum)",
             "POST /extract": "LLM-extract memories from text",
             "GET /export": "export all memories (?embed=true to include vectors)",

@@ -72,22 +72,7 @@ pub(super) async fn do_repair(
     })))
 }
 
-#[derive(Deserialize)]
-pub(super) struct SanitizeInput {
-    content: String,
-}
-
-pub(super) async fn do_sanitize(
-    Json(input): Json<SanitizeInput>,
-) -> Json<serde_json::Value> {
-    let risk_score = crate::safety::assess_injection_risk(&input.content);
-    let cleaned = crate::safety::sanitize_for_output(&input.content);
-    Json(serde_json::json!({
-        "risk_score": risk_score,
-        "suspicious": risk_score >= 0.7,
-        "cleaned": cleaned,
-    }))
-}
+// /sanitize endpoint removed — injection detection was security theater
 
 #[derive(Deserialize)]
 pub(super) struct VacuumQuery {

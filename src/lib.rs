@@ -7,7 +7,6 @@ pub mod db;
 pub mod error;
 pub mod proxy;
 pub mod recall;
-pub mod safety;
 pub mod util;
 
 use std::sync::Arc;

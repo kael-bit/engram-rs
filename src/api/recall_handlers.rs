@@ -319,7 +319,7 @@ pub(super) async fn do_resume(
     let to_json = |mems: &[db::Memory]| -> Vec<serde_json::Value> {
         if compact {
             mems.iter().map(|m| {
-                let content = crate::safety::sanitize_for_output(&m.content);
+                let content = &m.content;
                 let mut obj = serde_json::json!({
                     "content": content,
                     "layer": m.layer as i32,
@@ -340,7 +340,7 @@ pub(super) async fn do_resume(
                 if let Some(obj) = val.as_object_mut() {
                     obj.insert(
                         "content".into(),
-                        serde_json::Value::String(crate::safety::sanitize_for_output(&m.content)),
+                        serde_json::Value::String(m.content.clone()),
                     );
                 }
                 val

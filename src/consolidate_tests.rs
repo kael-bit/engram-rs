@@ -16,7 +16,6 @@ fn make_mem(id: &str, layer: Layer, importance: f64, emb: Vec<f64>) -> (Memory, 
             tags: vec![],
             namespace: "default".into(),
             embedding: None,
-            risk_score: 0.0,
             kind: "semantic".into(),
         },
         emb,
@@ -102,7 +101,6 @@ fn mem_with_ts(
         tags: vec![],
         namespace: "default".into(),
         embedding: None,
-        risk_score: 0.0,
         kind: "semantic".into(),
     }
 }

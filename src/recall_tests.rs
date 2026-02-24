@@ -156,7 +156,6 @@ fn time_filter_since() {
         tags: vec![],
         namespace: "default".into(),
         embedding: None,
-        risk_score: 0.0,
         kind: "semantic".into(),
     };
     let recent = Memory {
@@ -173,7 +172,6 @@ fn time_filter_since() {
         tags: vec![],
         namespace: "default".into(),
         embedding: None,
-        risk_score: 0.0,
         kind: "semantic".into(),
     };
     db.import(&[old, recent]).unwrap();
