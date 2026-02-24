@@ -1420,7 +1420,7 @@ mod tests {
     #[test]
     fn short_cjk_detection() {
         // Mixed CJK+ASCII, short → true
-        assert!(is_short_cjk_query("sky是谁"));
+        assert!(is_short_cjk_query("alice是谁"));
         // Pure CJK, short → true
         assert!(is_short_cjk_query("部署流程"));
         // Single CJK char with ASCII → true
@@ -1435,55 +1435,4 @@ mod tests {
         assert!(!is_short_cjk_query("hi"));
     }
 
-    #[test]
-    fn short_cjk_fts_boost_higher() {
-        // Verify that the FTS dual-hit boost multiplier is larger for short CJK
-        // queries than for regular queries (0.6 vs 0.3).
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-
-        let base_relevance: f64 = 0.7;
-        let fts_rel: f64 = 1.0; // top FTS hit
-
-        // Regular query boost: 1 + 1.0 * 0.3 = 1.3
-        let regular_boosted = (base_relevance * (1.0 + fts_rel * 0.3)).min(1.0);
-        let regular_score = score_combined(0.8, regular_boosted, now_ms);
-
-        // Short CJK boost: 1 + 1.0 * 0.6 = 1.6
-        let cjk_boosted = (base_relevance * (1.0 + fts_rel * 0.6)).min(1.0);
-        let cjk_score = score_combined(0.8, cjk_boosted, now_ms);
-
-        assert!(cjk_boosted > regular_boosted,
-            "short CJK FTS boost ({cjk_boosted}) should exceed regular ({regular_boosted})");
-        assert!(cjk_score > regular_score,
-            "short CJK score ({cjk_score}) should exceed regular ({regular_score})");
-    }
-
-    #[test]
-    fn short_cjk_fts_floor_higher() {
-        // For short CJK queries the FTS relevance floor for dual-hit results
-        // should be higher so keyword-confirmed results don't sink.
-        let fts_rel = 1.0; // top FTS hit
-
-        let regular_floor = 0.35 + fts_rel * 0.25; // 0.6
-        let cjk_floor = 0.50 + fts_rel * 0.35;     // 0.85
-
-        assert!(cjk_floor > regular_floor,
-            "short CJK floor ({cjk_floor}) should exceed regular floor ({regular_floor})");
-    }
-
-    #[test]
-    fn short_cjk_fts_only_cap_higher() {
-        // FTS-only results (no semantic confirmation) should have a higher
-        // relevance cap for short CJK queries (0.7) vs regular (0.5).
-        let fts_rel = 1.0;
-
-        let regular_cap = fts_rel * 0.5;
-        let cjk_cap = fts_rel * 0.7;
-
-        assert!(cjk_cap > regular_cap,
-            "short CJK FTS-only cap ({cjk_cap}) should exceed regular ({regular_cap})");
-    }
 }

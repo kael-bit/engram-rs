@@ -327,19 +327,19 @@ mod tests {
     #[test]
     fn test_fact_crud() {
         let db = test_db();
-        let mem = db.insert(MemoryInput::new("alice lives in Portland")).unwrap();
+        let mem = db.insert(MemoryInput::new("alice lives in Westville")).unwrap();
 
         let (fact, _) = db.insert_fact(FactInput {
             subject: "alice".into(),
             predicate: "location".into(),
-            object: "Portland".into(),
+            object: "Westville".into(),
             memory_id: Some(mem.id.clone()),
             valid_from: None,
         }, "default").unwrap();
 
         assert_eq!(fact.subject, "alice");
         assert_eq!(fact.predicate, "location");
-        assert_eq!(fact.object, "Portland");
+        assert_eq!(fact.object, "Westville");
         assert_eq!(fact.memory_id, mem.id);
         assert_eq!(fact.namespace, "default");
 
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(results[0].id, fact.id);
 
         // query by object
-        let results = db.query_facts("Portland", "default", false).unwrap();
+        let results = db.query_facts("Westville", "default", false).unwrap();
         assert_eq!(results.len(), 1);
 
         // list all
@@ -365,13 +365,13 @@ mod tests {
     #[test]
     fn test_fact_conflict_detection() {
         let db = test_db();
-        let m1 = db.insert(MemoryInput::new("alice lives in Portland")).unwrap();
-        let m2 = db.insert(MemoryInput::new("alice lives in Tokyo")).unwrap();
+        let m1 = db.insert(MemoryInput::new("alice lives in Westville")).unwrap();
+        let m2 = db.insert(MemoryInput::new("alice lives in Eastdale")).unwrap();
 
         let (portland, _) = db.insert_fact(FactInput {
             subject: "alice".into(),
             predicate: "location".into(),
-            object: "Portland".into(),
+            object: "Westville".into(),
             memory_id: Some(m1.id.clone()),
             valid_from: None,
         }, "default").unwrap();
@@ -379,23 +379,23 @@ mod tests {
         let (tokyo, superseded) = db.insert_fact(FactInput {
             subject: "alice".into(),
             predicate: "location".into(),
-            object: "Tokyo".into(),
+            object: "Eastdale".into(),
             memory_id: Some(m2.id.clone()),
             valid_from: None,
         }, "default").unwrap();
 
-        // Portland should have been auto-superseded
+        // Westville should have been auto-superseded
         assert_eq!(superseded.len(), 1);
         assert_eq!(superseded[0].id, portland.id);
         assert!(superseded[0].valid_until.is_some());
         assert_eq!(superseded[0].superseded_by.as_deref(), Some(tokyo.id.as_str()));
 
-        // get_conflicts returns all (including superseded), but only Tokyo is active
+        // get_conflicts returns all (including superseded), but only Eastdale is active
         let all = db.get_conflicts("alice", "location", "default").unwrap();
         assert_eq!(all.len(), 2);
         let active: Vec<_> = all.iter().filter(|f| f.valid_until.is_none()).collect();
         assert_eq!(active.len(), 1);
-        assert_eq!(active[0].object, "Tokyo");
+        assert_eq!(active[0].object, "Eastdale");
     }
 
     #[test]
@@ -461,7 +461,7 @@ mod tests {
         let (old, _) = db.insert_fact(FactInput {
             subject: "alice".into(),
             predicate: "city".into(),
-            object: "Portland".into(),
+            object: "Westville".into(),
             memory_id: None,
             valid_from: None,
         }, "default").unwrap();
@@ -469,7 +469,7 @@ mod tests {
         let (new, superseded) = db.insert_fact(FactInput {
             subject: "alice".into(),
             predicate: "city".into(),
-            object: "Tokyo".into(),
+            object: "Eastdale".into(),
             memory_id: None,
             valid_from: None,
         }, "default").unwrap();
@@ -614,16 +614,16 @@ mod tests {
             object: "Acme".into(),
             memory_id: None, valid_from: None,
         }, "default").unwrap();
-        // Acme → located_in → Tokyo
+        // Acme → located_in → Eastdale
         db.insert_fact(FactInput {
             subject: "Acme".into(),
             predicate: "located_in".into(),
-            object: "Tokyo".into(),
+            object: "Eastdale".into(),
             memory_id: None, valid_from: None,
         }, "default").unwrap();
 
         let chains = db.query_multihop("alice", 2, "default").unwrap();
-        // Should have: [alice→Acme] and [alice→Acme, Acme→Tokyo]
+        // Should have: [alice→Acme] and [alice→Acme, Acme→Eastdale]
         assert_eq!(chains.len(), 2);
 
         let single: Vec<_> = chains.iter().filter(|c| c.path.len() == 1).collect();
@@ -633,7 +633,7 @@ mod tests {
 
         assert_eq!(double[0].path[0].object, "Acme");
         assert_eq!(double[0].path[1].subject, "Acme");
-        assert_eq!(double[0].path[1].object, "Tokyo");
+        assert_eq!(double[0].path[1].object, "Eastdale");
     }
 
     #[test]
@@ -724,24 +724,24 @@ mod tests {
     #[test]
     fn test_multihop_skips_superseded() {
         let db = test_db();
-        // alice → city → Portland (will be superseded)
+        // alice → city → Westville (will be superseded)
         db.insert_fact(FactInput {
             subject: "alice".into(),
             predicate: "city".into(),
-            object: "Portland".into(),
+            object: "Westville".into(),
             memory_id: None, valid_from: None,
         }, "default").unwrap();
-        // alice → city → Tokyo (supersedes Portland)
+        // alice → city → Eastdale (supersedes Westville)
         db.insert_fact(FactInput {
             subject: "alice".into(),
             predicate: "city".into(),
-            object: "Tokyo".into(),
+            object: "Eastdale".into(),
             memory_id: None, valid_from: None,
         }, "default").unwrap();
 
         let chains = db.query_multihop("alice", 1, "default").unwrap();
         assert_eq!(chains.len(), 1);
-        assert_eq!(chains[0].path[0].object, "Tokyo",
+        assert_eq!(chains[0].path[0].object, "Eastdale",
             "should only follow active (non-superseded) facts");
     }
 
