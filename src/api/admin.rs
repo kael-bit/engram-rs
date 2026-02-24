@@ -320,3 +320,11 @@ pub(super) async fn llm_usage(
         "daily": daily,
     })))
 }
+
+pub(super) async fn clear_llm_usage(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let db = state.db.clone();
+    let count = blocking(move || db.clear_llm_usage()).await??;
+    Ok(Json(serde_json::json!({ "deleted": count })))
+}

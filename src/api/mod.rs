@@ -120,7 +120,7 @@ pub fn router(state: AppState) -> Router {
         .route("/facts/{id}", delete(delete_fact))
         .route("/trash", get(trash_list).delete(trash_purge))
         .route("/trash/{id}/restore", post(trash_restore))
-        .route("/llm-usage", get(llm_usage))
+        .route("/llm-usage", get(llm_usage).delete(clear_llm_usage))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Import needs a bigger body limit for exports with embeddings

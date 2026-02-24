@@ -721,6 +721,12 @@ impl MemoryDB {
         })
     }
 
+    pub fn clear_llm_usage(&self) -> Result<usize, EngramError> {
+        let c = self.conn()?;
+        let count = c.execute("DELETE FROM llm_usage", [])?;
+        Ok(count)
+    }
+
     /// Open (or create) a database at the given path.
     /// Pool size defaults to 8 (1 writer + 7 readers in WAL mode).
     pub fn open(path: &str) -> Result<Self, EngramError> {
