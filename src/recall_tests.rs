@@ -583,14 +583,21 @@ fn prefilter_falls_back_when_few_candidates() {
     // full semantic search should run.
     let db = MemoryDB::open(":memory:").expect("in-memory db");
 
+    // Use higher-dimensional embeddings for HNSW stability
+    let mut qemb = vec![0.0f32; 64];
+    qemb[0] = 1.0;
+
+    let mut sem_emb = vec![0.0f32; 64];
+    sem_emb[0] = 0.9;
+    sem_emb[1] = 0.1;
+
     // Only 1 FTS match — not enough for prefiltering with limit=2
     let mem = db.insert(MemoryInput::new("rare keyword xylophone")).unwrap();
-    let query_emb: Vec<f32> = vec![1.0, 0.0, 0.0];
-    db.set_embedding(&mem.id, &query_emb).unwrap();
+    db.set_embedding(&mem.id, &qemb).unwrap();
 
     // A memory that only matches semantically (no FTS match)
     let semantic_only = db.insert(MemoryInput::new("something about music instruments")).unwrap();
-    db.set_embedding(&semantic_only.id, &vec![0.9f32, 0.1, 0.0]).unwrap();
+    db.set_embedding(&semantic_only.id, &sem_emb).unwrap();
 
     let req = RecallRequest {
         query: "xylophone".into(),
@@ -598,7 +605,7 @@ fn prefilter_falls_back_when_few_candidates() {
         min_score: Some(0.0),
         ..Default::default()
     };
-    let result = recall(&db, &req, Some(&query_emb), None);
+    let result = recall(&db, &req, Some(&qemb), None);
 
     // Only 1 candidate < 2*2=4, so full search should run
     assert!(
