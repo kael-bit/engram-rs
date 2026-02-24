@@ -509,6 +509,9 @@ engram runs autonomously — no cron or external scheduler needed:
 | `PATCH` | `/memories/:id` | Update content/tags/importance |
 | `DELETE` | `/memories/:id` | Delete |
 | `DELETE` | `/memories` | Batch delete (`{"ids": [...]}` or `{"namespace": "x"}`) |
+| `GET` | `/trash` | List soft-deleted memories (`?limit=100&offset=0`) |
+| `POST` | `/trash/:id/restore` | Restore a memory from trash |
+| `DELETE` | `/trash` | Permanently purge all trash |
 | `POST` | `/recall` | Hybrid search (semantic + keyword + facts) |
 | `GET` | `/search` | Quick keyword search (`?q=term&limit=10`) |
 | `GET` | `/recent` | Recent memories (`?hours=2&limit=20`) |

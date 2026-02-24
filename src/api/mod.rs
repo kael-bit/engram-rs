@@ -214,6 +214,7 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
             "POST /facts": "insert fact triples",
             "GET /facts?entity=X": "query facts by entity",
             "GET /facts/all": "list all facts",
+            "GET /facts/conflicts?subject=X&predicate=Y": "check fact conflicts",
             "GET /facts/history?subject=X&predicate=Y": "fact history with superseded entries",
             "DELETE /facts/:id": "delete a fact",
             "GET /trash": "list soft-deleted memories (?limit=100)",
