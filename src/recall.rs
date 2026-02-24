@@ -591,6 +591,19 @@ pub async fn rerank_results(
                 }
             }
             response.memories.truncate(limit);
+            // Re-assign scores so they reflect the reranked order.
+            // Highest-ranked gets the max score from the set, then
+            // linearly interpolate down to preserve magnitude info.
+            if response.memories.len() > 1 {
+                let max_s = response.memories.iter().map(|m| m.score)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let min_s = response.memories.iter().map(|m| m.score)
+                    .fold(f64::INFINITY, f64::min);
+                let n = response.memories.len() as f64;
+                for (i, sm) in response.memories.iter_mut().enumerate() {
+                    sm.score = max_s - (max_s - min_s) * (i as f64 / (n - 1.0));
+                }
+            }
             response.search_mode = format!("{} +rerank", response.search_mode);
         }
         Err(e) => {
