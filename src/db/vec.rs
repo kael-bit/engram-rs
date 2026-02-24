@@ -1,7 +1,9 @@
-//! Vector index and semantic search.
+//! Vector index and semantic search (HNSW-accelerated).
 
 use rusqlite::params;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+use hnsw_rs::prelude::*;
 
 use super::*;
 
@@ -14,8 +16,128 @@ fn top_k(scored: &mut Vec<(String, f64)>, limit: usize) {
 /// In-memory vector entry: embedding + namespace for filtering without DB lookup.
 #[derive(Clone)]
 pub(crate) struct VecEntry {
-    emb: Vec<f32>,
-    namespace: String,
+    pub(crate) emb: Vec<f32>,
+    pub(crate) namespace: String,
+}
+
+const HNSW_MAX_NB_CONN: usize = 16;
+const HNSW_EF_CONSTRUCTION: usize = 200;
+const HNSW_MAX_LAYER: usize = 16;
+const HNSW_EF_SEARCH: usize = 64;
+const HNSW_INITIAL_CAPACITY: usize = 10_000;
+/// Over-fetch factor when filtering HNSW results by namespace.
+const NS_OVERFETCH: usize = 5;
+
+/// Combined vector index: HashMap for ID lookups + HNSW for ANN search.
+pub(crate) struct VecIndex {
+    entries: HashMap<String, VecEntry>,
+    hnsw: Hnsw<'static, f32, DistCosine>,
+    id_to_idx: HashMap<String, usize>,
+    idx_to_id: Vec<String>,
+}
+
+impl VecIndex {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            hnsw: Hnsw::<f32, DistCosine>::new(
+                HNSW_MAX_NB_CONN,
+                HNSW_INITIAL_CAPACITY,
+                HNSW_MAX_LAYER,
+                HNSW_EF_CONSTRUCTION,
+                DistCosine,
+            ),
+            id_to_idx: HashMap::new(),
+            idx_to_id: Vec::new(),
+        }
+    }
+
+    fn alloc_idx(&mut self, id: &str) -> usize {
+        if let Some(&idx) = self.id_to_idx.get(id) {
+            return idx;
+        }
+        let idx = self.idx_to_id.len();
+        self.idx_to_id.push(id.to_string());
+        self.id_to_idx.insert(id.to_string(), idx);
+        idx
+    }
+
+    pub(crate) fn insert(&mut self, id: String, entry: VecEntry) {
+        let idx = self.alloc_idx(&id);
+        self.hnsw.insert((&entry.emb, idx));
+        self.entries.insert(id, entry);
+    }
+
+    pub(crate) fn remove(&mut self, id: &str) {
+        self.entries.remove(id);
+        // HNSW doesn't support true deletion — the point remains in the graph
+        // but won't be returned since we verify against `entries` post-search.
+        // For heavy churn, a periodic rebuild would be needed.
+    }
+
+    pub(crate) fn get(&self, id: &str) -> Option<&VecEntry> {
+        self.entries.get(id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains_key(&self, id: &str) -> bool {
+        self.entries.contains_key(id)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &VecEntry)> {
+        self.entries.iter()
+    }
+
+    /// Search HNSW, return (id, similarity) pairs. Filters out removed entries.
+    fn search_hnsw(&self, query: &[f32], k: usize) -> Vec<(String, f64)> {
+        if self.entries.is_empty() {
+            return vec![];
+        }
+        let neighbours = self.hnsw.search(query, k, HNSW_EF_SEARCH);
+        neighbours
+            .into_iter()
+            .filter_map(|n| {
+                let id = self.idx_to_id.get(n.d_id)?;
+                // skip if deleted from entries
+                if !self.entries.contains_key(id) {
+                    return None;
+                }
+                // DistCosine returns 1 - cos_sim, so similarity = 1 - distance
+                let sim = 1.0 - n.distance as f64;
+                if sim > 0.0 {
+                    Some((id.clone(), sim))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Rebuild the HNSW graph from scratch using current entries.
+    #[allow(dead_code)]
+    fn rebuild_hnsw(&mut self) {
+        let cap = self.entries.len().max(HNSW_INITIAL_CAPACITY);
+        self.hnsw = Hnsw::<f32, DistCosine>::new(
+            HNSW_MAX_NB_CONN,
+            cap,
+            HNSW_MAX_LAYER,
+            HNSW_EF_CONSTRUCTION,
+            DistCosine,
+        );
+        self.id_to_idx.clear();
+        self.idx_to_id.clear();
+
+        for (id, entry) in &self.entries {
+            let idx = self.idx_to_id.len();
+            self.idx_to_id.push(id.clone());
+            self.id_to_idx.insert(id.clone(), idx);
+            self.hnsw.insert((&entry.emb, idx));
+        }
+    }
 }
 
 impl MemoryDB {
@@ -23,20 +145,32 @@ impl MemoryDB {
     pub(super) fn load_vec_index(&self) {
         let Ok(conn) = self.conn() else { return };
         let Ok(mut stmt) = conn.prepare(
-            "SELECT id, embedding, namespace FROM memories WHERE embedding IS NOT NULL"
-        ) else { return };
+            "SELECT id, embedding, namespace FROM memories WHERE embedding IS NOT NULL",
+        ) else {
+            return;
+        };
 
-        let pairs: Vec<(String, VecEntry)> = stmt.query_map([], |row| {
-            let id: String = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            let namespace: String = row.get(2)?;
-            Ok((id, VecEntry { emb: crate::ai::bytes_to_embedding(&blob), namespace }))
-        })
-        .map(|iter| iter.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok()).collect())
-        .unwrap_or_default();
+        let pairs: Vec<(String, VecEntry)> = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let blob: Vec<u8> = row.get(1)?;
+                let namespace: String = row.get(2)?;
+                Ok((
+                    id,
+                    VecEntry {
+                        emb: crate::ai::bytes_to_embedding(&blob),
+                        namespace,
+                    },
+                ))
+            })
+            .map(|iter| {
+                iter.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
 
         if let Ok(mut idx) = self.vec_index.write() {
-            idx.clear();
+            *idx = VecIndex::new();
             let count = pairs.len();
             for (id, entry) in pairs {
                 idx.insert(id, entry);
@@ -47,8 +181,10 @@ impl MemoryDB {
 
     /// Add or update an embedding in the vector index.
     pub(super) fn vec_index_put(&self, id: &str, emb: Vec<f32>) {
-        // Look up namespace from DB; fall back to "default".
-        let namespace = self.get(id).ok().flatten()
+        let namespace = self
+            .get(id)
+            .ok()
+            .flatten()
             .map(|m| m.namespace)
             .unwrap_or_else(|| "default".into());
         if let Ok(mut idx) = self.vec_index.write() {
@@ -86,56 +222,79 @@ impl MemoryDB {
 
     pub fn get_all_with_embeddings(&self) -> Result<Vec<(Memory, Vec<f32>)>, EngramError> {
         let conn = self.conn()?;
-        let mut stmt = conn
-            .prepare("SELECT * FROM memories WHERE embedding IS NOT NULL")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM memories WHERE embedding IS NOT NULL")?;
 
-        Ok(stmt.query_map([], |row| {
-            let mem = row_to_memory_with_embedding(row)?;
-            Ok(mem)
-        })
-        .map(|iter| {
-            iter.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
-                .filter_map(|m| {
-                    let emb = m.embedding.clone()?;
-                    Some((m, emb))
-                })
-                .collect()
-        })
-        .unwrap_or_default())
+        Ok(stmt
+            .query_map([], |row| {
+                let mem = row_to_memory_with_embedding(row)?;
+                Ok(mem)
+            })
+            .map(|iter| {
+                iter.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
+                    .filter_map(|m| {
+                        let emb = m.embedding.clone()?;
+                        Some((m, emb))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
-    /// Semantic search: find memories closest to a query embedding.
-    ///
-    /// Uses brute-force cosine similarity. Suitable for collections up to ~10k memories.
-    /// For larger datasets, consider an external vector index.
-    /// Brute-force cosine similarity search. O(n) over all embeddings.
-    /// Fine for <10k memories; for larger scales, consider IVF or HNSW indexing.
+    /// Semantic search using HNSW index, with optional namespace filtering.
     pub fn search_semantic(&self, query_emb: &[f32], limit: usize) -> Vec<(String, f64)> {
         self.search_semantic_ns(query_emb, limit, None)
     }
 
     pub fn search_semantic_ns(
-        &self, query_emb: &[f32], limit: usize, ns: Option<&str>,
+        &self,
+        query_emb: &[f32],
+        limit: usize,
+        ns: Option<&str>,
     ) -> Vec<(String, f64)> {
-        // Try in-memory index first (much faster — no SQL + no blob deser)
         if let Ok(idx) = self.vec_index.read() {
-            if !idx.is_empty() {
-                let mut scored: Vec<(String, f64)> = idx
-                    .iter()
-                    .filter(|(_, entry)| ns.is_none_or(|n| entry.namespace == n))
-                    .map(|(id, entry)| {
-                        let sim = crate::ai::cosine_similarity(query_emb, &entry.emb);
-                        (id.clone(), sim)
+            if idx.len() > 0 {
+                if ns.is_none() {
+                    // No namespace filter — direct HNSW search
+                    let mut results = idx.search_hnsw(query_emb, limit);
+                    results.sort_by(|a, b| {
+                        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    results.truncate(limit);
+                    return results;
+                }
+
+                // With namespace filter: over-fetch from HNSW, then filter
+                let fetch = limit * NS_OVERFETCH;
+                let candidates = idx.search_hnsw(query_emb, fetch);
+                let mut scored: Vec<(String, f64)> = candidates
+                    .into_iter()
+                    .filter(|(id, _)| {
+                        idx.get(id)
+                            .map(|e| e.namespace == ns.unwrap())
+                            .unwrap_or(false)
                     })
-                    .filter(|(_, sim)| *sim > 0.0)
                     .collect();
 
+                // If HNSW didn't return enough after filtering, fall back to brute-force
+                // for this namespace (small namespaces in a big index)
+                if scored.len() < limit {
+                    scored = idx
+                        .iter()
+                        .filter(|(_, entry)| entry.namespace == ns.unwrap())
+                        .map(|(id, entry)| {
+                            let sim = crate::ai::cosine_similarity(query_emb, &entry.emb);
+                            (id.clone(), sim)
+                        })
+                        .filter(|(_, sim)| *sim > 0.0)
+                        .collect();
+                }
                 top_k(&mut scored, limit);
                 return scored;
             }
         }
 
-        // Fallback to DB scan
+        // Fallback to DB scan (empty index)
         let all = self.get_all_with_embeddings().unwrap_or_default();
         let mut scored: Vec<(String, f64)> = all
             .into_iter()
@@ -151,10 +310,12 @@ impl MemoryDB {
     }
 
     /// Semantic search restricted to a set of candidate IDs.
-    /// Only computes cosine similarity for the given IDs, skipping everything else.
-    /// Used when FTS/facts already produced enough candidates to avoid a full scan.
+    /// Still uses brute-force over the given IDs (already O(|ids|), not O(n)).
     pub fn search_semantic_by_ids(
-        &self, query_emb: &[f32], ids: &HashSet<String>, limit: usize,
+        &self,
+        query_emb: &[f32],
+        ids: &HashSet<String>,
+        limit: usize,
     ) -> Vec<(String, f64)> {
         if let Ok(idx) = self.vec_index.read() {
             let mut scored: Vec<(String, f64)> = ids
@@ -178,21 +339,22 @@ impl MemoryDB {
             Ok(c) => c,
             Err(_) => return vec![],
         };
-        let mut stmt = match conn.prepare(
-            "SELECT id, content FROM memories WHERE embedding IS NULL LIMIT ?1"
-        ) {
+        let mut stmt = match conn
+            .prepare("SELECT id, content FROM memories WHERE embedding IS NULL LIMIT ?1")
+        {
             Ok(s) => s,
             Err(_) => return vec![],
         };
         stmt.query_map(params![limit as i64], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        .map(|rows| rows.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok()).collect())
+        .map(|rows| {
+            rows.filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
+                .collect()
+        })
         .unwrap_or_default()
     }
-
 }
-
 
 #[cfg(test)]
 #[path = "vec_tests.rs"]

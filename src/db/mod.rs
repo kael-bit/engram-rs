@@ -6,7 +6,6 @@ mod facts;
 mod proxy;
 mod vec;
 
-use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 pub(crate) fn jieba() -> &'static jieba_rs::Jieba {
@@ -518,9 +517,8 @@ const DROP_TRIGGERS: [&str; 3] = [
 /// SQLite-backed memory store.
 pub struct MemoryDB {
     pool: Pool<SqliteConnectionManager>,
-    /// In-memory vector index for fast semantic search.
-    /// Stores embeddings + namespace to avoid DB lookups during filtering.
-    vec_index: RwLock<HashMap<String, vec::VecEntry>>,
+    /// In-memory HNSW-backed vector index for fast semantic search.
+    vec_index: RwLock<vec::VecIndex>,
 }
 
 
@@ -609,7 +607,7 @@ impl MemoryDB {
             conn.execute("ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'semantic'", [])?;
         }
         drop(conn);
-        let db = Self { pool, vec_index: RwLock::new(HashMap::new()) };
+        let db = Self { pool, vec_index: RwLock::new(vec::VecIndex::new()) };
         db.rebuild_fts()?;
         db.load_vec_index();
         Ok(db)

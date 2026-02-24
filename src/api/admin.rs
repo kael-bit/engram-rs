@@ -33,7 +33,7 @@ pub(super) async fn do_audit(
     let ai = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
     let result = consolidate::audit_memories(ai, &state.db).await
         ?;
-    Ok(Json(serde_json::to_value(result).unwrap_or_default()))
+    Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
 }
 
 #[derive(Deserialize, Default)]
