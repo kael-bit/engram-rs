@@ -36,6 +36,15 @@ pub(super) async fn do_audit(
     Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
 }
 
+/// Audit sandbox: dry-run audit that grades proposed operations without applying them.
+pub(super) async fn do_audit_sandbox(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let ai = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
+    let result = consolidate::sandbox_audit(ai, &state.db).await?;
+    Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
+}
+
 #[derive(Deserialize, Default)]
 pub(super) struct RepairQuery {
     #[serde(default)]

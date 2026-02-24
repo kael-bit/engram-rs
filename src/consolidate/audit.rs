@@ -5,6 +5,9 @@ use crate::SharedDB;
 use crate::util::truncate_chars;
 use serde::Serialize;
 
+// Re-exported for sandbox use
+pub(crate) const AUDIT_SYSTEM_PUB: &str = AUDIT_SYSTEM;
+
 const AUDIT_SYSTEM: &str = r#"You are reviewing an AI agent's memory store. You see ALL memories organized by layer.
 Your job: reorganize them. Output a JSON array of operations.
 
@@ -188,6 +191,15 @@ pub struct AuditResult {
     pub deleted: usize,
     pub merged: usize,
     pub ops: Vec<AuditOp>,
+}
+
+// Re-exported for sandbox use
+pub(crate) fn parse_audit_ops_pub(
+    response: &str,
+    core: &[Memory],
+    working: &[Memory],
+) -> Vec<AuditOp> {
+    parse_audit_ops(response, core, working)
 }
 
 fn parse_audit_ops(

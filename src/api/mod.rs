@@ -107,6 +107,7 @@ pub fn router(state: AppState) -> Router {
         .route("/triggers/{action}", get(get_triggers))
         .route("/consolidate", post(do_consolidate))
         .route("/audit", post(do_audit))
+        .route("/audit/sandbox", post(do_audit_sandbox))
         .route("/repair", post(do_repair))
         .route("/vacuum", post(do_vacuum))
         .route("/extract", post(do_extract))
@@ -217,6 +218,7 @@ async fn index(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /triggers/:action": "pre-action recall (e.g. /triggers/git-push)",
             "POST /consolidate": "run maintenance cycle",
             "POST /audit": "LLM-powered memory reorganization (uses ENGRAM_GATE_MODEL)",
+            "POST /audit/sandbox": "Dry-run audit with quality grading (no changes applied)",
             "POST /repair": "auto-repair FTS index; ?force=true for full rebuild",
             "POST /vacuum": "reclaim disk space (?full=true for full vacuum)",
             "POST /extract": "LLM-extract memories from text",

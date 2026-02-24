@@ -10,10 +10,12 @@ mod audit;
 mod distill;
 mod facts;
 mod merge;
+mod sandbox;
 mod summary;
 mod triage;
 
 pub use audit::{audit_memories, AuditOp, AuditResult};
+pub use sandbox::{sandbox_audit, SandboxResult, Grade, OpGrade};
 
 use distill::distill_sessions;
 use merge::{merge_similar, reconcile_updates};
