@@ -9,6 +9,49 @@ use crate::error::EngramError;
 use crate::{ai, db, recall, AppState};
 use super::{blocking, get_namespace};
 
+/// Parse next-action items from memory content.
+///
+/// Recognizes markers: `Next:`, `next:`, `下一步:`, `下一步：`, `待做:`, `待办:`, `TODO:`.
+/// After the marker, splits by comma, Chinese enumeration comma (、), or newlines.
+pub(crate) fn parse_next_actions(content: &str) -> Vec<String> {
+    // Markers to look for (case-sensitive except Next/next)
+    let markers: &[&str] = &[
+        "Next:", "next:", "NEXT:",
+        "下一步:", "下一步：",
+        "待做:", "待做：", "待办:", "待办：",
+        "TODO:", "Todo:",
+    ];
+
+    let mut actions = Vec::new();
+
+    for marker in markers {
+        if let Some(pos) = content.find(marker) {
+            let after = &content[pos + marker.len()..];
+            // Take until end of content or next sentence-ending pattern that isn't part of items
+            let text = after.trim();
+            if text.is_empty() {
+                continue;
+            }
+            // Split by comma, Chinese comma, newline, or semicolon
+            for item in text.split(|c: char| c == ',' || c == '\n' || c == '、' || c == ';' || c == '；') {
+                let trimmed = item.trim().trim_end_matches(|c: char| c == '.' || c == '。');
+                let trimmed = trimmed.trim();
+                if !trimmed.is_empty() {
+                    actions.push(trimmed.to_string());
+                }
+            }
+            // Only use the first matching marker
+            break;
+        }
+    }
+
+    // Deduplicate (preserve order)
+    let mut seen = std::collections::HashSet::new();
+    actions.retain(|a| seen.insert(a.clone()));
+
+    actions
+}
+
 /// Simple keyword search — lighter than /recall, no scoring or budget logic.
 #[derive(Deserialize)]
 pub(super) struct SearchQuery {
@@ -283,6 +326,9 @@ pub(super) async fn do_resume(
                 if !m.tags.is_empty() {
                     obj["tags"] = serde_json::json!(m.tags);
                 }
+                if m.kind != "semantic" {
+                    obj["kind"] = serde_json::json!(m.kind);
+                }
                 obj
             }).collect()
         } else {
@@ -327,10 +373,35 @@ pub(super) async fn do_resume(
     budget_left = budget_left.saturating_sub(budget_left.min(core_cap) - core_budget);
 
     let working_out = take_budget(&working, &mut budget_left, compact);
-    let next_out = take_budget(&next_actions, &mut budget_left, compact);
+    let next_tagged_out = take_budget(&next_actions, &mut budget_left, compact);
     let sessions_out = take_budget(&sessions, &mut budget_left, compact);
     let recent_out = take_budget(&recent, &mut budget_left, compact);
     let buffer_out = take_budget(&buffer, &mut budget_left, compact);
+
+    // Parse next_actions from session memory content + explicitly tagged next-action memories.
+    let mut parsed_actions: Vec<String> = Vec::new();
+    // From explicitly tagged next-action memories
+    for m in &next_tagged_out {
+        let parsed = parse_next_actions(&m.content);
+        if parsed.is_empty() {
+            // If no marker found, use the whole content as an action
+            let trimmed = m.content.trim().to_string();
+            if !trimmed.is_empty() {
+                parsed_actions.push(trimmed);
+            }
+        } else {
+            parsed_actions.extend(parsed);
+        }
+    }
+    // From session memories (which may contain "Next: ..." markers)
+    for m in &sessions_out {
+        parsed_actions.extend(parse_next_actions(&m.content));
+    }
+    // Deduplicate (preserve order)
+    {
+        let mut seen = std::collections::HashSet::new();
+        parsed_actions.retain(|a| seen.insert(a.clone()));
+    }
 
     // Touch all memories served by resume — they're actively being used.
     // Buffer memories that make it into resume output have already been filtered
@@ -354,14 +425,14 @@ pub(super) async fn do_resume(
         "buffer": to_json(&buffer_out),
         "recent": to_json(&recent_out),
         "sessions": to_json(&sessions_out),
-        "next_actions": to_json(&next_out),
+        "next_actions": parsed_actions,
         "hours": hours,
         "core_count": core_out.len(),
         "working_count": working_out.len(),
         "buffer_count": buffer_out.len(),
         "recent_count": recent_out.len(),
         "session_count": sessions_out.len(),
-        "next_action_count": next_out.len(),
+        "next_action_count": parsed_actions.len(),
     })))
 }
 

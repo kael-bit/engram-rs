@@ -584,4 +584,171 @@ mod tests {
         assert!(history[0].created_at <= history[1].created_at);
         assert!(history[1].created_at <= history[2].created_at);
     }
+
+    // --- multi-hop tests ---
+
+    #[test]
+    fn test_multihop_single_hop() {
+        let db = test_db();
+        db.insert_fact(FactInput {
+            subject: "alice".into(),
+            predicate: "works_at".into(),
+            object: "Acme".into(),
+            memory_id: None, valid_from: None,
+        }, "default").unwrap();
+
+        let chains = db.query_multihop("alice", 1, "default").unwrap();
+        assert_eq!(chains.len(), 1);
+        assert_eq!(chains[0].path.len(), 1);
+        assert_eq!(chains[0].path[0].subject, "alice");
+        assert_eq!(chains[0].path[0].object, "Acme");
+    }
+
+    #[test]
+    fn test_multihop_two_hops() {
+        let db = test_db();
+        // alice → works_at → Acme
+        db.insert_fact(FactInput {
+            subject: "alice".into(),
+            predicate: "works_at".into(),
+            object: "Acme".into(),
+            memory_id: None, valid_from: None,
+        }, "default").unwrap();
+        // Acme → located_in → Tokyo
+        db.insert_fact(FactInput {
+            subject: "Acme".into(),
+            predicate: "located_in".into(),
+            object: "Tokyo".into(),
+            memory_id: None, valid_from: None,
+        }, "default").unwrap();
+
+        let chains = db.query_multihop("alice", 2, "default").unwrap();
+        // Should have: [alice→Acme] and [alice→Acme, Acme→Tokyo]
+        assert_eq!(chains.len(), 2);
+
+        let single: Vec<_> = chains.iter().filter(|c| c.path.len() == 1).collect();
+        let double: Vec<_> = chains.iter().filter(|c| c.path.len() == 2).collect();
+        assert_eq!(single.len(), 1);
+        assert_eq!(double.len(), 1);
+
+        assert_eq!(double[0].path[0].object, "Acme");
+        assert_eq!(double[0].path[1].subject, "Acme");
+        assert_eq!(double[0].path[1].object, "Tokyo");
+    }
+
+    #[test]
+    fn test_multihop_cycle_detection() {
+        let db = test_db();
+        // A → likes → B
+        db.insert_fact(FactInput {
+            subject: "A".into(),
+            predicate: "likes".into(),
+            object: "B".into(),
+            memory_id: None, valid_from: None,
+        }, "default").unwrap();
+        // B → likes → A (cycle!)
+        db.insert_fact(FactInput {
+            subject: "B".into(),
+            predicate: "likes".into(),
+            object: "A".into(),
+            memory_id: None, valid_from: None,
+        }, "default").unwrap();
+
+        // Should not infinite loop; cycle is broken by visited set
+        let chains = db.query_multihop("A", 3, "default").unwrap();
+        // hop 1: [A→B], hop 2: [A→B, B→A] — but A is already visited so no hop 3
+        assert_eq!(chains.len(), 2);
+        // No chain should be longer than 2 since the cycle is detected
+        assert!(chains.iter().all(|c| c.path.len() <= 2));
+    }
+
+    #[test]
+    fn test_multihop_namespace_isolation() {
+        let db = test_db();
+        db.insert_fact(FactInput {
+            subject: "alice".into(),
+            predicate: "role".into(),
+            object: "engineer".into(),
+            memory_id: None, valid_from: None,
+        }, "ns-a").unwrap();
+
+        db.insert_fact(FactInput {
+            subject: "alice".into(),
+            predicate: "role".into(),
+            object: "designer".into(),
+            memory_id: None, valid_from: None,
+        }, "ns-b").unwrap();
+
+        let chains_a = db.query_multihop("alice", 2, "ns-a").unwrap();
+        assert_eq!(chains_a.len(), 1);
+        assert_eq!(chains_a[0].path[0].object, "engineer");
+
+        let chains_b = db.query_multihop("alice", 2, "ns-b").unwrap();
+        assert_eq!(chains_b.len(), 1);
+        assert_eq!(chains_b[0].path[0].object, "designer");
+    }
+
+    #[test]
+    fn test_multihop_max_hops_respected() {
+        let db = test_db();
+        // Build a chain: A → B → C → D → E
+        for (s, o) in [("A", "B"), ("B", "C"), ("C", "D"), ("D", "E")] {
+            db.insert_fact(FactInput {
+                subject: s.into(),
+                predicate: "next".into(),
+                object: o.into(),
+                memory_id: None, valid_from: None,
+            }, "default").unwrap();
+        }
+
+        // With hops=2, longest chain should be 2 steps (A→B→C)
+        let chains_2 = db.query_multihop("A", 2, "default").unwrap();
+        assert!(chains_2.iter().all(|c| c.path.len() <= 2),
+            "no chain should exceed 2 hops");
+        let max_depth = chains_2.iter().map(|c| c.path.len()).max().unwrap_or(0);
+        assert_eq!(max_depth, 2);
+
+        // With hops=3 (max allowed), longest should be 3 steps (A→B→C→D)
+        let chains_3 = db.query_multihop("A", 3, "default").unwrap();
+        assert!(chains_3.iter().all(|c| c.path.len() <= 3),
+            "no chain should exceed 3 hops");
+        let max_depth_3 = chains_3.iter().map(|c| c.path.len()).max().unwrap_or(0);
+        assert_eq!(max_depth_3, 3);
+
+        // Requesting hops=5 should be clamped to 3
+        let chains_5 = db.query_multihop("A", 5, "default").unwrap();
+        assert!(chains_5.iter().all(|c| c.path.len() <= 3),
+            "hops should be clamped to 3");
+    }
+
+    #[test]
+    fn test_multihop_skips_superseded() {
+        let db = test_db();
+        // alice → city → Portland (will be superseded)
+        db.insert_fact(FactInput {
+            subject: "alice".into(),
+            predicate: "city".into(),
+            object: "Portland".into(),
+            memory_id: None, valid_from: None,
+        }, "default").unwrap();
+        // alice → city → Tokyo (supersedes Portland)
+        db.insert_fact(FactInput {
+            subject: "alice".into(),
+            predicate: "city".into(),
+            object: "Tokyo".into(),
+            memory_id: None, valid_from: None,
+        }, "default").unwrap();
+
+        let chains = db.query_multihop("alice", 1, "default").unwrap();
+        assert_eq!(chains.len(), 1);
+        assert_eq!(chains[0].path[0].object, "Tokyo",
+            "should only follow active (non-superseded) facts");
+    }
+
+    #[test]
+    fn test_multihop_empty_result() {
+        let db = test_db();
+        let chains = db.query_multihop("nonexistent", 2, "default").unwrap();
+        assert!(chains.is_empty());
+    }
 }

@@ -779,10 +779,11 @@ mod tests {
         assert!(!core.is_empty(), "should have core memories");
         assert!(core[0]["content"].as_str().unwrap().contains("test agent"));
 
-        // Next actions should have the tagged memory
+        // Next actions should have the tagged memory content parsed
         let next = j["next_actions"].as_array().unwrap();
-        assert!(!next.is_empty(), "should have next-action memories");
-        assert!(next[0]["content"].as_str().unwrap().contains("write more tests"));
+        assert!(!next.is_empty(), "should have next-action items");
+        assert!(next.iter().any(|v| v.as_str().unwrap_or("").contains("write more tests")),
+            "should contain 'write more tests' action");
 
         // Sessions should have the session memory (not tagged as next-action)
         let sessions = j["sessions"].as_array().unwrap();
@@ -836,7 +837,7 @@ mod tests {
 
         let next = j["next_actions"].as_array().unwrap();
         assert!(next.iter().any(|s|
-            s["content"].as_str().unwrap_or("").contains("integration tests")),
+            s.as_str().unwrap_or("").contains("integration tests")),
             "next-action note missing from next_actions section");
 
         let buffer = j["buffer"].as_array().unwrap();
