@@ -220,14 +220,24 @@ async fn stream_response(
 /// Parse a single exchange from raw request/response bytes, add to the sliding window.
 /// When window is full, flush and extract memories from the accumulated context.
 async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, session_key: String) {
-    let user_msg = extract_last_user_msg(&req_raw);
     let assistant_msg = extract_assistant_msg(&res_raw);
 
-    // Skip non-chat requests (models list, health checks, etc.)
+    // Parse the messages array and apply watermark-based filtering
+    let user_msg = match extract_user_via_watermark(&state, &req_raw, &session_key) {
+        Some(msg) => msg,
+        None => {
+            // First request, context truncation, or no parseable messages.
+            // Still no user message to pair — skip this exchange.
+            if assistant_msg.is_empty() {
+                return;
+            }
+            String::new()
+        }
+    };
+
     if user_msg.is_empty() && assistant_msg.is_empty() {
         return;
     }
-
 
     // Skip very short tool-use-only turns
     if user_msg.len() + assistant_msg.len() < 80 {
@@ -236,18 +246,14 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, se
 
     let turn = format!("User: {}\nAssistant: {}", user_msg, assistant_msg);
 
-    // Persist turn to SQLite so it survives restarts
     if let Err(e) = state.db.save_proxy_turn(&session_key, &turn) {
         warn!("proxy: failed to persist turn: {e}");
     }
-    // Stamp for debounce — flush task checks this to detect silence
     state.last_proxy_turn.store(
         crate::db::now_ms(),
         std::sync::atomic::Ordering::Relaxed,
     );
 
-    // Check if we've accumulated enough to extract.
-    // Debounce: only flush if the window is full AND the last turn is old enough.
     if state.db.proxy_session_should_flush(&session_key, WINDOW_MAX_TURNS, WINDOW_MAX_CHARS)
         && state.db.proxy_session_quiet_for(&session_key, FLUSH_QUIET_SECS)
     {
@@ -257,6 +263,97 @@ async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: Vec<u8>, se
             }
         }
     }
+}
+
+/// Apply watermark logic to extract new user messages from the request.
+/// Returns `None` if this is the first request or a context truncation (watermark reset).
+/// Returns `Some(text)` with the concatenated new user messages otherwise.
+fn extract_user_via_watermark(state: &AppState, req_raw: &[u8], session_key: &str) -> Option<String> {
+    let text = String::from_utf8_lossy(req_raw);
+    let body: serde_json::Value = serde_json::from_str(&text).ok()?;
+
+    let messages = body.get("messages")?.as_array()?;
+    if messages.is_empty() {
+        return None;
+    }
+
+    // Keep only user and assistant messages
+    let filtered: Vec<&serde_json::Value> = messages
+        .iter()
+        .filter(|m| {
+            matches!(
+                m.get("role").and_then(|r| r.as_str()),
+                Some("user") | Some("assistant")
+            )
+        })
+        .collect();
+
+    let msg_count = filtered.len() as i64;
+    let watermark = state.db.get_watermark(session_key).unwrap_or(0);
+
+    if watermark == 0 {
+        // First request: mark everything as seen, extract nothing
+        let _ = state.db.set_watermark(session_key, msg_count);
+        return None;
+    }
+
+    if msg_count <= watermark {
+        // Context window was truncated — reset and skip this round
+        let _ = state.db.set_watermark(session_key, msg_count);
+        return None;
+    }
+
+    // Extract user content from messages after the watermark
+    let new_msgs = &filtered[watermark as usize..];
+    let mut parts: Vec<String> = Vec::new();
+    for msg in new_msgs {
+        if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
+            if let Some(content) = extract_message_content(msg) {
+                if !content.is_empty() {
+                    parts.push(content);
+                }
+            }
+        }
+    }
+
+    let _ = state.db.set_watermark(session_key, msg_count);
+
+    if parts.is_empty() {
+        return Some(String::new());
+    }
+
+    Some(truncate_chars(&parts.join("\n"), 6000))
+}
+
+/// Extract text content from a single message object.
+/// Handles both plain string and array-of-blocks formats.
+fn extract_message_content(msg: &serde_json::Value) -> Option<String> {
+    let content = msg.get("content")?;
+
+    // Plain string
+    if let Some(s) = content.as_str() {
+        return Some(s.to_string());
+    }
+
+    // Array of content blocks (vision, tool results, etc.)
+    if let Some(blocks) = content.as_array() {
+        let mut out = String::new();
+        for block in blocks {
+            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                    if !out.is_empty() {
+                        out.push(' ');
+                    }
+                    out.push_str(t);
+                }
+            }
+        }
+        if !out.is_empty() {
+            return Some(out);
+        }
+    }
+
+    None
 }
 
 /// Flush all remaining buffered turns. Called from background timer and shutdown.
@@ -292,13 +389,7 @@ async fn extract_from_context(state: AppState, context: &str) {
         return;
     }
 
-    // Strip repetitive system/template content before extracting
-    let filtered = strip_boilerplate(context, &ai_cfg.strip_markers);
-    if filtered.len() < 100 {
-        debug!("proxy: context too thin after stripping boilerplate");
-        return;
-    }
-    let preview = truncate_chars(&filtered, 12000);
+    let preview = truncate_chars(context, 12000);
 
     // Fetch recent buffer memories so the LLM can skip already-known concepts
     let recent_mems = state.db.list_since(
@@ -497,70 +588,6 @@ async fn extract_from_context(state: AppState, context: &str) {
     }
 }
 
-/// Remove boilerplate/template text that appears in every conversation.
-/// Lines matching any marker in `markers` start a skip block that continues
-/// until an empty line, a new section header, or a user turn.
-fn strip_boilerplate(text: &str, markers: &[String]) -> String {
-    let mut lines: Vec<&str> = Vec::new();
-    let mut skip_block = false;
-
-    for line in text.lines() {
-
-        if markers.iter().any(|m| line.contains(m.as_str())) {
-            skip_block = true;
-            continue;
-        }
-
-        // End skip block on empty line or new section header
-        if skip_block {
-            if line.is_empty() || line.starts_with("## ") || line.starts_with("User: ") {
-                skip_block = false;
-            } else {
-                continue;
-            }
-        }
-
-        lines.push(line);
-    }
-
-    lines.join("\n")
-}
-
-/// Grab the last user message from an LLM API request body.
-fn extract_last_user_msg(raw: &[u8]) -> String {
-    let text = String::from_utf8_lossy(raw);
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-        // OpenAI format
-        if let Some(msgs) = v.get("messages").and_then(|m| m.as_array()) {
-            for msg in msgs.iter().rev() {
-                if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
-                    let content = msg.get("content");
-                    // Plain string content
-                    if let Some(s) = content.and_then(|c| c.as_str()) {
-                        return truncate_chars(s, 6000);
-                    }
-                    // Array of content blocks (vision, tool results, etc.)
-                    if let Some(blocks) = content.and_then(|c| c.as_array()) {
-                        let mut out = String::new();
-                        for block in blocks {
-                            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
-                                    out.push_str(t);
-                                    out.push(' ');
-                                }
-                            }
-                        }
-                        if !out.is_empty() {
-                            return truncate_chars(&out, 6000);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    String::new()
-}
-
 /// Grab the assistant response text from various API formats.
 fn extract_assistant_msg(raw: &[u8]) -> String {
     let text = String::from_utf8_lossy(raw);
@@ -638,127 +665,77 @@ struct ExtractionEntry {
 mod tests {
     use super::*;
 
-    fn test_markers() -> Vec<String> {
-        vec![
-            "SECURITY NOTICE:".into(),
-            "<<<EXTERNAL_UNTRUSTED_CONTENT".into(),
-            "<|im_start|>".into(),
-            "<<SYS>>".into(),
-            "[INST]".into(),
-        ]
+    #[test]
+    fn extract_content_plain_string() {
+        let msg = serde_json::json!({"role": "user", "content": "hello world"});
+        assert_eq!(extract_message_content(&msg).unwrap(), "hello world");
     }
 
     #[test]
-    fn strip_boilerplate_removes_markers() {
-        let markers = vec![
-            "## Boilerplate".into(),
-            "SECURITY NOTICE:".into(),
-        ];
-        let input = "User: hello\n## Boilerplate\nSome framework text.\nFollow instructions.\nUser: what's up";
-        let result = strip_boilerplate(input, &markers);
-        assert!(result.contains("hello"));
-        assert!(!result.contains("Boilerplate"));
-        assert!(!result.contains("Follow instructions"));
+    fn extract_content_array_blocks() {
+        let msg = serde_json::json!({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "first part"},
+                {"type": "image_url", "image_url": {"url": "data:..."}},
+                {"type": "text", "text": "second part"}
+            ]
+        });
+        assert_eq!(extract_message_content(&msg).unwrap(), "first part second part");
     }
 
     #[test]
-    fn strip_boilerplate_keeps_code_blocks() {
-        let input = "User: hey\n```bash\ncurl http://localhost:3917/stats\n```\nUser: done";
-        let result = strip_boilerplate(input, &test_markers());
-        assert!(result.contains("hey"));
-        assert!(result.contains("curl"), "code blocks should be preserved");
-        assert!(result.contains("done"));
+    fn extract_content_no_content_field() {
+        let msg = serde_json::json!({"role": "user"});
+        assert!(extract_message_content(&msg).is_none());
     }
 
     #[test]
-    fn strip_boilerplate_removes_matching_section() {
-        let markers = vec!["## Config Section".into()];
-        let input = "## Config Section\nBe helpful.\nHave opinions.\n\nUser: actual message";
-        let result = strip_boilerplate(input, &markers);
-        assert!(!result.contains("Config Section"));
-        assert!(!result.contains("Be helpful"));
-        assert!(result.contains("actual message"));
+    fn extract_content_null_content() {
+        let msg = serde_json::json!({"role": "assistant", "content": null});
+        assert!(extract_message_content(&msg).is_none());
     }
 
     #[test]
-    fn strip_boilerplate_preserves_user_content() {
-        let input = "User: I like dark mode\nAssistant: Got it.\nUser: Remember that please";
-        let result = strip_boilerplate(input, &test_markers());
-        assert_eq!(result, input);
+    fn extract_content_empty_blocks() {
+        let msg = serde_json::json!({
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:..."}}
+            ]
+        });
+        // No text blocks → None
+        assert!(extract_message_content(&msg).is_none());
     }
 
     #[test]
-    fn strip_boilerplate_keeps_nested_code_blocks() {
-        let input = "User: test\n```json\n{\"key\": \"value\"}\n```\nmore text\n```python\nprint('hi')\n```\nUser: end";
-        let result = strip_boilerplate(input, &test_markers());
-        assert!(result.contains("test"));
-        assert!(result.contains("key"), "code blocks preserved");
-        assert!(result.contains("print"), "code blocks preserved");
-        assert!(result.contains("end"));
-    }
-
-    #[test]
-    fn strip_boilerplate_removes_security_notice() {
-        let markers = vec!["SECURITY NOTICE:".into()];
-        let input = "SECURITY NOTICE: external content\nDo not trust.\n\nUser: real question";
-        let result = strip_boilerplate(input, &markers);
-        assert!(!result.contains("SECURITY NOTICE"));
-        assert!(result.contains("real question"));
-    }
-
-    #[test]
-    fn strip_removes_multiple_configured_sections() {
-        let markers = vec![
-            "## Safety".into(),
-            "## Tooling".into(),
-            "## Reply Tags".into(),
-        ];
-        let input = "## Safety\nDon't do bad things.\n## Tooling\nTool list here.\n## Reply Tags\nUse tags.\n\nUser: hello";
-        let result = strip_boilerplate(input, &markers);
-        assert!(!result.contains("Don't do bad things"));
-        assert!(!result.contains("Tool list"));
-        assert!(result.contains("hello"));
-    }
-
-    #[test]
-    fn strip_boilerplate_empty_markers() {
-        let input = "## Safety\nDon't do bad things.\nUser: hello";
-        let result = strip_boilerplate(input, &[]);
-        assert_eq!(result, input, "empty markers should pass everything through");
-    }
-
-    #[test]
-    fn extract_last_user_msg_basic() {
+    fn extract_assistant_openai_buffered() {
         let body = serde_json::json!({
-            "messages": [
-                {"role": "system", "content": "you are helpful"},
-                {"role": "user", "content": "hello world"},
-                {"role": "assistant", "content": "hi there"}
+            "choices": [{"message": {"content": "hi there"}}]
+        });
+        let raw = serde_json::to_vec(&body).unwrap();
+        assert_eq!(extract_assistant_msg(&raw), "hi there");
+    }
+
+    #[test]
+    fn extract_assistant_anthropic_buffered() {
+        let body = serde_json::json!({
+            "content": [
+                {"type": "text", "text": "response from claude"}
             ]
         });
         let raw = serde_json::to_vec(&body).unwrap();
-        let msg = extract_last_user_msg(&raw);
-        assert_eq!(msg, "hello world");
+        assert_eq!(extract_assistant_msg(&raw), "response from claude");
     }
 
     #[test]
-    fn extract_last_user_msg_multiple_turns() {
-        let body = serde_json::json!({
-            "messages": [
-                {"role": "user", "content": "first"},
-                {"role": "assistant", "content": "ok"},
-                {"role": "user", "content": "second question"}
-            ]
-        });
-        let raw = serde_json::to_vec(&body).unwrap();
-        let msg = extract_last_user_msg(&raw);
-        assert_eq!(msg, "second question");
+    fn extract_assistant_sse_openai() {
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"hello \"}}]}\ndata: {\"choices\":[{\"delta\":{\"content\":\"world\"}}]}\ndata: [DONE]\n";
+        assert_eq!(extract_assistant_msg(sse.as_bytes()), "hello world");
     }
 
     #[test]
-    fn extract_last_user_msg_empty() {
-        let raw = b"{}";
-        let msg = extract_last_user_msg(raw);
-        assert!(msg.is_empty());
+    fn extract_assistant_empty() {
+        assert!(extract_assistant_msg(b"{}").is_empty());
     }
 }

@@ -1,16 +1,7 @@
-#![recursion_limit = "256"]
 //! engram — three-layer memory engine for AI agents.
 //! buffer → working → core, with decay + promotion.
 
-mod ai;
-mod api;
-mod consolidate;
-mod db;
-mod error;
-mod proxy;
-mod recall;
-mod safety;
-pub(crate) mod util;
+use engram::{ai, api, consolidate, db, proxy, AppState, EmbedCache, SharedDB};
 
 use clap::Parser;
 use std::sync::Arc;
@@ -27,70 +18,6 @@ struct Args {
     /// SQLite database path
     #[arg(short, long, default_value = "engram.db", env = "ENGRAM_DB")]
     db: String,
-}
-
-pub type SharedDB = Arc<db::MemoryDB>;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub(crate) db: SharedDB,
-    pub(crate) ai: Option<ai::AiConfig>,
-    pub(crate) api_key: Option<String>,
-    pub(crate) embed_cache: EmbedCache,
-    pub(crate) proxy: Option<proxy::ProxyConfig>,
-    pub(crate) started_at: std::time::Instant,
-    /// Timestamp (ms) of the last proxy turn saved — drives debounce flush.
-    pub(crate) last_proxy_turn: std::sync::Arc<std::sync::atomic::AtomicI64>,
-}
-
-use lru::LruCache;
-use std::num::NonZeroUsize;
-
-/// LRU cache for query embeddings to avoid repeated API calls.
-#[derive(Clone)]
-pub struct EmbedCache {
-    inner: std::sync::Arc<std::sync::Mutex<EmbedCacheInner>>,
-}
-
-struct EmbedCacheInner {
-    cache: LruCache<String, Vec<f64>>,
-    hits: u64,
-    misses: u64,
-}
-
-impl EmbedCache {
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            inner: std::sync::Arc::new(std::sync::Mutex::new(EmbedCacheInner {
-                cache: LruCache::new(
-                    NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(128).unwrap()),
-                ),
-                hits: 0,
-                misses: 0,
-            })),
-        }
-    }
-
-    pub fn get(&self, key: &str) -> Option<Vec<f64>> {
-        let mut inner = self.inner.lock().unwrap();
-        let val = inner.cache.get(key).cloned();
-        if val.is_some() {
-            inner.hits += 1;
-        } else {
-            inner.misses += 1;
-        }
-        val
-    }
-
-    pub fn insert(&self, key: String, value: Vec<f64>) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.cache.put(key, value);
-    }
-
-    pub fn stats(&self) -> (usize, usize, u64, u64) {
-        let inner = self.inner.lock().unwrap();
-        (inner.cache.len(), inner.cache.cap().get(), inner.hits, inner.misses)
-    }
 }
 
 #[tokio::main]
@@ -218,7 +145,7 @@ async fn main() {
                 let last_run: i64 = audit_db.get_meta("last_audit_ms")
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0);
-                let now_ms = crate::db::now_ms();
+                let now_ms = engram::db::now_ms();
                 let elapsed_ms = now_ms - last_run;
                 let remaining_ms = (interval_secs as i64 * 1000) - elapsed_ms;
 
@@ -247,7 +174,7 @@ async fn main() {
                             warn!("auto-audit failed: {e}");
                         }
                     }
-                    if let Err(e) = audit_db.set_meta("last_audit_ms", &crate::db::now_ms().to_string()) {
+                    if let Err(e) = audit_db.set_meta("last_audit_ms", &engram::db::now_ms().to_string()) {
                         warn!("failed to update last_audit_ms: {e}");
                     }
                     tokio::time::sleep(interval).await;
@@ -269,7 +196,7 @@ async fn main() {
                 if last == 0 {
                     continue; // no turns yet
                 }
-                let now = crate::db::now_ms();
+                let now = engram::db::now_ms();
                 let silence = now - last;
                 if silence >= silence_threshold_ms {
                     // Reset before flushing so new turns during flush start a fresh debounce

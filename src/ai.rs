@@ -23,8 +23,6 @@ pub struct AiConfig {
     pub expand_model: Option<String>,
     pub proxy_model: Option<String>,
     pub gate_model: Option<String>,
-    /// Markers for stripping boilerplate from proxy context before extraction.
-    pub strip_markers: Vec<String>,
 }
 
 impl AiConfig {
@@ -79,15 +77,6 @@ impl AiConfig {
             expand_model: std::env::var("ENGRAM_EXPAND_MODEL").ok(),
             proxy_model: std::env::var("ENGRAM_PROXY_MODEL").ok(),
             gate_model: std::env::var("ENGRAM_GATE_MODEL").ok(),
-            strip_markers: std::env::var("ENGRAM_STRIP_MARKERS")
-                .map(|v| v.split(',').map(|s| s.to_string()).collect())
-                .unwrap_or_else(|_| vec![
-                    "<<<EXTERNAL_UNTRUSTED_CONTENT".into(),
-                    "SECURITY NOTICE:".into(),
-                    "<|im_start|>".into(),
-                    "<<SYS>>".into(),
-                    "[INST]".into(),
-                ]),
         })
     }
 

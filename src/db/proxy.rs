@@ -1,4 +1,4 @@
-//! Proxy turn persistence.
+//! Proxy turn persistence and session watermarks.
 
 use rusqlite::params;
 
@@ -8,6 +8,35 @@ use super::*;
 pub type ProxyTurnPeek = Vec<(String, Vec<(String, i64)>)>;
 
 impl MemoryDB {
+    /// Get the message watermark for a proxy session (0 if not seen before).
+    pub fn get_watermark(&self, session_key: &str) -> Result<i64, EngramError> {
+        let conn = self.conn()?;
+        let wm = conn
+            .query_row(
+                "SELECT watermark FROM proxy_sessions WHERE session_key = ?1",
+                params![session_key],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        Ok(wm)
+    }
+
+    /// Set the message watermark for a proxy session.
+    pub fn set_watermark(&self, session_key: &str, watermark: i64) -> Result<(), EngramError> {
+        let conn = self.conn()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        conn.execute(
+            "INSERT INTO proxy_sessions (session_key, watermark, updated_at) \
+             VALUES (?1, ?2, ?3) \
+             ON CONFLICT(session_key) DO UPDATE SET watermark = ?2, updated_at = ?3",
+            params![session_key, watermark, now],
+        )?;
+        Ok(())
+    }
+
     pub fn save_proxy_turn(&self, session_key: &str, content: &str) -> Result<(), EngramError> {
         let conn = self.conn()?;
         let now = std::time::SystemTime::now()

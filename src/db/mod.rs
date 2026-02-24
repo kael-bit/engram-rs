@@ -467,6 +467,12 @@ CREATE TABLE IF NOT EXISTS proxy_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_proxy_turns_session ON proxy_turns(session_key);
 
+CREATE TABLE IF NOT EXISTS proxy_sessions (
+    session_key TEXT PRIMARY KEY,
+    watermark INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trash (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
