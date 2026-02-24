@@ -655,16 +655,16 @@ const MERGE_SYSTEM: &str = "Merge these related memory entries into a single con
     - Keep it under 400 characters if possible.\n\
     - Same language as originals. Output only the merged text, nothing else.";
 
-/// Distill session notes into a project context memory.
+/// Distill session notes into project context memories.
 ///
-/// When 3+ session notes accumulate (in Buffer or Working), we use the LLM to
-/// synthesize a brief project status snapshot. The result is stored as a regular
-/// memory (not tagged session) so it can promote to Core through normal channels.
-/// The source session notes are tagged `distilled` so we don't re-process them.
+/// Groups session notes by namespace, then for each group with 3+ undistilled
+/// notes, LLM synthesizes a project status snapshot stored directly in Working.
+/// Tagged `auto-distilled` to block Core promotion (project status changes too
+/// often for Core). Source notes get `distilled` tag to prevent reprocessing.
 async fn distill_sessions(db: &SharedDB, cfg: &AiConfig) -> usize {
     let db2 = db.clone();
-    let sessions: Vec<Memory> = match tokio::task::spawn_blocking(move || {
-        let mut all = Vec::new();
+    let by_ns: std::collections::HashMap<String, Vec<Memory>> = match tokio::task::spawn_blocking(move || {
+        let mut groups: std::collections::HashMap<String, Vec<Memory>> = std::collections::HashMap::new();
         for mem in db2.list_by_layer_meta(Layer::Buffer, 500, 0)
             .into_iter()
             .chain(db2.list_by_layer_meta(Layer::Working, 500, 0))
@@ -673,23 +673,32 @@ async fn distill_sessions(db: &SharedDB, cfg: &AiConfig) -> usize {
                 || mem.tags.iter().any(|t| t == "session");
             let already_done = mem.tags.iter().any(|t| t == "distilled");
             if is_session && !already_done {
-                all.push(mem);
+                let ns = mem.namespace.clone();
+                groups.entry(ns).or_default().push(mem);
             }
         }
-        all.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-        all
+        for v in groups.values_mut() {
+            v.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        }
+        groups
     }).await {
-        Ok(s) => s,
+        Ok(g) => g,
         Err(_) => return 0,
     };
 
-    if sessions.len() < 3 {
-        return 0;
+    let mut total = 0;
+    for (ns, sessions) in &by_ns {
+        if sessions.len() < 3 { continue; }
+        total += distill_one_ns(db, cfg, ns, sessions).await;
     }
+    total
+}
 
-    // Cap to most recent 10 sessions to keep the prompt reasonable
+async fn distill_one_ns(
+    db: &SharedDB, cfg: &AiConfig, ns: &str, sessions: &[Memory],
+) -> usize {
     let to_distill: Vec<&Memory> = sessions.iter().rev().take(10).collect();
-    let session_text: String = to_distill.iter().rev().map(|m| {
+    let text: String = to_distill.iter().rev().map(|m| {
         format!("- {}", truncate_chars(&m.content, 300))
     }).collect::<Vec<_>>().join("\n");
 
@@ -698,10 +707,9 @@ async fn distill_sessions(db: &SharedDB, cfg: &AiConfig) -> usize {
         Skip: lessons learned, past bugs, how things were built.\n\
         Output a single paragraph, 2-4 sentences, under 250 chars. Same language as input.\n\
         No preamble, no markdown headers — just the status text.";
-
     let user = format!(
         "Distill these {} session notes into a project status snapshot:\n\n{}",
-        to_distill.len(), session_text
+        to_distill.len(), text
     );
 
     let summary = match ai::llm_chat_as(cfg, "gate", system, &user).await {
@@ -711,33 +719,24 @@ async fn distill_sessions(db: &SharedDB, cfg: &AiConfig) -> usize {
             return 0;
         }
     };
+    if summary.is_empty() || summary.len() > 500 { return 0; }
 
-    if summary.is_empty() || summary.len() > 500 {
-        return 0;
-    }
-
-    // Check if we already have a similar project status memory
     let db3 = db.clone();
-    let summary_c = summary.clone();
-    let is_dup = match tokio::task::spawn_blocking(move || {
-        db3.is_near_duplicate_with(&summary_c, 0.75)
-    }).await {
-        Ok(dup) => dup,
-        Err(_) => false,
-    };
+    let sc = summary.clone();
+    let is_dup = tokio::task::spawn_blocking(move || db3.is_near_duplicate_with(&sc, 0.75))
+        .await.unwrap_or(false);
 
     if is_dup {
         info!("session distillation: skipped (near-duplicate exists)");
-        // Still tag sessions as distilled so we don't retry
     } else {
-        // Store directly in Working — project status is active context, not Core material.
-        // auto-distilled tag blocks Core promotion (like session notes).
+        let ns_val = if ns == "default" { None } else { Some(ns.to_string()) };
         let input = crate::db::MemoryInput {
             content: summary.clone(),
             tags: Some(vec!["project-status".into(), "auto-distilled".into()]),
             source: Some("consolidation".into()),
             importance: Some(0.7),
-            layer: Some(2), // Working
+            layer: Some(2),
+            namespace: ns_val,
             ..Default::default()
         };
         let db4 = db.clone();
@@ -745,24 +744,23 @@ async fn distill_sessions(db: &SharedDB, cfg: &AiConfig) -> usize {
             warn!("session distillation insert failed: {e}");
             return 0;
         }
-        info!(len = summary.len(), sessions = to_distill.len(), "distilled sessions into project status");
+        info!(len = summary.len(), sessions = to_distill.len(), ns = ns,
+              "distilled sessions into project status");
     }
 
-    // Tag processed sessions so we don't re-distill them
     let db5 = db.clone();
-    let ids: Vec<String> = to_distill.iter().map(|m| m.id.clone()).collect();
     let tags_map: Vec<(String, Vec<String>)> = to_distill.iter().map(|m| {
         let mut tags = m.tags.clone();
         tags.push("distilled".into());
         (m.id.clone(), tags)
     }).collect();
+    let count = tags_map.len();
     let _ = tokio::task::spawn_blocking(move || {
         for (id, tags) in &tags_map {
             let _ = db5.update_fields(id, None, None, None, Some(tags));
         }
     }).await;
-
-    ids.len()
+    count
 }
 
 async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
