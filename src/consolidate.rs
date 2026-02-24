@@ -50,6 +50,9 @@ pub struct ConsolidateResponse {
     /// IDs that passed access/age thresholds but await LLM gate review.
     #[serde(skip)]
     pub(crate) promotion_candidates: Vec<(String, String)>, // (id, content)
+    /// Number of session notes distilled into project context.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub distilled: usize,
 }
 
 fn is_zero(n: &usize) -> bool { *n == 0 }
@@ -138,6 +141,14 @@ pub async fn consolidate(
         let (count, ids) = reconcile_updates(&db, cfg).await;
         result.reconciled = count;
         result.reconciled_ids = ids;
+    }
+
+    // Session distillation: turn accumulated session notes into project context.
+    // Session notes can't promote to Core (by design), but the project knowledge
+    // they contain is valuable. When 3+ session notes pile up, LLM distills them
+    // into a single project-status memory that CAN promote normally.
+    if let Some(ref cfg) = ai {
+        result.distilled = distill_sessions(&db, cfg).await;
     }
 
     // Buffer dedup: remove near-duplicate entries within the buffer layer.
@@ -272,8 +283,12 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         let age = now - mem.created_at;
         if age > buffer_ttl {
             let rescue_score = mem.access_count as f64 + mem.repetition_count as f64 * 2.5;
-            if rescue_score >= buffer_threshold / 2.0 {
-                // Enough combined signal to deserve a second life in Working
+            // Rescue if: enough access/repetition, OR importance is high enough
+            // that the content itself is valuable even without being recalled.
+            // This saves design decisions and architecture notes from silent death.
+            let worth_keeping = rescue_score >= buffer_threshold / 2.0
+                || mem.importance >= 0.7;
+            if worth_keeping {
                 if db.promote(&mem.id, Layer::Working).is_ok() {
                     promoted_ids.push(mem.id.clone());
                     promoted += 1;
@@ -324,6 +339,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         buffer_deduped: 0,
         facts_extracted: 0,
         promotion_candidates,
+        distilled: 0,
     }
 }
 
@@ -638,6 +654,114 @@ const MERGE_SYSTEM: &str = "Merge these related memory entries into a single con
     - Names, numbers, versions, dates, tool names > vague summaries. Never drop specific terms.\n\
     - Keep it under 400 characters if possible.\n\
     - Same language as originals. Output only the merged text, nothing else.";
+
+/// Distill session notes into a project context memory.
+///
+/// When 3+ session notes accumulate (in Buffer or Working), we use the LLM to
+/// synthesize a brief project status snapshot. The result is stored as a regular
+/// memory (not tagged session) so it can promote to Core through normal channels.
+/// The source session notes are tagged `distilled` so we don't re-process them.
+async fn distill_sessions(db: &SharedDB, cfg: &AiConfig) -> usize {
+    let db2 = db.clone();
+    let sessions: Vec<Memory> = match tokio::task::spawn_blocking(move || {
+        let mut all = Vec::new();
+        for mem in db2.list_by_layer_meta(Layer::Buffer, 500, 0)
+            .into_iter()
+            .chain(db2.list_by_layer_meta(Layer::Working, 500, 0))
+        {
+            let is_session = mem.source == "session"
+                || mem.tags.iter().any(|t| t == "session");
+            let already_done = mem.tags.iter().any(|t| t == "distilled");
+            if is_session && !already_done {
+                all.push(mem);
+            }
+        }
+        all.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        all
+    }).await {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    if sessions.len() < 3 {
+        return 0;
+    }
+
+    // Cap to most recent 10 sessions to keep the prompt reasonable
+    let to_distill: Vec<&Memory> = sessions.iter().rev().take(10).collect();
+    let session_text: String = to_distill.iter().rev().map(|m| {
+        format!("- {}", truncate_chars(&m.content, 300))
+    }).collect::<Vec<_>>().join("\n");
+
+    let system = "You synthesize session notes into a concise project status snapshot.\n\
+        Focus on: what exists now, current version/state, key capabilities, what's in progress.\n\
+        Skip: lessons learned, past bugs, how things were built.\n\
+        Output a single paragraph, 2-4 sentences, under 250 chars. Same language as input.\n\
+        No preamble, no markdown headers — just the status text.";
+
+    let user = format!(
+        "Distill these {} session notes into a project status snapshot:\n\n{}",
+        to_distill.len(), session_text
+    );
+
+    let summary = match ai::llm_chat_as(cfg, "gate", system, &user).await {
+        Ok(s) => s.trim().to_string(),
+        Err(e) => {
+            warn!("session distillation failed: {e}");
+            return 0;
+        }
+    };
+
+    if summary.is_empty() || summary.len() > 500 {
+        return 0;
+    }
+
+    // Check if we already have a similar project status memory
+    let db3 = db.clone();
+    let summary_c = summary.clone();
+    let is_dup = match tokio::task::spawn_blocking(move || {
+        db3.is_near_duplicate_with(&summary_c, 0.75)
+    }).await {
+        Ok(dup) => dup,
+        Err(_) => false,
+    };
+
+    if is_dup {
+        info!("session distillation: skipped (near-duplicate exists)");
+        // Still tag sessions as distilled so we don't retry
+    } else {
+        // Store as a regular memory — no session tag, can promote to Core
+        let input = crate::db::MemoryInput {
+            content: summary.clone(),
+            tags: Some(vec!["project-status".into(), "auto-distilled".into()]),
+            source: Some("consolidation".into()),
+            importance: Some(0.7),
+            ..Default::default()
+        };
+        let db4 = db.clone();
+        if let Err(e) = tokio::task::spawn_blocking(move || db4.insert(input)).await {
+            warn!("session distillation insert failed: {e}");
+            return 0;
+        }
+        info!(len = summary.len(), sessions = to_distill.len(), "distilled sessions into project status");
+    }
+
+    // Tag processed sessions so we don't re-distill them
+    let db5 = db.clone();
+    let ids: Vec<String> = to_distill.iter().map(|m| m.id.clone()).collect();
+    let tags_map: Vec<(String, Vec<String>)> = to_distill.iter().map(|m| {
+        let mut tags = m.tags.clone();
+        tags.push("distilled".into());
+        (m.id.clone(), tags)
+    }).collect();
+    let _ = tokio::task::spawn_blocking(move || {
+        for (id, tags) in &tags_map {
+            let _ = db5.update_fields(id, None, None, None, Some(tags));
+        }
+    }).await;
+
+    ids.len()
+}
 
 async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
     let db2 = db.clone();
@@ -1528,6 +1652,29 @@ mod tests {
         // Tag should be removed
         let mem = db.get("retry-me").unwrap().unwrap();
         assert!(!mem.tags.contains(&"gate-rejected".to_string()), "gate-rejected tag should be cleared");
+    }
+
+    #[test]
+    fn high_importance_buffer_rescued_at_ttl() {
+        let db = test_db();
+        let expired = crate::db::now_ms() - 25 * 3600 * 1000; // 25h ago, past TTL
+
+        // sc=0 but high importance — should be rescued to Working
+        let important = mem_with_ts("design-decision", Layer::Buffer, 0.8, 0, expired, expired);
+
+        // sc=0, low importance — should be dropped
+        let junk = mem_with_ts("random-chat", Layer::Buffer, 0.3, 0, expired, expired);
+
+        db.import(&[important, junk]).unwrap();
+
+        let r = consolidate_sync(&db, None);
+
+        assert!(db.get("design-decision").unwrap().is_some(), "high importance buffer should survive");
+        let rescued = db.get("design-decision").unwrap().unwrap();
+        assert_eq!(rescued.layer, Layer::Working, "should be promoted to Working");
+
+        assert!(db.get("random-chat").unwrap().is_none(), "low importance buffer should be dropped");
+        assert!(r.decayed >= 1, "at least one should be decayed");
     }
 
     #[test]
