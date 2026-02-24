@@ -133,6 +133,14 @@ impl<'a> RuleChecker<'a> {
             return OpGrade { op: op.clone(), grade: Grade::Bad, reason: "target not found".into() };
         };
 
+        // Rule: no-op — already at target layer
+        if mem.layer as u8 <= to {
+            return OpGrade {
+                op: op.clone(), grade: Grade::Bad,
+                reason: format!("memory already at L{}, can't demote to L{}", mem.layer as u8, to),
+            };
+        }
+
         // Rule: demoting identity/constraint is almost always wrong
         if mem.tags.iter().any(|t| t == "identity" || t == "constraint") {
             return OpGrade {
@@ -141,12 +149,31 @@ impl<'a> RuleChecker<'a> {
             };
         }
 
-        // Rule: demoting a lesson from Core is suspicious
+        // Rule: lessons and constraints must stay in Core — they ARE Core
         if mem.layer == Layer::Core && mem.tags.iter().any(|t| t == "lesson") {
             return OpGrade {
-                op: op.clone(), grade: Grade::Marginal,
-                reason: format!("demoting Core lesson (ac={}) — verify it's stale", mem.access_count),
+                op: op.clone(), grade: Grade::Bad,
+                reason: format!("demoting Core lesson (ac={}) — lessons belong in Core", mem.access_count),
             };
+        }
+
+        // Rule: memories describing design mistakes / failures belong in Core
+        if mem.layer == Layer::Core {
+            let content_lower = mem.content.to_lowercase();
+            let is_lesson_content = content_lower.contains("设计错误")
+                || content_lower.contains("教训")
+                || content_lower.contains("lesson")
+                || content_lower.contains("原则")
+                || content_lower.contains("principle")
+                || content_lower.contains("严重失误")
+                || content_lower.contains("must")
+                || content_lower.contains("必须");
+            if is_lesson_content {
+                return OpGrade {
+                    op: op.clone(), grade: Grade::Bad,
+                    reason: "demoting Core memory containing lesson/principle language".into(),
+                };
+            }
         }
 
         // Rule: demoting high-ac Core memory

@@ -13,12 +13,15 @@ Your job: reorganize them. Output a JSON array of operations.
 
 ## Metadata
 - `ac` = access count (how often recalled)
-- `age` = hours since last accessed (age=2h means accessed 2 hours ago)
+- `age` = days since creation
+- `mod` = days since last real edit (content/layer/tags change). NOT affected by read/recall.
 - `imp` = importance (0.0-1.0)
+- `kind` = semantic | procedural | episodic
+- `tags` = labels attached to the memory
 
 ## Layers
-- Core (3): Permanent. Identity, values, key relationships, hard-won lessons, strategic goals.
-- Working (2): Useful but not permanent. Project context, recent learnings, operational knowledge.
+- Core (3): Permanent. Identity, values, key relationships, hard-won lessons, strategic constraints, design principles.
+- Working (2): Useful but not permanent. Project context, recent learnings, operational knowledge, implementation details.
 - Buffer (1): Temporary. Will auto-expire. Session logs, transient notes.
 
 ## Operations (output as JSON array)
@@ -33,13 +36,15 @@ Your job: reorganize them. Output a JSON array of operations.
 3. NEVER demote directly to Buffer (to:1) — use Working (to:2) as intermediate
 4. Prefer demote over delete — deletion is irreversible
 5. Only merge TRUE duplicates (same fact restated). Related ≠ duplicate.
-
-Each memory shows: age=days since creation, mod=days since last real edit (content/layer/tags change).
-Note: `mod` is NOT affected by read/recall — only actual edits update it.
+6. NEVER demote a memory that is ALREADY at the target layer (e.g. don't demote Working to Working)
+7. NEVER demote memories tagged "lesson" or "constraint" out of Core — lessons and constraints are EXACTLY what Core is for
+8. Memories describing design mistakes, past failures, or "this was wrong because..." are lessons — they belong in Core
 
 ## Guidelines
-- Core should be SMALL: identity, values, lessons, key relationships, strategic constraints
-- Technical details, bug fixes, version notes, config values → Working at most
+- Core should be SMALL: identity, values, lessons, key relationships, strategic constraints, design principles
+- Implementation details (specific library choices, config values, deployment steps, bug fixes) → Working
+- Memories that say "we learned X", "mistake was Y", "principle: Z" → Core
+- Memories that say "we did X", "changed Y to Z", "added feature F" → Working
 - Merge memories that express the SAME fact or lesson redundantly
 - Output ONLY a valid JSON array. Empty array [] if no changes needed."#;
 
