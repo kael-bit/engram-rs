@@ -138,19 +138,25 @@ label { font-size:11px; color:#888; }
       <li data-v="search"><span class="nl">Search</span></li>
       <li data-v="resume"><span class="nl">Resume</span></li>
     </ul>
-    <div class="nav-group-label">Manage</div>
+    <div class="nav-group-label">Tools</div>
     <ul class="nav" id="nav3">
       <li data-v="create"><span class="nl">Create</span></li>
       <li data-v="facts"><span class="nl">Facts</span></li>
-      <li data-v="proxy"><span class="nl">Proxy</span><span class="ct" id="c-prx">0</span></li>
+      <li data-v="tests"><span class="nl">Tests</span></li>
+    </ul>
+    <div class="nav-group-label">Stats</div>
+    <ul class="nav" id="nav4">
       <li data-v="health"><span class="nl">Health</span></li>
+      <li data-v="proxy"><span class="nl">Proxy</span><span class="ct" id="c-prx">0</span></li>
+      <li data-v="llm-usage"><span class="nl">LLM Usage</span></li>
+    </ul>
+    <div class="nav-group-label">Manage</div>
+    <ul class="nav" id="nav5">
       <li data-v="trash"><span class="nl">Trash</span><span class="ct" id="c-trash">0</span></li>
       <li data-v="tools"><span class="nl">Tools</span></li>
-      <li data-v="tests"><span class="nl">Tests</span></li>
     </ul>
   </div>
   <div class="sidebar-footer">
-    <button onclick="switchView('llm-usage')" id="llmNavBtn" style="text-align:left">LLM Usage</button>
     <button onclick="doAction('/consolidate','POST','{}')">Consolidate</button>
     <button onclick="doAction('/repair','POST')">Repair FTS</button>
   </div>
@@ -1170,8 +1176,6 @@ function switchView(v){
   // clear LLM auto-refresh when navigating away
   if(v!=='llm-usage'&&llmRefreshTimer){clearInterval(llmRefreshTimer);llmRefreshTimer=null;}
   document.querySelectorAll('.nav li').forEach(li=>li.classList.toggle('active',li.dataset.v===v));
-  const llmBtn=document.getElementById('llmNavBtn');
-  if(llmBtn){llmBtn.style.color=v==='llm-usage'?'#fff':'';llmBtn.style.borderColor=v==='llm-usage'?'#555':'';}
   if(v==='recall')renderRecall();else if(v==='search')renderSearch();else if(v==='resume')renderResume();else if(v==='create')renderCreate();
   else if(v==='facts')renderFacts();else if(v==='proxy')renderProxy();else if(v==='health')renderHealth();
   else if(v==='trash')renderTrash();else if(v==='tools')renderTools();else if(v==='llm-usage')renderLlmUsage();else if(v==='tests')renderTests();else renderList(getMem());
