@@ -62,7 +62,7 @@ async function engramMethod(method: string, path: string, body?: unknown): Promi
 
 const server = new McpServer({
   name: "engram",
-  version: "0.6.0",
+  version: "0.7.0",
 });
 
 server.tool(
@@ -226,10 +226,12 @@ server.tool(
   {
     q: z.string().describe("Search query"),
     limit: z.number().int().min(1).max(50).optional().describe("Max results (default 10)"),
+    namespace: z.string().optional().describe("Filter by namespace"),
   },
-  async ({ q, limit }) => {
+  async ({ q, limit, namespace }) => {
     const params = new URLSearchParams({ q });
     if (limit !== undefined) params.set("limit", String(limit));
+    if (namespace !== undefined) params.set("ns", namespace);
     const result = await engramFetch(`/search?${params}`);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -338,6 +340,35 @@ server.tool(
     if (tags !== undefined) body.tags = tags;
     if (layer !== undefined) body.layer = layer;
     const result = await engramMethod("PATCH", `/memories/${encodeURIComponent(id)}`, body);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result) }],
+    };
+  }
+);
+
+server.tool(
+  "engram_trash",
+  "List soft-deleted memories. Recently deleted items can be restored.",
+  {
+    limit: z.number().int().min(1).max(200).optional().describe("Max results (default 100)"),
+  },
+  async ({ limit }) => {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set("limit", String(limit));
+    const qs = params.toString();
+    const result = await engramFetch(`/trash${qs ? "?" + qs : ""}`);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "engram_restore",
+  "Restore a soft-deleted memory from trash back to its original layer.",
+  { id: z.string().describe("Memory ID to restore from trash") },
+  async ({ id }: { id: string }) => {
+    const result = await engramMethod("POST", `/trash/${encodeURIComponent(id)}/restore`);
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
     };
