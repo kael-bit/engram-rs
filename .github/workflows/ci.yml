@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -36,8 +37,8 @@ jobs:
             exit 1
           fi
 
-  release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  build:
+    if: github.event_name == 'push'
     needs: test
     strategy:
       matrix:
@@ -75,3 +76,22 @@ jobs:
         with:
           name: ${{ matrix.name }}
           path: ${{ matrix.name }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/engram-linux-x86_64/engram-linux-x86_64
+            artifacts/engram-windows-x86_64.exe/engram-windows-x86_64.exe
