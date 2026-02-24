@@ -230,7 +230,6 @@ Restore context first — nothing else matters until you know who you are:
   curl -s http://localhost:3917/resume?hours=6&compact=true
 
 Read the core section (identity, constraints, lessons) and working section (active context).
-If there are next_actions, that's your todo list.
 
 Compaction summaries are lossy — they drop details, lessons, and recent decisions.
 After any compaction event, resume from engram before continuing the conversation.

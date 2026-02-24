@@ -430,7 +430,6 @@ async fn resume_returns_structured_sections() {
     assert!(j["buffer"].is_array());
     assert!(j["recent"].is_array());
     assert!(j["sessions"].is_array());
-    assert!(j["next_actions"].is_array());
     assert!(j["hours"].as_f64().unwrap() > 0.0);
 
     // Core should include the high-importance core memory
@@ -438,13 +437,7 @@ async fn resume_returns_structured_sections() {
     assert!(!core.is_empty(), "should have core memories");
     assert!(core[0]["content"].as_str().unwrap().contains("test agent"));
 
-    // Next actions should have the tagged memory content parsed
-    let next = j["next_actions"].as_array().unwrap();
-    assert!(!next.is_empty(), "should have next-action items");
-    assert!(next.iter().any(|v| v.as_str().unwrap_or("").contains("write more tests")),
-        "should contain 'write more tests' action");
-
-    // Sessions should have the session memory (not tagged as next-action)
+    // Sessions should have the session memory
     let sessions = j["sessions"].as_array().unwrap();
     assert!(!sessions.is_empty(), "should have session memories");
 
@@ -495,10 +488,10 @@ async fn resume_session_notes_in_buffer_go_to_sessions() {
         s["content"].as_str().unwrap_or("").contains("auth refactor")),
         "session note missing from sessions section");
 
-    let next = j["next_actions"].as_array().unwrap();
-    assert!(next.iter().any(|s|
-        s.as_str().unwrap_or("").contains("integration tests")),
-        "next-action note missing from next_actions section");
+    // next-action tagged memories should appear in sessions (not as separate section)
+    assert!(sessions.iter().any(|s|
+        s["content"].as_str().unwrap_or("").contains("integration tests")),
+        "next-action tagged note missing from sessions");
 
     let buffer = j["buffer"].as_array().unwrap();
     for b in buffer {
@@ -636,83 +629,6 @@ async fn triggers_empty_when_no_match() {
     assert_eq!(resp.status(), StatusCode::OK);
     let j = body_json(resp).await;
     assert_eq!(j["count"], 0);
-}
-
-// ── parse_next_actions unit tests ──────────────────────────────
-
-use super::recall_handlers::parse_next_actions;
-
-#[test]
-fn parse_next_comma_separated() {
-    let actions = parse_next_actions("Session: refactored auth. Next: write integration tests, deploy to staging");
-    assert_eq!(actions, vec!["write integration tests", "deploy to staging"]);
-}
-
-#[test]
-fn parse_next_chinese_markers() {
-    let actions = parse_next_actions("做了X和Y。下一步：写测试、部署");
-    assert_eq!(actions, vec!["写测试", "部署"]);
-}
-
-#[test]
-fn parse_next_chinese_colon_half() {
-    let actions = parse_next_actions("完成重构。下一步:写测试, 部署");
-    assert_eq!(actions, vec!["写测试", "部署"]);
-}
-
-#[test]
-fn parse_next_multiline() {
-    let actions = parse_next_actions("Session recap.\nNext:\nwrite tests\ndeploy to staging\nupdate docs");
-    assert_eq!(actions, vec!["write tests", "deploy to staging", "update docs"]);
-}
-
-#[test]
-fn parse_next_todo_marker() {
-    let actions = parse_next_actions("Did a bunch of stuff. TODO: fix bug, add logging");
-    assert_eq!(actions, vec!["fix bug", "add logging"]);
-}
-
-#[test]
-fn parse_next_daiban_marker() {
-    let actions = parse_next_actions("完成了重构。待办：写测试、更新文档");
-    assert_eq!(actions, vec!["写测试", "更新文档"]);
-}
-
-#[test]
-fn parse_next_no_marker() {
-    let actions = parse_next_actions("Just did some work, nothing special");
-    assert!(actions.is_empty());
-}
-
-#[test]
-fn parse_next_dedup() {
-    let actions = parse_next_actions("Next: write tests, deploy, write tests");
-    assert_eq!(actions, vec!["write tests", "deploy"]);
-}
-
-#[tokio::test]
-async fn resume_parses_next_actions_from_session_content() {
-    let app = router(test_state(None));
-
-    // Session memory with "Next:" in content (no next-action tag)
-    let body = serde_json::json!({
-        "content": "Session: refactored auth module. Next: write integration tests, deploy to staging",
-        "source": "session",
-        "importance": 0.6
-    });
-    app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
-
-    let resp = app.oneshot(
-        Request::builder().uri("/resume?hours=1").body(Body::empty()).unwrap()
-    ).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let j = body_json(resp).await;
-
-    let next = j["next_actions"].as_array().unwrap();
-    assert!(next.iter().any(|v| v.as_str().unwrap_or("") == "write integration tests"),
-        "should parse 'write integration tests' from session content, got: {:?}", next);
-    assert!(next.iter().any(|v| v.as_str().unwrap_or("") == "deploy to staging"),
-        "should parse 'deploy to staging' from session content, got: {:?}", next);
 }
 
 #[tokio::test]

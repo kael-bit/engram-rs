@@ -9,49 +9,6 @@ use crate::error::EngramError;
 use crate::{ai, db, recall, AppState};
 use super::{blocking, get_namespace};
 
-/// Parse next-action items from memory content.
-///
-/// Recognizes markers: `Next:`, `next:`, `下一步:`, `下一步：`, `待做:`, `待办:`, `TODO:`.
-/// After the marker, splits by comma, Chinese enumeration comma (、), or newlines.
-pub(crate) fn parse_next_actions(content: &str) -> Vec<String> {
-    // Markers to look for (case-sensitive except Next/next)
-    let markers: &[&str] = &[
-        "Next:", "next:", "NEXT:",
-        "下一步:", "下一步：",
-        "待做:", "待做：", "待办:", "待办：",
-        "TODO:", "Todo:",
-    ];
-
-    let mut actions = Vec::new();
-
-    for marker in markers {
-        if let Some(pos) = content.find(marker) {
-            let after = &content[pos + marker.len()..];
-            // Take until end of content or next sentence-ending pattern that isn't part of items
-            let text = after.trim();
-            if text.is_empty() {
-                continue;
-            }
-            // Split by comma, Chinese comma, newline, or semicolon
-            for item in text.split([',', '\n', '、', ';', '；']) {
-                let trimmed = item.trim().trim_end_matches(['.', '。']);
-                let trimmed = trimmed.trim();
-                if !trimmed.is_empty() {
-                    actions.push(trimmed.to_string());
-                }
-            }
-            // Only use the first matching marker
-            break;
-        }
-    }
-
-    // Deduplicate (preserve order)
-    let mut seen = std::collections::HashSet::new();
-    actions.retain(|a| seen.insert(a.clone()));
-
-    actions
-}
-
 /// Simple keyword search — lighter than /recall, no scoring or budget logic.
 #[derive(Deserialize)]
 pub(super) struct SearchQuery {
@@ -255,7 +212,7 @@ pub(super) async fn do_resume(
             .take(core_limit)
             .collect();
 
-        // Working: exclude session-source memories (they go in sessions/next_actions)
+        // Working: exclude session-source memories (they go in sessions section)
         let working: Vec<db::Memory> = d
             .list_by_layer_meta_ns(db::Layer::Working, core_limit * 2, 0, ns_filter.as_deref())
             .unwrap_or_default()
@@ -293,19 +250,12 @@ pub(super) async fn do_resume(
             .cloned()
             .collect();
 
-        let mut next_actions = Vec::new();
         let mut sessions = Vec::new();
         for m in all_recent.into_iter().filter(|m| is_session(m)) {
             if layer_ids.contains(&m.id) { continue; }
-            if m.tags.iter().any(|t| t == "next-action") {
-                next_actions.push(m);
-            } else {
-                sessions.push(m);
-            }
+            sessions.push(m);
         }
         sessions.truncate(10);
-        next_actions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        next_actions.truncate(3);
 
         // Core relevance filtering: use recent context (buffer + sessions) as
         // signal for what matters right now. Core memories unrelated to current
@@ -388,11 +338,11 @@ pub(super) async fn do_resume(
             }
         };
 
-        (core, working, buffer, recent, sessions, next_actions)
+        (core, working, buffer, recent, sessions)
     })
     .await?;
 
-    let (core, working, buffer, recent, sessions, next_actions) = sections;
+    let (core, working, buffer, recent, sessions) = sections;
     let compact = q.compact.unwrap_or(true);
 
     // Helper: convert memories to compact or full format
@@ -526,10 +476,9 @@ pub(super) async fn do_resume(
     };
     budget_left = budget_left.saturating_sub(main_budget.min(core_cap) - core_budget);
 
-    // Sessions + next_actions come before Working — continuity matters more
+    // Sessions come before Working — continuity matters more
     let mut session_budget = budget_left.saturating_sub(recent_reserve);
     let sessions_out = fit_section(&sessions, &mut session_budget, compact);
-    let next_tagged_out = fit_section(&next_actions, &mut session_budget, compact);
     budget_left = budget_left.saturating_sub(budget_left.saturating_sub(recent_reserve) - session_budget);
 
     let mut working_budget = budget_left.saturating_sub(recent_reserve);
@@ -539,31 +488,6 @@ pub(super) async fn do_resume(
     // Recent context gets whatever is left (at least the reserved 20%)
     let recent_out = fit_section(&recent, &mut budget_left, compact);
     let buffer_out = fit_section(&buffer, &mut budget_left, compact);
-
-    // Parse next_actions from session memory content + explicitly tagged next-action memories.
-    let mut parsed_actions: Vec<String> = Vec::new();
-    // From explicitly tagged next-action memories
-    for m in &next_tagged_out {
-        let parsed = parse_next_actions(&m.content);
-        if parsed.is_empty() {
-            // If no marker found, use the whole content as an action
-            let trimmed = m.content.trim().to_string();
-            if !trimmed.is_empty() {
-                parsed_actions.push(trimmed);
-            }
-        } else {
-            parsed_actions.extend(parsed);
-        }
-    }
-    // From session memories (which may contain "Next: ..." markers)
-    for m in &sessions_out {
-        parsed_actions.extend(parse_next_actions(&m.content));
-    }
-    // Deduplicate (preserve order)
-    {
-        let mut seen = std::collections::HashSet::new();
-        parsed_actions.retain(|a| seen.insert(a.clone()));
-    }
 
     // Only touch Buffer memories — they need access_count to get promoted.
     // Core is stable (touching inflates access_count to 200+ meaninglessly).
@@ -604,7 +528,6 @@ pub(super) async fn do_resume(
         "buffer": to_json(&buffer_out),
         "recent": to_json(&recent_out),
         "sessions": to_json(&sessions_out),
-        "next_actions": parsed_actions,
         "hours": hours,
         "core_count": core_count,
         "core_total": core.len(),
@@ -613,7 +536,6 @@ pub(super) async fn do_resume(
         "buffer_count": buffer_out.len(),
         "recent_count": recent_out.len(),
         "session_count": sessions_out.len(),
-        "next_action_count": parsed_actions.len(),
     })))
 }
 
