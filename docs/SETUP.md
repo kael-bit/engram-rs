@@ -24,18 +24,22 @@ Before doing anything, ask:
 
 ```bash
 git clone https://github.com/kael-bit/engram-rs.git
-cd engram
+cd engram-rs
 cargo build --release
 ```
 
-Binary will be at `./target/release/engram` (~6MB).
+Binary will be at `./target/release/engram` (~9MB).
 
 ### Pre-built binary
 
+Download from [Releases](https://github.com/kael-bit/engram-rs/releases/latest):
+
 ```bash
-# Download latest release
-curl -L https://github.com/kael-bit/engram-rs/releases/latest/download/engram-$(uname -s)-$(uname -m) -o engram
+# Linux
+curl -L https://github.com/kael-bit/engram-rs/releases/latest/download/engram-linux-x86_64 -o engram
 chmod +x engram
+
+# Windows — download engram-windows-x86_64.exe from the Releases page
 ```
 
 ## Step 2: Start engram
