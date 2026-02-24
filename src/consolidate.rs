@@ -476,7 +476,8 @@ async fn triage_buffer(
     already_promoted: &[String],
 ) -> (usize, Vec<String>) {
     let now = crate::db::now_ms();
-    let candidates: Vec<_> = db.list_by_layer_meta(Layer::Buffer, 10000, 0)
+    // Group by namespace so triage never crosses namespace boundaries
+    let all_buffers: Vec<_> = db.list_by_layer_meta(Layer::Buffer, 10000, 0)
         .into_iter()
         .filter(|m| {
             let dominated = m.tags.iter().any(|t| t == "distilled" || t == "ephemeral");
@@ -484,75 +485,83 @@ async fn triage_buffer(
             let has_signal = m.access_count > 0 || m.repetition_count > 0;
             !dominated && old_enough && has_signal && !already_promoted.contains(&m.id)
         })
-        .take(max_batch)
         .collect();
 
-    if candidates.is_empty() {
-        return (0, vec![]);
+    // Process each namespace separately
+    let mut ns_groups: std::collections::HashMap<&str, Vec<&Memory>> = std::collections::HashMap::new();
+    for m in &all_buffers {
+        ns_groups.entry(&m.namespace).or_default().push(m);
     }
 
-    let mut user_msg = String::with_capacity(candidates.len() * 200);
-    for m in &candidates {
-        let preview = truncate_chars(&m.content, 300);
-        let tags = m.tags.join(", ");
-        user_msg.push_str(&format!(
-            "[{}] (ac={}, tags=[{}]) {}\n\n",
-            &m.id[..8], m.access_count, tags, preview
-        ));
-    }
+    let mut total_promoted = 0;
+    let mut all_ids = Vec::new();
 
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "decisions": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string", "description": "Memory ID prefix (first 8 chars)" },
-                        "action": { "type": "string", "enum": ["promote", "keep"] },
-                        "kind": { "type": "string", "enum": ["semantic", "procedural"], "description": "Only for promoted memories" }
-                    },
-                    "required": ["id", "action"]
-                }
-            }
-        },
-        "required": ["decisions"]
-    });
+    for (ns, mems) in &ns_groups {
+        let candidates: Vec<_> = mems.iter().take(max_batch).collect();
+        if candidates.is_empty() { continue; }
 
-    let result: TriageResult = match ai::llm_tool_call(
-        cfg, "gate", TRIAGE_SYSTEM, &user_msg,
-        "triage_decisions", "Decide which memories to promote or keep",
-        schema,
-    ).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, "buffer triage LLM call failed");
-            return (0, vec![]);
+        let mut user_msg = String::with_capacity(candidates.len() * 200);
+        for m in &candidates {
+            let preview = truncate_chars(&m.content, 300);
+            let tags = m.tags.join(", ");
+            user_msg.push_str(&format!(
+                "[{}] (ac={}, tags=[{}]) {}\n\n",
+                &m.id[..8], m.access_count, tags, preview
+            ));
         }
-    };
 
-    let mut promoted = 0;
-    let mut ids = Vec::new();
-
-    for d in &result.decisions {
-        if d.action != "promote" { continue; }
-        if let Some(mem) = candidates.iter().find(|m| m.id.starts_with(&d.id)) {
-            if db.promote(&mem.id, Layer::Working).is_ok() {
-                if let Some(ref k) = d.kind {
-                    if k == "procedural" && mem.kind == "semantic" {
-                        let _ = db.update_kind(&mem.id, k);
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "decisions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string", "description": "Memory ID prefix (first 8 chars)" },
+                            "action": { "type": "string", "enum": ["promote", "keep"] },
+                            "kind": { "type": "string", "enum": ["semantic", "procedural"], "description": "Only for promoted memories" }
+                        },
+                        "required": ["id", "action"]
                     }
                 }
-                debug!(id = %mem.id, kind = ?d.kind, "triage: promoted buffer → working");
-                ids.push(mem.id.clone());
-                promoted += 1;
+            },
+            "required": ["decisions"]
+        });
+
+        let result: TriageResult = match ai::llm_tool_call(
+            cfg, "gate", TRIAGE_SYSTEM, &user_msg,
+            "triage_decisions", "Decide which memories to promote or keep",
+            schema,
+        ).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(ns = %ns, error = %e, "buffer triage LLM call failed");
+                continue;
+            }
+        };
+
+        for d in &result.decisions {
+            if d.action != "promote" { continue; }
+            if let Some(mem) = candidates.iter().find(|m| m.id.starts_with(&d.id)) {
+                if db.promote(&mem.id, Layer::Working).is_ok() {
+                    if let Some(ref k) = d.kind {
+                        if k == "procedural" && mem.kind == "semantic" {
+                            let _ = db.update_kind(&mem.id, k);
+                        }
+                    }
+                    debug!(id = %mem.id, ns = %ns, kind = ?d.kind, "triage: promoted buffer → working");
+                    all_ids.push(mem.id.clone());
+                    total_promoted += 1;
+                }
             }
         }
+
+        info!(ns = %ns, candidates = candidates.len(), promoted = total_promoted, "buffer triage batch complete");
     }
 
-    info!(candidates = candidates.len(), promoted, "buffer triage complete");
-    (promoted, ids)
+    info!(total = total_promoted, "buffer triage complete");
+    (total_promoted, all_ids)
 }
 
 // --- Reconcile: same-topic update detection ---
@@ -586,6 +595,7 @@ fn dedup_buffer(db: &MemoryDB) -> usize {
         if removed.contains(&buffers[i].0.id) { continue; }
         for j in (i + 1)..buffers.len() {
             if removed.contains(&buffers[j].0.id) { continue; }
+            if buffers[i].0.namespace != buffers[j].0.namespace { continue; }
 
             let sim = cosine_similarity(&buffers[i].1, &buffers[j].1);
             if sim < threshold { continue; }
