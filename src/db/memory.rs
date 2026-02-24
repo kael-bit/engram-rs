@@ -560,6 +560,45 @@ impl MemoryDB {
         Ok(rows)
     }
 
+    /// Count memories matching the same filters as `list_filtered`, without fetching rows.
+    pub fn count_filtered(
+        &self,
+        ns: Option<&str>,
+        layer: Option<u8>,
+        tag: Option<&str>,
+    ) -> Result<usize, EngramError> {
+        let conn = self.conn()?;
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut clauses = Vec::new();
+
+        if let Some(n) = ns {
+            params_vec.push(Box::new(n.to_string()));
+            clauses.push(format!("namespace = ?{}", params_vec.len()));
+        }
+        if let Some(l) = layer {
+            params_vec.push(Box::new(l as i64));
+            clauses.push(format!("layer = ?{}", params_vec.len()));
+        }
+        if let Some(t) = tag {
+            params_vec.push(Box::new(t.to_string()));
+            clauses.push(format!(
+                "EXISTS (SELECT 1 FROM json_each(memories.tags) WHERE json_each.value = ?{})",
+                params_vec.len()
+            ));
+        }
+
+        let mut sql = String::from("SELECT COUNT(*) FROM memories");
+        if !clauses.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&clauses.join(" AND "));
+        }
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(std::convert::AsRef::as_ref).collect();
+        let count: i64 = conn.query_row(&sql, param_refs.as_slice(), |r| r.get(0))?;
+        Ok(count as usize)
+    }
+
     /// List memories created since a given timestamp, ordered by creation time descending.
     pub fn list_since(&self, since_ms: i64, limit: usize) -> Result<Vec<Memory>, EngramError> {
         self.list_since_filtered(since_ms, limit, None, None, None, None)

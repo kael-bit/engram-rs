@@ -240,9 +240,14 @@ pub(super) async fn list_memories(
         )?;
 
         let count = memories.len();
-        let total = match q.ns.as_deref() {
-            Some(ns) => d.stats_ns(ns).total,
-            None => d.stats().total,
+        let total = if q.tag.is_some() || q.layer.is_some() {
+            d.count_filtered(q.ns.as_deref(), q.layer, q.tag.as_deref())
+                .unwrap_or(count)
+        } else {
+            match q.ns.as_deref() {
+                Some(ns) => d.stats_ns(ns).total,
+                None => d.stats().total,
+            }
         };
         Ok::<_, EngramError>(serde_json::json!({
             "memories": memories,
