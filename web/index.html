@@ -198,13 +198,14 @@ async function loadMem(){
   document.getElementById('c-prx').textContent=allMem.filter(m=>m.source==='proxy').length;
 }
 
-function card(m,score){
+function card(m,score,rel){
   const tags=(m.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join(' ');
   const sc=score!=null?`<span class="score">${score.toFixed(3)}</span>`:'';
+  const rl=rel!=null?`<span class="score" style="opacity:.6">rel ${rel.toFixed(3)}</span>`:'';
   const kind=m.kind&&m.kind!=='semantic'?`<span class="kind-badge">${m.kind}</span>`:'';
   return`<div class="mc" data-id="${m.id}">
     <div class="ct">${esc((m.content||'').slice(0,280))}${m.content&&m.content.length>280?'…':''}</div>
-    <div class="meta"><span class="lb l${m.layer}">${ln(m.layer)}</span>${sc}${kind}
+    <div class="meta"><span class="lb l${m.layer}">${ln(m.layer)}</span>${sc}${rl}${kind}
       <span>imp ${(m.importance||0).toFixed(2)}</span><span>×${m.access_count||0}</span>
       <span>${ago(m.created_at)}</span>${tags}</div></div>`;
 }
@@ -352,8 +353,8 @@ async function doRecall(){
   const ms=(performance.now()-t0).toFixed(0);
   const r=d.memories||[];
   document.getElementById('rRes').innerHTML=`
-    <div style="font-size:11px;color:#555;margin:10px 0 6px">${r.length} results, ${ms}ms</div>
-    <div class="ml">${r.length?r.map(m=>card(m,m.relevance)).join(''):'<div class="empty">Nothing found</div>'}</div>`;
+    <div style="font-size:11px;color:#555;margin:10px 0 6px">${r.length} results, ${ms}ms — ${d.search_mode||'?'}</div>
+    <div class="ml">${r.length?r.map(m=>card(m,m.score,m.relevance)).join(''):'<div class="empty">Nothing found</div>'}</div>`;
   bindCards();
 }
 
