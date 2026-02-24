@@ -21,7 +21,7 @@ Your job: reorganize them. Output a JSON array of operations.
 
 ## Layers
 - Core (3): Permanent. Identity, values, key relationships, hard-won lessons, strategic constraints, design principles.
-- Working (2): Useful but not permanent. Project context, recent learnings, operational knowledge, implementation details.
+- Working (2): Active project context, recent learnings, operational knowledge, implementation details.
 - Buffer (1): Temporary. Will auto-expire. Session logs, transient notes.
 
 ## Operations (output as JSON array)
@@ -30,23 +30,44 @@ Your job: reorganize them. Output a JSON array of operations.
 - {"op":"merge","ids":["id1","id2"],"content":"merged text","layer":2,"tags":["tag1"]}
 - {"op":"delete","id":"<8-char-id>"} — remove (duplicate, obsolete, or garbage)
 
-## HARD RULES (violations make the audit worthless)
-1. NEVER delete or merge memories with mod < 1d — they were recently modified
+## HARD RULES (violations = auto-reject)
+1. NEVER delete or merge memories with mod < 1d
 2. NEVER delete identity, constraint, or lesson-tagged memories
-3. NEVER demote directly to Buffer (to:1) — use Working (to:2) as intermediate
-4. Prefer demote over delete — deletion is irreversible
-5. Only merge TRUE duplicates (same fact restated). Related ≠ duplicate.
-6. NEVER demote a memory that is ALREADY at the target layer (e.g. don't demote Working to Working)
-7. NEVER demote memories tagged "lesson" or "constraint" out of Core — lessons and constraints are EXACTLY what Core is for
-8. Memories describing design mistakes, past failures, or "this was wrong because..." are lessons — they belong in Core
+3. NEVER demote directly to Buffer (to:1)
+4. NEVER demote a memory already at the target layer
+5. NEVER demote lesson or constraint tagged memories out of Core
 
-## Guidelines
-- Core should be SMALL: identity, values, lessons, key relationships, strategic constraints, design principles
-- Implementation details (specific library choices, config values, deployment steps, bug fixes) → Working
-- Memories that say "we learned X", "mistake was Y", "principle: Z" → Core
-- Memories that say "we did X", "changed Y to Z", "added feature F" → Working
-- Merge memories that express the SAME fact or lesson redundantly
-- Output ONLY a valid JSON array. Empty array [] if no changes needed."#;
+## What to DELETE (Working layer)
+These patterns in Working are garbage — delete them (if mod >= 1d):
+- Completed one-time decisions: "We decided to use X for Y" where X is already implemented
+- Finished refactoring notes: "We decided to split/restructure/rename..."
+- Resolved bugs: "BUG: X happened" where the fix is already deployed
+- Stale build/deploy notes: "clippy fix", "cargo build with flag X"
+- Memories tagged `auto-extract` that describe a single completed action
+
+Ask yourself: "If the agent never sees this memory again, does it lose anything?" If no → delete.
+
+## What to MERGE
+Look for groups of 2-3 memories that describe THE SAME topic from different angles:
+- Same deployment procedure described in different words → merge into one
+- Same principle/constraint stated in multiple memories → merge into one
+- A lesson and its detailed example → merge (keep the lesson framing)
+When merging, preserve ALL specific details (commands, thresholds, error messages).
+
+## What to KEEP in Core
+- Lessons from mistakes ("X was wrong because Y") — these prevent repeat failures
+- Strategic constraints ("never do X", "always do Y before Z")
+- Identity and relationship facts
+- Design principles that affect future decisions
+- Memories with content containing: 教训, 原则, principle, lesson, 必须, constraint, 设计错误
+
+## What to DEMOTE from Core → Working
+- Implementation details (library choices, config values, specific API routes)
+- Resolved bugs (the fix is done, the lesson is elsewhere)
+- Operational procedures that might change (deploy steps, config paths)
+
+Output ONLY a valid JSON array. Empty array [] if no changes needed.
+Be aggressive about cleaning Working garbage. Be protective of Core lessons."#;
 
 /// Full audit: reviews Core+Working memories using the gate model.
 /// Chunks automatically if total prompt would exceed ~100K chars.
