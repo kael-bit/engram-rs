@@ -424,56 +424,47 @@ impl MemoryDB {
     }
 
     /// List all memories in a given layer, ordered by importance descending.
-    pub fn list_by_layer(&self, layer: Layer, limit: usize, offset: usize) -> Vec<Memory> {
-        let Ok(conn) = self.conn() else { return vec![]; };
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT * FROM memories WHERE layer = ?1 ORDER BY importance DESC LIMIT ?2 OFFSET ?3",
-        ) else {
-            return vec![];
-        };
-
-        stmt.query_map(params![layer as u8, limit as i64, offset as i64], row_to_memory)
-            .map(|iter| iter.filter_map(|r| r.ok()).collect())
-            .unwrap_or_default()
-    }
-
-    /// Like `list_by_layer` but excludes the embedding blob.
-    /// Use this when you only need metadata — saves significant memory when
-    /// the DB has thousands of entries with 1536-dim embeddings.
+    /// List memories by layer, excluding embedding blobs.
+    /// Supports optional namespace filter in SQL.
     pub fn list_by_layer_meta(&self, layer: Layer, limit: usize, offset: usize) -> Vec<Memory> {
         self.list_by_layer_meta_ns(layer, limit, offset, None)
     }
 
-    /// Like `list_by_layer_meta` but with optional namespace filter in SQL.
     pub fn list_by_layer_meta_ns(
         &self, layer: Layer, limit: usize, offset: usize, ns: Option<&str>,
     ) -> Vec<Memory> {
         let Ok(conn) = self.conn() else { return vec![]; };
-        if let Some(ns) = ns {
-            let sql = format!(
-                "SELECT {META_COLS} FROM memories WHERE layer = ?1 AND namespace = ?4 \
-                 ORDER BY importance DESC LIMIT ?2 OFFSET ?3"
-            );
-            let Ok(mut stmt) = conn.prepare(&sql) else { return vec![]; };
-            stmt.query_map(
-                params![layer as u8, limit as i64, offset as i64, ns],
-                row_to_memory_meta,
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(ns) = ns {
+            (
+                format!(
+                    "SELECT {META_COLS} FROM memories WHERE layer = ?1 AND namespace = ?4 \
+                     ORDER BY importance DESC LIMIT ?2 OFFSET ?3"
+                ),
+                vec![
+                    Box::new(layer as u8) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(limit as i64),
+                    Box::new(offset as i64),
+                    Box::new(ns.to_string()),
+                ],
             )
-            .map(|iter| iter.filter_map(|r| r.ok()).collect())
-            .unwrap_or_default()
         } else {
-            let sql = format!(
-                "SELECT {META_COLS} FROM memories WHERE layer = ?1 \
-                 ORDER BY importance DESC LIMIT ?2 OFFSET ?3"
-            );
-            let Ok(mut stmt) = conn.prepare(&sql) else { return vec![]; };
-            stmt.query_map(
-                params![layer as u8, limit as i64, offset as i64],
-                row_to_memory_meta,
+            (
+                format!(
+                    "SELECT {META_COLS} FROM memories WHERE layer = ?1 \
+                     ORDER BY importance DESC LIMIT ?2 OFFSET ?3"
+                ),
+                vec![
+                    Box::new(layer as u8) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(limit as i64),
+                    Box::new(offset as i64),
+                ],
             )
+        };
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let Ok(mut stmt) = conn.prepare(&sql) else { return vec![]; };
+        stmt.query_map(param_refs.as_slice(), row_to_memory_meta)
             .map(|iter| iter.filter_map(|r| r.ok()).collect())
             .unwrap_or_default()
-        }
     }
 
     /// Find memories below a decay score threshold (Buffer/Working only).
