@@ -143,7 +143,7 @@ pub(super) async fn get_triggers(
     let db2 = state.db.clone();
 
     let memories: Vec<db::Memory> = blocking(move || {
-        db.list_by_tag(&tag, ns.as_deref())
+        db.list_filtered(500, 0, ns.as_deref(), None, Some(&tag))
     }).await?.unwrap_or_default();
 
     // touch each trigger memory so it reinforces over time
