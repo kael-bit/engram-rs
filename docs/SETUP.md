@@ -126,8 +126,17 @@ After any compaction event, immediately call `engram_resume` before continuing.
 - Decisions, preferences, lessons → `engram_store` immediately
 - Workflows, procedures → `engram_store` with kind="procedural" (never decay)
 - "Remember this" from the user → `engram_store` with importance=0.9
-- Need context → `engram_recall` with the question as query
 - Before risky operations → `engram_triggers` with the action name
+
+### Recalling memories
+Before acting on any non-trivial task, recall first. Don't assume you remember — check:
+- `engram_recall` with the topic as query
+
+Recall when:
+- Starting work on a topic you've touched before
+- The user asks about past decisions, preferences, or history
+- Before making architectural or design decisions
+- You're unsure about a convention or workflow
 
 ### Before session ends
 Store a summary: what you did + what was decided + what to do next.
@@ -167,11 +176,17 @@ Compaction summaries are lossy. After any compaction event, call resume again to
 
 **Don't store**: routine output, things in code files, transient status.
 
-### Recall
+### Recalling memories
+Before acting on any non-trivial task, recall first. Don't assume you remember — check:
 ```bash
 curl -sf -X POST -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" -d '{"query": "your question"}' http://localhost:3917/recall
 ```
+Recall when:
+- Starting work on a topic you've touched before
+- The user asks about past decisions, preferences, or history
+- Before making architectural or design decisions
+- You're unsure about a convention or workflow
 
 ### Store
 ```bash
@@ -251,12 +266,17 @@ curl -X POST http://localhost:3917/memories \
 ```
 
 ### Recalling memories
-When you need context about a topic, recall before acting:
+Before acting on any non-trivial task, recall first. Don't assume you remember — check:
 ```bash
 curl -sf -X POST http://localhost:3917/recall \
   -H 'Content-Type: application/json' \
   -d '{"query": "how do we deploy"}'
 ```
+Recall when:
+- Starting work on a topic you've touched before
+- The user asks about past decisions, preferences, or history
+- Before making architectural or design decisions
+- You're unsure about a convention or workflow
 
 ### Before risky operations
 ```bash
