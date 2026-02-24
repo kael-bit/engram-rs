@@ -23,7 +23,10 @@ Metadata: ac=access count, age=days old, mod=days since last edit, kind, tags.
 - mod < 1d → don't touch
 - Never demote to buffer (to:1)
 - Never delete identity or lesson-tagged memories
-- Check the current layer before proposing demote — demoting L2→L2 is a no-op bug
+- NEVER propose demoting a memory to the same layer it is already on. Check the [Layer: ...] tag before proposing any demote. L2→L2 or L3→L3 is a no-op bug.
+- When you see multiple memories covering the same topic or event, prefer MERGE over DELETE
+- Look for memories with overlapping content — propose merging the less detailed into the more comprehensive one
+- Propose at most 30% deletes. Focus on merges and promotions first. Deletions should be reserved for truly obsolete or garbage content.
 
 ## What BELONGS in Core (examples)
 - "never force-push to main" — lesson, prevents mistakes
@@ -102,7 +105,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
             for m in chunk {
                 let tags = m.tags.join(",");
                 let preview: String = truncate_chars(&m.content, 200);
-                prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
+                prompt.push_str(&format!("- [{}] [Layer: Working (2)] (imp={:.1}, acc={}, tags=[{}]) {}\n",
                     crate::util::short_id(&m.id), m.importance, m.access_count, tags, preview));
             }
 
@@ -144,7 +147,7 @@ fn format_audit_prompt(core: &[Memory], working: &[Memory]) -> String {
             age_d
         };
         let preview: String = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] L3 (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
+        prompt.push_str(&format!("- [{}] [Layer: Core (3)] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
             crate::util::short_id(&m.id), m.importance, m.access_count, age_d, mod_d, tags, preview));
     }
     prompt.push_str(&format!("\n## Working Layer (L2, {} memories)\n", working.len()));
@@ -157,7 +160,7 @@ fn format_audit_prompt(core: &[Memory], working: &[Memory]) -> String {
             age_d
         };
         let preview: String = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] L2 (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
+        prompt.push_str(&format!("- [{}] [Layer: Working (2)] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
             crate::util::short_id(&m.id), m.importance, m.access_count, age_d, mod_d, tags, preview));
     }
     prompt

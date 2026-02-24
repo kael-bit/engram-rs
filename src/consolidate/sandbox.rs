@@ -97,7 +97,7 @@ impl<'a> RuleChecker<'a> {
 
         // Rule: never delete lesson/audit/procedural memories (unless exact duplicates — handled by merge)
         if mem.tags.iter().any(|t| t == "lesson" || t == "audit" || t == "sandbox")
-            || mem.kind.as_deref() == Some("procedural")
+            || mem.kind == "procedural"
         {
             return OpGrade {
                 op: op.clone(), grade: Grade::Bad,
