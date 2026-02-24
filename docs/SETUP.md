@@ -250,6 +250,14 @@ curl -X POST http://localhost:3917/memories \
   -d '{"content": "deploy flow: cargo test && cargo build --release && systemctl stop && cp && systemctl start", "tags": ["deploy"], "kind": "procedural"}'
 ```
 
+### Recalling memories
+When you need context about a topic, recall before acting:
+```bash
+curl -sf -X POST http://localhost:3917/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "how do we deploy"}'
+```
+
 ### Before risky operations
 ```bash
 curl -s http://localhost:3917/triggers/git-push
