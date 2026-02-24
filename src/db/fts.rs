@@ -124,7 +124,8 @@ impl MemoryDB {
         }
 
         let processed = append_segmented(sanitized);
-        let terms: Vec<&str> = processed.split_whitespace()
+        let terms: Vec<String> = processed.split_whitespace()
+            .map(|w| w.to_lowercase())
             .filter(|w| !is_stopword(w))
             .collect();
         if terms.is_empty() {
