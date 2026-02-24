@@ -187,7 +187,7 @@ impl MemoryDB {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
     use crate::db::{MemoryDB, MemoryInput};
 
     fn test_db() -> MemoryDB {
@@ -287,7 +287,7 @@ mod tests {
             content: "has embedding".into(),
             ..Default::default()
         }).unwrap();
-        let m2 = db.insert(MemoryInput {
+        let _m2 = db.insert(MemoryInput {
             content: "no embedding".into(),
             ..Default::default()
         }).unwrap();

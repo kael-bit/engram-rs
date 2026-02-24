@@ -1915,7 +1915,7 @@ mod tests {
     #[test]
     fn list_since_filtered_basic() {
         let db = test_db();
-        let old = db.insert(MemoryInput::new("old entry")).unwrap();
+        let _old = db.insert(MemoryInput::new("old entry")).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
         let cutoff = crate::db::now_ms();
         std::thread::sleep(std::time::Duration::from_millis(10));
