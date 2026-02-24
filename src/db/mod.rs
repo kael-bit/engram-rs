@@ -623,14 +623,14 @@ impl MemoryDB {
         c.execute(
             "INSERT INTO llm_usage (ts, component, model, input_tokens, output_tokens, cached_tokens, duration_ms) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![now_ms() as i64, component, model, input_tokens, output_tokens, cached_tokens, duration_ms as i64],
+            rusqlite::params![{ now_ms() }, component, model, input_tokens, output_tokens, cached_tokens, duration_ms as i64],
         )?;
         Ok(())
     }
 
     pub fn llm_usage_daily(&self, days: u32) -> Result<Vec<DailyLlmUsage>, EngramError> {
         let c = self.conn()?;
-        let cutoff = now_ms() as i64 - (days as i64 * 86_400_000);
+        let cutoff = now_ms() - (days as i64 * 86_400_000);
         let mut stmt = c.prepare(
             "SELECT date(ts/1000, 'unixepoch') as d, component, model, \
              COUNT(*) as calls, SUM(input_tokens), SUM(output_tokens), SUM(cached_tokens), \
@@ -657,7 +657,7 @@ impl MemoryDB {
     pub fn llm_usage_summary(&self) -> Result<LlmUsageSummary, EngramError> {
         let c = self.conn()?;
         let today_start = {
-            let now = now_ms() as i64;
+            let now = now_ms();
             // Start of today in UTC
             now - (now % 86_400_000)
         };

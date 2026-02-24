@@ -35,7 +35,7 @@ pub fn init_proxy_counters(db: &db::MemoryDB) {
 
 fn persist_proxy_counters(db: &db::MemoryDB) {
     let count = PROXY_PERSIST_COUNTER.fetch_add(1, Ordering::Relaxed);
-    if count % 10 == 0 {
+    if count.is_multiple_of(10) {
         let _ = db.set_meta("proxy_requests_total", &PROXY_REQUESTS.load(Ordering::Relaxed).to_string());
         let _ = db.set_meta("proxy_extracted_total", &PROXY_EXTRACTED.load(Ordering::Relaxed).to_string());
     }
