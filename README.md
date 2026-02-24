@@ -552,6 +552,8 @@ engram runs autonomously — no cron or external scheduler needed:
 | `engram_repair` | Fix indexes and backfill embeddings |
 | `engram_delete` | Delete a memory by ID |
 | `engram_update` | Update importance, tags, or layer |
+| `engram_trash` | List soft-deleted memories |
+| `engram_restore` | Restore a memory from trash |
 
 ## Configuration
 
