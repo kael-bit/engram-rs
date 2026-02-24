@@ -285,7 +285,13 @@ function showDetail(id){
     <div class="df"><div class="dl">Tags</div>
       <input type="text" id="editTags" value="${(m.tags||[]).join(', ')}" style="width:100%">
     </div>
-    <div class="df"><div class="dl">Kind</div><div class="dv">${m.kind||'semantic'}</div></div>
+    <div class="df"><div class="dl">Kind</div>
+      <select id="editKind" style="width:100%">
+        <option value="semantic" ${(m.kind||'semantic')==='semantic'?'selected':''}>semantic</option>
+        <option value="episodic" ${m.kind==='episodic'?'selected':''}>episodic</option>
+        <option value="procedural" ${m.kind==='procedural'?'selected':''}>procedural</option>
+      </select>
+    </div>
     <div class="df"><div class="dl">Source</div><div class="dv">${esc(m.source||'—')}</div></div>
     <div class="df"><div class="dl">Access / Repetition</div><div class="dv">${m.access_count||0} / ${m.repetition_count||0}</div></div>
     <div class="df"><div class="dl">Namespace</div><div class="dv">${esc(m.namespace||'default')}</div></div>
@@ -310,8 +316,9 @@ async function saveMem(id){
   const imp=parseFloat(document.getElementById('editImp').value);
   const layer=parseInt(document.getElementById('editLayer').value);
   const tags=document.getElementById('editTags').value.split(',').map(t=>t.trim()).filter(Boolean);
+  const kind=document.getElementById('editKind').value;
   try{
-    await api('/memories/'+id,{method:'PATCH',body:JSON.stringify({content:ct,importance:imp,layer,tags})});
+    await api('/memories/'+id,{method:'PATCH',body:JSON.stringify({content:ct,importance:imp,layer,tags,kind})});
     toast('Saved');closeDetail();await refresh();
   }catch(e){toast('Error: '+e.message,false);}
 }
