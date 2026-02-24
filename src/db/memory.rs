@@ -1015,7 +1015,7 @@ impl MemoryDB {
         } else {
             content
         };
-        let candidates = self.search_fts(query_text, 5);
+        let candidates = self.search_fts_ns(query_text, 5, Some(ns));
         if candidates.is_empty() {
             return None;
         }

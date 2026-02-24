@@ -194,12 +194,13 @@ pub fn recall(
     // we can skip the expensive full-corpus cosine similarity scan and only
     // score the memories that FTS/facts already surfaced.
 
-    let fts = db.search_fts(&req.query, limit * 3);
+    let ns = req.namespace.as_deref();
+    let fts = db.search_fts_ns(&req.query, limit * 3, ns);
 
     let mut extra_fts_results: Vec<Vec<(String, f64)>> = Vec::new();
     if let Some(queries) = extra_queries {
         for eq in queries {
-            extra_fts_results.push(db.search_fts(eq, limit));
+            extra_fts_results.push(db.search_fts_ns(eq, limit, ns));
         }
     }
 
@@ -228,7 +229,9 @@ pub fn recall(
     // must never be excluded by prefiltering. A query like "我叫什么" might
     // not match any FTS terms in the identity memory but should still find it
     // via semantic similarity.
-    for m in db.list_by_layer(crate::db::Layer::Core, 200, 0) {
+    for m in db.list_filtered(200, 0, ns, Some(3), None)
+        .unwrap_or_default()
+    {
         candidate_ids.insert(m.id.clone());
     }
 
