@@ -64,6 +64,11 @@ curl -X POST http://localhost:3917/recall \
   -H 'Content-Type: application/json' \
   -d '{"query": "editor preferences"}'
 
+# Recall with LLM reranking (improves accuracy for short/ambiguous queries)
+curl -X POST http://localhost:3917/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "who is the user", "rerank": true}'
+
 # Dashboard
 open http://localhost:3917/ui
 ```
@@ -578,6 +583,7 @@ engram runs autonomously — no cron or external scheduler needed:
 | `ENGRAM_EMBED_MODEL` | `text-embedding-3-small` | Embedding model |
 | `ENGRAM_CONSOLIDATE_MINS` | `30` | Auto-consolidation interval (0 = off) |
 | `ENGRAM_AUTO_MERGE` | `false` | Enable LLM merge in auto-consolidation |
+| `ENGRAM_AUTO_RERANK` | `false` | Auto-rerank all recall results via LLM |
 | `ENGRAM_PROXY_UPSTREAM` | — | Upstream LLM URL (enables proxy) |
 | `ENGRAM_PROXY_KEY` | — | Fallback API key for proxy |
 | `ENGRAM_WORKSPACE` | — | Default workspace tag for `/resume` |
