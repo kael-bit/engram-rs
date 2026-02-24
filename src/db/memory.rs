@@ -434,32 +434,19 @@ impl MemoryDB {
         &self, layer: Layer, limit: usize, offset: usize, ns: Option<&str>,
     ) -> Vec<Memory> {
         let Ok(conn) = self.conn() else { return vec![]; };
-        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(ns) = ns {
-            (
-                format!(
-                    "SELECT {META_COLS} FROM memories WHERE layer = ?1 AND namespace = ?4 \
-                     ORDER BY importance DESC LIMIT ?2 OFFSET ?3"
-                ),
-                vec![
-                    Box::new(layer as u8) as Box<dyn rusqlite::types::ToSql>,
-                    Box::new(limit as i64),
-                    Box::new(offset as i64),
-                    Box::new(ns.to_string()),
-                ],
-            )
-        } else {
-            (
-                format!(
-                    "SELECT {META_COLS} FROM memories WHERE layer = ?1 \
-                     ORDER BY importance DESC LIMIT ?2 OFFSET ?3"
-                ),
-                vec![
-                    Box::new(layer as u8) as Box<dyn rusqlite::types::ToSql>,
-                    Box::new(limit as i64),
-                    Box::new(offset as i64),
-                ],
-            )
-        };
+        let mut sql = format!(
+            "SELECT {META_COLS} FROM memories WHERE layer = ?1"
+        );
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(layer as u8),
+            Box::new(limit as i64),
+            Box::new(offset as i64),
+        ];
+        if let Some(ns) = ns {
+            params.push(Box::new(ns.to_string()));
+            sql += &format!(" AND namespace = ?{}", params.len());
+        }
+        sql += " ORDER BY importance DESC LIMIT ?2 OFFSET ?3";
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let Ok(mut stmt) = conn.prepare(&sql) else { return vec![]; };
         stmt.query_map(param_refs.as_slice(), row_to_memory_meta)
@@ -675,61 +662,45 @@ impl MemoryDB {
 
     fn stats_impl(&self, ns: Option<&str>) -> Stats {
         let mut s = Stats {
-            total: 0,
-            buffer: 0,
-            working: 0,
-            core: 0,
+            total: 0, buffer: 0, working: 0, core: 0,
             by_kind: KindStats::default(),
         };
         let Ok(conn) = self.conn() else { return s; };
-
-        let (layer_sql, kind_sql) = match ns {
-            Some(_) => (
-                "SELECT layer, COUNT(*) FROM memories WHERE namespace = ?1 GROUP BY layer",
-                "SELECT kind, COUNT(*) FROM memories WHERE namespace = ?1 GROUP BY kind",
-            ),
-            None => (
-                "SELECT layer, COUNT(*) FROM memories GROUP BY layer",
-                "SELECT kind, COUNT(*) FROM memories GROUP BY kind",
-            ),
-        };
+        let ns_clause = if ns.is_some() { " WHERE namespace = ?1" } else { "" };
 
         // Layer counts
-        let mut apply_layer = |layer: u8, count: usize| {
-            s.total += count;
-            match layer {
-                1 => s.buffer = count,
-                2 => s.working = count,
-                3 => s.core = count,
-                _ => {}
-            }
-        };
-        if let Ok(mut stmt) = conn.prepare(layer_sql) {
-            if let Some(n) = ns {
-                if let Ok(rows) = stmt.query_map(params![n], |r| Ok((r.get::<_,u8>(0)?, r.get::<_,i64>(1)? as usize))) {
-                    rows.flatten().for_each(|r| apply_layer(r.0, r.1));
+        {
+            let sql = format!("SELECT layer, COUNT(*) FROM memories{ns_clause} GROUP BY layer");
+            let mut apply = |rows: rusqlite::Rows| {
+                for pair in rows.mapped(|r| Ok((r.get::<_,u8>(0)?, r.get::<_,i64>(1)? as usize))).flatten() {
+                    s.total += pair.1;
+                    match pair.0 { 1 => s.buffer = pair.1, 2 => s.working = pair.1, 3 => s.core = pair.1, _ => {} }
                 }
-            } else if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_,u8>(0)?, r.get::<_,i64>(1)? as usize))) {
-                rows.flatten().for_each(|r| apply_layer(r.0, r.1));
+            };
+            if let Ok(mut stmt) = conn.prepare(&sql) {
+                if let Some(n) = ns {
+                    if let Ok(rows) = stmt.query(params![n]) { apply(rows); }
+                } else if let Ok(rows) = stmt.query([]) { apply(rows); }
             }
         }
 
         // Kind counts
-        if let Ok(mut stmt) = conn.prepare(kind_sql) {
-            let mut apply_kind = |kind: String, count: usize| {
-                match kind.as_str() {
-                    "semantic" => s.by_kind.semantic = count,
-                    "episodic" => s.by_kind.episodic = count,
-                    "procedural" => s.by_kind.procedural = count,
-                    _ => {}
+        {
+            let sql = format!("SELECT kind, COUNT(*) FROM memories{ns_clause} GROUP BY kind");
+            let mut apply = |rows: rusqlite::Rows| {
+                for pair in rows.mapped(|r| Ok((r.get::<_,String>(0)?, r.get::<_,i64>(1)? as usize))).flatten() {
+                    match pair.0.as_str() {
+                        "semantic" => s.by_kind.semantic = pair.1,
+                        "episodic" => s.by_kind.episodic = pair.1,
+                        "procedural" => s.by_kind.procedural = pair.1,
+                        _ => {}
+                    }
                 }
             };
-            if let Some(n) = ns {
-                if let Ok(rows) = stmt.query_map(params![n], |r| Ok((r.get::<_,String>(0)?, r.get::<_,i64>(1)? as usize))) {
-                    rows.flatten().for_each(|r| apply_kind(r.0, r.1));
-                }
-            } else if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,i64>(1)? as usize))) {
-                rows.flatten().for_each(|r| apply_kind(r.0, r.1));
+            if let Ok(mut stmt) = conn.prepare(&sql) {
+                if let Some(n) = ns {
+                    if let Ok(rows) = stmt.query(params![n]) { apply(rows); }
+                } else if let Ok(rows) = stmt.query([]) { apply(rows); }
             }
         }
 

@@ -126,7 +126,7 @@ pub(super) async fn proxy_window(
                 let arr: Vec<serde_json::Value> = turns.into_iter().map(|(content, ts)| {
                     serde_json::json!({
                         "chars": content.len(),
-                        "preview": content.chars().take(200).collect::<String>(),
+                        "preview": crate::util::truncate_chars(&content, 200),
                         "created_at": ts
                     })
                 }).collect();
