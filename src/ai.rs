@@ -262,17 +262,23 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
 }
 
 const EXPAND_PROMPT: &str = "Given a search query for a PERSONAL knowledge base (notes, decisions, logs), \
-    generate 3-5 alternative search phrases that would help find relevant stored notes. \
+    generate 4-6 alternative search phrases that would help find relevant stored notes. \
     Bridge abstraction levels: abstract→concrete, concrete→abstract. \
-    Example: 可观测性 → 日志系统 Loki Grafana 监控告警. \
-    Example: alice是谁 → alice的身份 alice的角色 我和alice的关系. \
-    Example: security lessons → security lesson 安全相关的错误. \
+    \
+    CRITICAL: The knowledge base contains BOTH Chinese and English notes. \
+    You MUST include expansions in BOTH languages regardless of query language. \
+    \
+    Examples: \
+    who am I → my identity, my identity and role, who am I, my name and positioning, identity bootstrap. \
+    security lessons → security lesson, security mistakes and lessons, security discipline. \
+    部署 → deploy procedure, 部署流程和步骤, deployment workflow, systemd 部署. \
+    task delegation workflow → task specifications, task delegation workflow, subagent best practices. \
+    GitHub配置 → GitHub SSH setup, GitHub 仓库和账号, repo migration. \
+    \
     Focus on rephrasing the INTENT, not listing random related technologies. \
     If the query asks about a tool/library choice, rephrase as: why/decision/migration/选择/替换. \
     NEVER output explanations, commentary, or bullet points with dashes. \
-    Even for very short queries, always produce search phrases. \
-    The knowledge base contains notes in BOTH Chinese and English. \
-    Always include expansions in both languages to maximize recall coverage.";
+    Even for very short queries (1-2 words), always produce at least 4 phrases.";
 
 /// Generate alternative query phrasings for better recall coverage.
 pub async fn expand_query(cfg: &AiConfig, query: &str) -> Vec<String> {

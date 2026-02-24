@@ -334,7 +334,7 @@ pub fn recall(
             }
             // FTS-only hits: keyword match without semantic confirmation.
             // Without semantic backing, cap low — keyword alone is unreliable.
-            let capped = if short_cjk { fts_rel * 0.5 } else { fts_rel * 0.3 };
+            let capped = if short_cjk { fts_rel * 0.4 } else { fts_rel * 0.25 };
             seen.insert(id.clone());
             scored.push(score_memory(&mem, capped));
         }
@@ -630,7 +630,7 @@ pub async fn quick_semantic_dup_threshold(
 ) -> Result<Option<String>, EngramError> {
     let embeddings = ai::get_embeddings(ai_cfg, &[content.to_string()]).await?;
     let emb = embeddings.first().ok_or_else(|| EngramError::AiBackend("no embedding returned".into()))?;
-    let candidates = db.search_semantic(emb, 5);
+    let candidates = db.search_semantic(emb, 10);
     for (id, score) in &candidates {
         if *score > threshold {
             return Ok(Some(id.clone()));

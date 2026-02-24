@@ -138,11 +138,21 @@ pub async fn consolidate(
                             let id2 = id.clone();
                             let _ = tokio::task::spawn_blocking(move || {
                                 if let Ok(Some(mem)) = db2.get(&id2) {
-                                    let mut tags = mem.tags.clone();
-                                    if !tags.iter().any(|t| t == "gate-rejected") {
-                                        tags.push("gate-rejected".into());
-                                        let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
-                                    }
+                                    let mut tags: Vec<String> = mem.tags.iter()
+                                        .filter(|t| !t.starts_with("gate-rejected"))
+                                        .cloned().collect();
+                                    // Escalate: no tag → gate-rejected → gate-rejected-2 → gate-rejected-final
+                                    let had_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
+                                    let had_1 = mem.tags.iter().any(|t| t == "gate-rejected");
+                                    let new_tag = if had_2 {
+                                        "gate-rejected-final"
+                                    } else if had_1 {
+                                        "gate-rejected-2"
+                                    } else {
+                                        "gate-rejected"
+                                    };
+                                    tags.push(new_tag.into());
+                                    let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
                                 }
                             }).await;
                             info!(id = %id, content = %truncate_chars(content, 50), "gate rejected promotion to Core");
@@ -269,19 +279,38 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     // Reinforcement score = access_count + repetition_count * 2.5
     // Repetition weighs 2.5x because restating > incidental recall hit.
     // Session notes and ephemeral tags are always blocked.
-    // gate-rejected memories get a retry after 24 hours — AI iterates fast,
-    // and a rejection from an older prompt shouldn't be permanent.
-    let gate_retry_ms: i64 = 24 * 3600 * 1000; // 24 hours
+    // gate-rejected memories get escalating retry cooldowns:
+    //   1st rejection (gate-rejected): retry after 24h
+    //   2nd rejection (gate-rejected-2): retry after 72h
+    //   3rd rejection (gate-rejected-final): never retry, accept verdict
+    let gate_retry_ms: i64 = 24 * 3600 * 1000;
+    let gate_retry_2_ms: i64 = 72 * 3600 * 1000;
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list_by_layer_meta(Working) failed"); vec![] }) {
         if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral" || t == "auto-distilled" || t == "distilled") {
             continue;
         }
-        // gate-rejected: skip unless cooldown expired
-        if mem.tags.iter().any(|t| t == "gate-rejected") {
+        // Final rejection — never retry
+        if mem.tags.iter().any(|t| t == "gate-rejected-final") {
+            continue;
+        }
+        // Second rejection — longer cooldown
+        let is_rejected_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
+        let is_rejected_1 = mem.tags.iter().any(|t| t == "gate-rejected");
+        if is_rejected_2 {
+            if now - mem.last_accessed < gate_retry_2_ms {
+                continue;
+            }
+            // 72h cooldown expired — remove tag for final attempt
+            let cleaned: Vec<String> = mem.tags.iter()
+                .filter(|t| t.as_str() != "gate-rejected-2")
+                .cloned().collect();
+            let _ = db.update_fields(&mem.id, None, None, None, Some(&cleaned));
+            info!(id = %mem.id, "gate-rejected-2 cooldown expired, final retry");
+        } else if is_rejected_1 {
             if now - mem.last_accessed < gate_retry_ms {
                 continue;
             }
-            // Cooldown expired — remove tag and let it re-evaluate
+            // 24h cooldown expired — remove tag and let it re-evaluate
             let cleaned: Vec<String> = mem.tags.iter()
                 .filter(|t| t.as_str() != "gate-rejected")
                 .cloned().collect();
@@ -354,13 +383,14 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         }
     }
 
-    // Working gate-rejected TTL: memories that were rejected by the Core
-    // promotion gate should eventually expire if they're not being actively
-    // recalled. 7-day TTL since last access (not creation — gives them a
-    // chance to prove value through recall hits).
+    // Working gate-rejected TTL: memories that received final rejection
+    // (gate-rejected-final) or were rejected and idle expire after 7 days.
+    // gate-rejected / gate-rejected-2 still have retry chances, so only
+    // expire them if not accessed recently.
     let gate_rejected_ttl = 7 * 86_400 * 1000; // 7 days in ms
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list working for gate-rejected TTL failed"); vec![] }) {
-        if !mem.tags.iter().any(|t| t == "gate-rejected") { continue; }
+        let is_any_rejected = mem.tags.iter().any(|t| t.starts_with("gate-rejected"));
+        if !is_any_rejected { continue; }
         if promoted_ids.contains(&mem.id) || mem.kind == "procedural" { continue; }
         if mem.tags.iter().any(|t| t == "lesson") { continue; }
         let since_access = now - mem.last_accessed;
@@ -430,9 +460,12 @@ const GATE_SYSTEM: &str = "You are a memory curator for an AI agent's long-term 
     - Relational: important facts about people, relationships\n\
     - Constraints: financial limits, payment rules, security policies, behavioral boundaries\n\
     - Architectural: fundamental design decisions that shape the project\n\
+    - High-utility operational knowledge: if the context note says this memory has been recalled many times (15+), \
+    it has proven its practical value regardless of category. Favor APPROVE for heavily-used memories \
+    — the agent's actual behavior is a stronger signal than content classification.\n\
     \n\
     REJECT (keep in Working) if it is:\n\
-    - Operational: bug fixes, code changes, version bumps, deployment logs\n\
+    - Operational: bug fixes, code changes, version bumps, deployment logs (UNLESS heavily recalled)\n\
     - Ephemeral: session summaries, daily progress, temporary status\n\
     - Temporal snapshot: contains specific numbers, version strings, counts, percentages, or describes 'current state' \
     — these go stale and don't belong in permanent memory\n\

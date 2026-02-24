@@ -533,6 +533,15 @@ async fn extract_from_context(state: AppState, context: &str) {
             continue;
         }
 
+        // Post-extraction quality gate: skip low-importance fragments.
+        // LLM assigns importance 0.4-0.6 for "minor preferences, background info"
+        // — these are rarely worth persisting through proxy extraction.
+        if entry.importance.unwrap_or(0.5) < 0.5 {
+            debug!("proxy: importance filter skip ({:.2}): {}",
+                entry.importance.unwrap_or(0.0), truncate_chars(&entry.content, 60));
+            continue;
+        }
+
         // intra-batch dedup: skip if too similar to something we already stored this round
         if batch_contents.iter().any(|prev| {
             crate::db::jaccard_similar(prev, &entry.content, 0.5)
