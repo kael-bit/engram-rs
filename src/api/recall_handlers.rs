@@ -275,7 +275,7 @@ pub(super) async fn do_resume(
         buffer.truncate(50);
 
         // Dedup: recent shouldn't repeat what's already in layer sections
-        let seen: std::collections::HashSet<String> = core.iter()
+        let layer_ids: std::collections::HashSet<String> = core.iter()
             .chain(working.iter())
             .chain(buffer.iter())
             .map(|m| m.id.clone())
@@ -285,11 +285,11 @@ pub(super) async fn do_resume(
             .list_since_filtered(since_ms, 100, ns_filter.as_deref(), None, None, None)
             .unwrap_or_default();
 
-        // Recent activity: dedup against layer sections so we don't repeat
-        // Recent, sessions, next-actions: all deduped against layer sections.
-        // If a session note is already in Working, don't repeat it.
+        // Recent captures recently-modified Working/Core that didn't make it
+        // into the layer sections (e.g. low-importance Working that was just
+        // updated). Dedup against layer sections to avoid repeats.
         let recent: Vec<db::Memory> = all_recent.iter()
-            .filter(|m| !is_session(m) && !seen.contains(&m.id))
+            .filter(|m| !is_session(m) && !layer_ids.contains(&m.id))
             .take(20)
             .cloned()
             .collect();
@@ -297,7 +297,7 @@ pub(super) async fn do_resume(
         let mut next_actions = Vec::new();
         let mut sessions = Vec::new();
         for m in all_recent.into_iter().filter(|m| is_session(m)) {
-            if seen.contains(&m.id) { continue; }
+            if layer_ids.contains(&m.id) { continue; }
             if m.tags.iter().any(|t| t == "next-action") {
                 next_actions.push(m);
             } else {
