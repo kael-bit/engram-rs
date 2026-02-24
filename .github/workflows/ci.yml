@@ -25,6 +25,14 @@ jobs:
       - name: Tests
         run: cargo test
 
+      - name: Integration tests
+        run: |
+          ENGRAM_API_KEY=ci-test-key ENGRAM_DB=/tmp/ci-test.db ./target/release/engram &
+          sleep 2
+          ENGRAM_API_KEY=ci-test-key bash tests/integration.sh
+          kill %1 || true
+          rm -f /tmp/ci-test.db
+
       - name: Clippy
         run: cargo clippy -- -D warnings
 
