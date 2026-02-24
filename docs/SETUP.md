@@ -96,7 +96,7 @@ Or create `.mcp.json` in the project root:
 
 Then add to the project's `CLAUDE.md`:
 
-```markdown
+````markdown
 ## Memory
 
 You have persistent memory via engram MCP tools.
@@ -126,7 +126,7 @@ Call `engram_resume` with hours=6 to restore context. Read the core and working 
 ### Before session ends
 Store a summary: what you did + what was decided + what to do next.
 Tag as "session". Without the "next" part, you'll wake up lost.
-```
+````
 
 **Done.** The agent now has persistent memory via MCP tool calls.
 
@@ -136,7 +136,7 @@ Tag as "session". Without the "next" part, you'll wake up lost.
 
 No build step needed. Add to the project's `CLAUDE.md`:
 
-```markdown
+````markdown
 ## Memory
 
 You have persistent memory via engram at http://localhost:3917
@@ -187,7 +187,7 @@ curl -sf -H "Authorization: Bearer YOUR_API_KEY" http://localhost:3917/triggers/
 
 ### End of session
 Store what you did + what to do next. Tag as "session".
-```
+````
 
 **Done.** The agent uses curl to talk to engram directly.
 
@@ -197,7 +197,7 @@ Store what you did + what to do next. Tag as "session".
 
 Add to `AGENTS.md` in the workspace:
 
-```markdown
+````markdown
 ## Memory
 
 engram is your memory. Without it, every session starts from zero.
@@ -254,7 +254,7 @@ curl -X POST http://localhost:3917/memories \
 ```
 
 Without the "next" part, you'll wake up not knowing what to do.
-```
+````
 
 **Done.** OpenClaw agents use curl with heartbeat-driven memory cycles.
 
