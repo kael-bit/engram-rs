@@ -256,8 +256,7 @@ server.tool(
     if (promote_min_importance !== undefined) body.promote_min_importance = promote_min_importance;
     if (decay_drop_threshold !== undefined) body.decay_drop_threshold = decay_drop_threshold;
 
-    const hasBody = Object.keys(body).length > 0;
-    const result = await engramFetch("/consolidate", hasBody ? body : undefined);
+    const result = await engramFetch("/consolidate", body);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
