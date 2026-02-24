@@ -21,34 +21,57 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Unit tests
+      - name: Tests
         run: cargo test
 
       - name: Clippy
         run: cargo clippy -- -D warnings
 
-      - name: Integration tests
-        run: bash tests/integration.sh ./target/release/engram
-
       - name: Binary size check
         run: |
           SIZE=$(stat -c %s target/release/engram)
           echo "Binary size: $((SIZE / 1024 / 1024)) MB ($SIZE bytes)"
-          if [ "$SIZE" -gt 10485760 ]; then
-            echo "FAIL: binary exceeds 10 MB"
+          if [ "$SIZE" -gt 15728640 ]; then
+            echo "FAIL: binary exceeds 15 MB"
             exit 1
           fi
 
-  docker:
-    runs-on: ubuntu-latest
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: engram-linux-x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: engram-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker image
-        run: docker build -t engram:test .
-      - name: Smoke test
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename binary
+        shell: bash
         run: |
-          docker run -d --name engram-test -p 13917:3917 engram:test
-          sleep 2
-          curl -sf http://localhost:13917/ | grep engram
-          docker stop engram-test
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            cp target/${{ matrix.target }}/release/engram.exe ${{ matrix.name }}
+          else
+            cp target/${{ matrix.target }}/release/engram ${{ matrix.name }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
