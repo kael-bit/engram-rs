@@ -1335,6 +1335,24 @@ mod tests {
     }
 
     #[test]
+    fn update_kind_changes_field() {
+        let db = test_db();
+        let mem = db.insert(MemoryInput {
+            content: "kind test".into(),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(mem.kind, "semantic");
+
+        db.update_kind(&mem.id, "procedural").unwrap();
+        let got = db.get(&mem.id).unwrap().unwrap();
+        assert_eq!(got.kind, "procedural");
+
+        db.update_kind(&mem.id, "episodic").unwrap();
+        let got = db.get(&mem.id).unwrap().unwrap();
+        assert_eq!(got.kind, "episodic");
+    }
+
+    #[test]
     fn dedup_merges_similar() {
         let db = test_db();
         let original = db

@@ -639,6 +639,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patch_memory_kind() {
+        let app = router(test_state(None));
+        let body = serde_json::json!({"content": "kind patch test"});
+        let resp = app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+        let created = body_json(resp).await;
+        let id = created["id"].as_str().unwrap();
+        // "semantic" is default and skipped in serialization
+        assert!(created.get("kind").is_none() || created["kind"] == "semantic");
+
+        let patch = serde_json::json!({"kind": "procedural"});
+        let resp = app.clone().oneshot(json_req("PATCH", &format!("/memories/{id}"), patch)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let updated = body_json(resp).await;
+        assert_eq!(updated["kind"], "procedural");
+    }
+
+    #[tokio::test]
     async fn export_import_roundtrip() {
         let app = router(test_state(None));
         // create
