@@ -1066,20 +1066,25 @@ let llmRefreshTimer=null;
 const COMP_DESC={
   gate:'Working→Core promotion decisions',
   audit:'Memory quality review (merge/demote/delete)',
+  sandbox_audit:'Audit dry-run with safety grading',
   reconcile:'Detects same-topic memories, decides update vs keep both',
   merge:'Merges near-duplicate memories into one',
   rerank:'Re-ranks recall results by relevance',
   expand:'Expands search queries for better recall',
-  triage:'Sorts new memories into layers',
+  query_expand:'Expands search queries for better recall',
+  triage:'Evaluates buffer memories for promotion',
   proxy_extract:'Extracts memories from proxy conversations',
   core_summary:'Generates Core memory summaries for resume',
   embed:'Embedding operation',
   embed_batch:'Batch embedding operation',
   embed_sync:'Sync embedding operation',
-  recall_embed:'Recall embedding operation',
-  merge_embed:'Merge embedding operation',
+  recall_embed:'Recall query embedding',
+  merge_embed:'Merge result embedding',
+  dedup_embed:'Dedup check embedding',
   insert_merge:'Dedup check on insert',
   distill:'Distills session notes into project context',
+  facts_extract:'Extracts facts from memories',
+  extract:'Extracts memories from text',
 };
 
 function fmtTokens(n){

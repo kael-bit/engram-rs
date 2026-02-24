@@ -109,7 +109,7 @@ pub(super) async fn triage_buffer(
         });
 
         let result: TriageResult = match ai::llm_tool_call(
-            cfg, "gate", TRIAGE_SYSTEM, &user_msg,
+            cfg, "merge", TRIAGE_SYSTEM, &user_msg,
             "triage_decisions", "Decide which memories to promote or keep",
             schema,
         ).await {
