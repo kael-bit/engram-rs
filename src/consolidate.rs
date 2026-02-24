@@ -256,6 +256,10 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     let buffer_threshold = promote_threshold.max(5) as f64;
     let lesson_cooldown_ms: i64 = 2 * 3600 * 1000; // 2 hours
     for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0) {
+        // Distilled sessions already have their content in the project-status
+        // summary — promoting them individually would be redundant.
+        if mem.tags.iter().any(|t| t == "distilled") { continue; }
+
         let score = mem.access_count as f64 + mem.repetition_count as f64 * 2.5;
         let is_lesson = mem.tags.iter().any(|t| t == "lesson");
         let is_procedural = mem.kind == "procedural";
