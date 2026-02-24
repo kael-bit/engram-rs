@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.8.0
+
+### Highlights
+
+- **HNSW vector index**: Replaced brute-force cosine search with hierarchical navigable small world graph. Faster recall at scale.
+- **Semantic dedup on insert**: Same-concept memories now reinforce (access_count bump) or LLM-merge when they carry different details. No more silent duplicates.
+- **Resume v2**: Centroid-based relevance filtering for Core memories, proportional truncation across sections, configurable budget (default 16K chars). Core memories compete by relevance — no exemptions.
+- **LLM usage tracking**: Full per-component, per-model call logging with web panel visualization and `DELETE /llm-usage` to clear stats.
+- **Separate model routing**: `ENGRAM_AUDIT_MODEL` independent from gate, with fallback chain (audit → gate → LLM_MODEL). Three-tier model guide in docs.
+- **Reconcile performance fix**: Downgraded from Sonnet to 4o-mini, added fingerprint-based skip and keep_both decision cache. Eliminated O(n²) repeated LLM calls.
+
+### Features
+
+- Semantic dedup on manual insert — same concept reinforces or LLM-merges
+- Repetition signal flows through triage and gate decisions
+- LLM-compressed Core summary for budget-constrained resume
+- Audit sandbox with safety grading (`/audit` and `/audit/sandbox`)
+- Audit auto-apply via sandbox: Good+Marginal ops applied, Bad skipped
+- `modified_at` field on all memories
+- Bilingual query expansion + semantic-gated FTS
+- Multi-hop fact queries (knowledge graph)
+- Recall pagination (`offset` parameter)
+- Web panel: LLM usage stats page, sidebar reorganization, component descriptions
+- `DELETE /llm-usage` endpoint to clear usage stats
+- `ENGRAM_AUDIT_MODEL` env var with gate fallback
+- `get_meta_prefix()` for batch meta key queries
+- Message watermark extraction replaces strip_boilerplate
+
+### Fixes
+
+- Reconcile model downgrade (gate→merge) + fingerprint skip + keep_both cache
+- Resume no longer touches memories — only real recall increments access
+- Gate prompt rejects operational logs, plans/TODOs, system docs
+- Total count respects tag/kind/layer filters in `/memories`
+- CJK char boundary panic in core summary truncation
+- FTS5 syntax error on uppercase NOT/AND/OR
+- Rerank score monotonicity
+- Proxy always forwards upstream key, strips caller auth
+- All DB calls wrapped in `spawn_blocking` (async safety)
+- Security + correctness fixes from code audit (7 items)
+- Proper error handling with `EngramError` throughout
+- `json_each()` replaces LIKE for tag filtering
+
+### Performance
+
+- f64→f32 embeddings, parking_lot mutex, SQLite busy handler
+- LRU crate replaces hand-rolled cache
+- Deploy profile for 4x faster incremental builds
+
+### Refactoring
+
+- Split `consolidate.rs` into module directory
+- Split remaining inline tests to separate files
+- Integration tests rewritten with clean test data
+- Removed injection detection (safety theater)
+- Removed strip_boilerplate, replaced with watermark extraction
+- Auth made optional — local deployments need no API key
+
+### Documentation
+
+- Model routing guide (judgment / light judgment / text processing)
+- Post-compaction resume guidance in README, SETUP.md, all agent templates
+- Recall instructions strengthened — mandatory before non-trivial tasks
+- Auth made opt-in across all docs
+
 ## 0.7.0
 
 ### Highlights
