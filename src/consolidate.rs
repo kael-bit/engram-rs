@@ -1567,4 +1567,48 @@ mod tests {
         assert!(!candidate_ids.contains(&"gate-rej"), "gate-rejected must not be a promotion candidate");
         assert!(candidate_ids.contains(&"eligible"), "eligible should be a promotion candidate");
     }
+
+    #[test]
+    fn gate_result_parses_kind() {
+        // Simulate the parsing logic from llm_promotion_gate
+        let parse = |response: &str| -> GateResult {
+            let decision = response.trim().to_uppercase();
+            if decision.starts_with("APPROVE") {
+                let kind = if decision.contains("PROCEDURAL") {
+                    Some("procedural".into())
+                } else if decision.contains("EPISODIC") {
+                    Some("episodic".into())
+                } else {
+                    Some("semantic".into())
+                };
+                GateResult { approved: true, kind }
+            } else {
+                GateResult { approved: false, kind: None }
+            }
+        };
+
+        let r = parse("APPROVE semantic");
+        assert!(r.approved);
+        assert_eq!(r.kind.as_deref(), Some("semantic"));
+
+        let r = parse("APPROVE procedural");
+        assert!(r.approved);
+        assert_eq!(r.kind.as_deref(), Some("procedural"));
+
+        let r = parse("APPROVE EPISODIC");
+        assert!(r.approved);
+        assert_eq!(r.kind.as_deref(), Some("episodic"));
+
+        let r = parse("approve");  // no kind specified → defaults semantic
+        assert!(r.approved);
+        assert_eq!(r.kind.as_deref(), Some("semantic"));
+
+        let r = parse("REJECT");
+        assert!(!r.approved);
+        assert!(r.kind.is_none());
+
+        let r = parse("REJECT - operational detail");
+        assert!(!r.approved);
+        assert!(r.kind.is_none());
+    }
 }
