@@ -345,48 +345,47 @@ pub(super) async fn do_resume(
                     .map(|(id, emb)| (id.as_str(), emb))
                     .collect();
 
-                // Identity and hard constraints are always included — agent
-                // needs to know who it is and what it can't do.
-                // Everything else (including lessons) gets relevance-filtered
-                // with lessons getting a lower threshold.
-                let is_identity = |m: &db::Memory| -> bool {
-                    m.tags.iter().any(|t| matches!(t.as_str(), "identity" | "constraint" | "bootstrap"))
-                };
-                let is_lesson_or_proc = |m: &db::Memory| -> bool {
-                    m.kind == "procedural"
-                        || m.tags.iter().any(|t| matches!(t.as_str(),
-                            "lesson" | "procedural" | "preference"))
+                // No exemptions — every Core memory competes for slots via
+                // cosine relevance to current context. Identity/lesson get
+                // boosts but still must be somewhat relevant. Hard cap at 20
+                // ensures resume stays manageable even at 600+ Core.
+                let identity_boost = |m: &db::Memory| -> f64 {
+                    if m.tags.iter().any(|t| matches!(t.as_str(), "identity" | "constraint" | "bootstrap")) {
+                        0.25
+                    } else if m.kind == "procedural" || m.tags.iter().any(|t| matches!(t.as_str(), "lesson" | "procedural" | "preference")) {
+                        0.10
+                    } else {
+                        0.0
+                    }
                 };
 
                 let mut scored: Vec<(db::Memory, f64)> = core.into_iter().map(|m| {
-                    if is_identity(&m) {
-                        (m, 1.0)
-                    } else {
-                        let sim = core_embed_map.get(m.id.as_str())
-                            .map(|emb| ai::cosine_similarity(&centroid, emb))
-                            .unwrap_or(0.5);
-                        let boosted = if is_lesson_or_proc(&m) { sim + 0.15 } else { sim };
-                        debug!(id = %&m.id[..8], sim = format!("{sim:.3}"),
-                            boosted = format!("{boosted:.3}"),
-                            content = %crate::util::truncate_chars(&m.content, 40),
-                            "core relevance");
-                        (m, boosted)
-                    }
+                    let raw = core_embed_map.get(m.id.as_str())
+                        .map(|emb| ai::cosine_similarity(&centroid, emb))
+                        .unwrap_or(0.4);
+                    let boosted = raw + identity_boost(&m);
+                    debug!(id = %crate::util::short_id(&m.id), raw = format!("{raw:.3}"),
+                        score = format!("{boosted:.3}"),
+                        content = %crate::util::truncate_chars(&m.content, 40),
+                        "core relevance");
+                    (m, boosted)
                 }).collect();
 
                 scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                let max_core = 20;
                 let threshold = 0.35;
-                let total_core = scored.len();
-                let filtered: Vec<db::Memory> = scored.into_iter()
-                    .filter(|(_, score)| *score >= threshold)
+                let total = scored.len();
+                let kept: Vec<db::Memory> = scored.into_iter()
+                    .filter(|(_, s)| *s >= threshold)
+                    .take(max_core)
                     .map(|(m, _)| m)
                     .collect();
-                if filtered.len() < total_core {
-                    debug!(total = total_core, kept = filtered.len(),
-                        dropped = total_core - filtered.len(),
-                        threshold, "core relevance filtering");
+                if kept.len() < total {
+                    debug!(total, kept = kept.len(),
+                        dropped = total - kept.len(),
+                        threshold, max_core, "core relevance filtering");
                 }
-                filtered
+                kept
             }
         };
 
