@@ -5,6 +5,12 @@ use std::collections::HashSet;
 
 use super::*;
 
+/// Sort scored results by similarity descending, then truncate to limit.
+fn top_k(scored: &mut Vec<(String, f64)>, limit: usize) {
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(limit);
+}
+
 /// In-memory vector entry: embedding + namespace for filtering without DB lookup.
 #[derive(Clone)]
 pub(crate) struct VecEntry {
@@ -116,8 +122,7 @@ impl MemoryDB {
                     .filter(|(_, sim)| *sim > 0.0)
                     .collect();
 
-                scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                scored.truncate(limit);
+                top_k(&mut scored, limit);
                 return scored;
             }
         }
@@ -133,8 +138,7 @@ impl MemoryDB {
             })
             .filter(|(_, sim)| *sim > 0.0)
             .collect();
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(limit);
+        top_k(&mut scored, limit);
         scored
     }
 
@@ -155,8 +159,7 @@ impl MemoryDB {
                 })
                 .filter(|(_, sim)| *sim > 0.0)
                 .collect();
-            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            scored.truncate(limit);
+            top_k(&mut scored, limit);
             return scored;
         }
         vec![]

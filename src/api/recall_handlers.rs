@@ -303,29 +303,34 @@ pub(super) async fn do_resume(
     // Default 8000 chars (~2K tokens). 0 = unlimited.
     let budget_val = q.budget.unwrap_or(8000);
     let mut budget_left = if budget_val == 0 { usize::MAX } else { budget_val };
-    let mut take_within_budget = |mems: &[db::Memory]| -> Vec<db::Memory> {
-        if budget_left == 0 { return vec![]; }
+
+    let take_budget = |mems: &[db::Memory], budget: &mut usize, compact: bool| -> Vec<db::Memory> {
+        if *budget == 0 { return vec![]; }
         let mut taken = Vec::new();
         for m in mems {
             let cost = if compact {
                 m.content.len() + m.tags.iter().map(|t| t.len() + 3).sum::<usize>() + 20
             } else {
-                m.content.len() + 250 // ~250 chars metadata overhead per memory
+                m.content.len() + 250
             };
-            if cost > budget_left && !taken.is_empty() { break; }
-            budget_left = budget_left.saturating_sub(cost);
+            if cost > *budget && !taken.is_empty() { break; }
+            *budget = budget.saturating_sub(cost);
             taken.push(m.clone());
         }
         taken
     };
 
-    // Priority order: core → working → next_actions → sessions → recent → buffer
-    let core_out = take_within_budget(&core);
-    let working_out = take_within_budget(&working);
-    let next_out = take_within_budget(&next_actions);
-    let sessions_out = take_within_budget(&sessions);
-    let recent_out = take_within_budget(&recent);
-    let buffer_out = take_within_budget(&buffer);
+    // Core gets at most 60% of budget to leave room for working context.
+    let core_cap = if budget_val == 0 { usize::MAX } else { budget_val * 60 / 100 };
+    let mut core_budget = budget_left.min(core_cap);
+    let core_out = take_budget(&core, &mut core_budget, compact);
+    budget_left = budget_left.saturating_sub(budget_left.min(core_cap) - core_budget);
+
+    let working_out = take_budget(&working, &mut budget_left, compact);
+    let next_out = take_budget(&next_actions, &mut budget_left, compact);
+    let sessions_out = take_budget(&sessions, &mut budget_left, compact);
+    let recent_out = take_budget(&recent, &mut budget_left, compact);
+    let buffer_out = take_budget(&buffer, &mut budget_left, compact);
 
     // Touch Working/Core memories served by resume — they're actively being used.
     // Skip Buffer to avoid inflating scores for unproven memories.

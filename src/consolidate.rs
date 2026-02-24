@@ -735,7 +735,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
             let merged_len = merged_content.chars().count();
             let merged_content = if merged_len > 600 {
                 warn!("merge output too long ({merged_len}), truncating to 600");
-                merged_content.chars().take(600).collect::<String>()
+                truncate_chars(&merged_content, 600)
             } else {
                 merged_content
             };
@@ -746,7 +746,7 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
                 .sum();
             if total_input_len == 0 || merged_content.chars().count() >= total_input_len {
                 let preview: String = cluster.iter()
-                    .map(|&i| ns_mems[i].0.content.chars().take(40).collect::<String>())
+                    .map(|&i| truncate_chars(&ns_mems[i].0.content, 40))
                     .collect::<Vec<_>>()
                     .join(" | ");
                 warn!("merge produced longer output than inputs ({} >= {}), skipping: {}",
@@ -847,13 +847,13 @@ async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
                     continue;
                 }
                 let loser = &ns_mems[idx].0;
-                absorbed.push(loser.content.chars().take(60).collect::<String>());
+                absorbed.push(truncate_chars(&loser.content, 60));
                 let id = ns_mems[idx].0.id.clone();
                 let db2 = db.clone();
                 let _ = tokio::task::spawn_blocking(move || db2.delete(&id)).await;
             }
 
-            let winner_preview: String = ns_mems[best_idx].0.content.chars().take(60).collect();
+            let winner_preview: String = truncate_chars(&ns_mems[best_idx].0.content, 60);
             info!(
                 winner = %best_id,
                 absorbed = ?absorbed,
@@ -961,7 +961,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &crate::db::MemoryDB) -> Result<
             prompt.push_str(&format!("\n## Working Layer (batch of {})\n", chunk.len()));
             for m in chunk {
                 let tags = m.tags.join(",");
-                let preview: String = m.content.chars().take(200).collect();
+                let preview: String = truncate_chars(&m.content, 200);
                 prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
                     &m.id[..8], m.importance, m.access_count, tags, preview));
             }
@@ -982,14 +982,14 @@ fn format_audit_prompt(core: &[crate::db::Memory], working: &[crate::db::Memory]
     prompt.push_str("## Core Layer\n");
     for m in core {
         let tags = m.tags.join(",");
-        let preview: String = m.content.chars().take(200).collect();
+        let preview: String = truncate_chars(&m.content, 200);
         prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
             &m.id[..8], m.importance, m.access_count, tags, preview));
     }
     prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
     for m in working {
         let tags = m.tags.join(",");
-        let preview: String = m.content.chars().take(200).collect();
+        let preview: String = truncate_chars(&m.content, 200);
         prompt.push_str(&format!("- [{}] (imp={:.1}, acc={}, tags=[{}]) {}\n",
             &m.id[..8], m.importance, m.access_count, tags, preview));
     }
@@ -999,7 +999,7 @@ fn format_audit_prompt(core: &[crate::db::Memory], working: &[crate::db::Memory]
 fn format_layer_summary(name: &str, memories: &[crate::db::Memory]) -> String {
     let mut s = format!("## {} Layer ({} memories, shown for context — do NOT reorganize these)\n", name, memories.len());
     for m in memories {
-        let preview: String = m.content.chars().take(80).collect();
+        let preview: String = truncate_chars(&m.content, 80);
         s.push_str(&format!("- [{}] {}\n", &m.id[..8], preview));
     }
     s
