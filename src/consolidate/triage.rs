@@ -24,7 +24,9 @@ const TRIAGE_SYSTEM: &str = "You are triaging an AI agent's short-term memory bu
     KEEP in buffer if:\n\
     - Session summaries that just list what was done (not lessons)\n\
     - Temporary status, in-progress notes\n\
-    - Information that's only relevant right now\n\n\
+    - Information that's only relevant right now\n\
+    - Test infrastructure details (helper functions, visibility modifiers, mock setup)\n\
+    - Implementation minutiae without broader lessons\n\n\
     Classify the kind for promoted memories:\n\
     - procedural: step-by-step workflows, build/deploy/test processes\n\
     - semantic: everything else (facts, decisions, lessons, preferences)";
