@@ -327,10 +327,12 @@ Environment=ENGRAM_LLM_MODEL=gpt-4o-mini
 # Judgment — Core promotion gate + audit (needs strong model)
 Environment=ENGRAM_GATE_MODEL=claude-sonnet-4-6
 
-# Light judgment — proxy extraction (if using LLM proxy)
-# Environment=ENGRAM_PROXY_MODEL=gemini-3-flash
-# Environment=ENGRAM_PROXY_UPSTREAM=https://api.anthropic.com
+# LLM Proxy (optional — sits between your tools and their LLM API)
+# UPSTREAM = the API your tools normally call (what the proxy forwards to)
+# PROXY_MODEL = model engram uses internally to extract memories from conversations
+# Environment=ENGRAM_PROXY_UPSTREAM=https://api.openai.com/v1
 # Environment=ENGRAM_PROXY_KEY=sk-xxx
+# Environment=ENGRAM_PROXY_MODEL=gpt-4o-mini
 
 Restart=always
 RestartSec=1
