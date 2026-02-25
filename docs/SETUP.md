@@ -371,3 +371,5 @@ Resume and recall automatically include the `default` namespace alongside your p
 To store cross-project knowledge explicitly, override the namespace to `default`:
 - **MCP**: `engram_store(content="...", namespace="default")`
 - **HTTP**: `curl -X POST ... -H "X-Namespace: default" -d '{"content":"..."}'`
+
+Consolidation merge is directional: project memories can be absorbed into `default`, but `default` memories are never pulled into a project namespace.

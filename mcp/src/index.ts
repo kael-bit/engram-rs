@@ -124,7 +124,7 @@ server.tool(
     expand: z.boolean().optional().describe("LLM query expansion (+1-2s). Use for short/vague queries like single words"),
     source: z.string().optional().describe("Filter by source (e.g. session, extract, api)"),
     tags: z.array(z.string()).optional().describe("Filter by tags (must have ALL specified)"),
-    namespace: z.string().optional().describe("Filter by namespace"),
+    namespace: z.string().optional().describe("Filter by namespace (also includes \"default\" namespace automatically)"),
     min_score: z.number().min(0).max(1).optional().describe("Drop results below this score (0-1)"),
     dry: z.boolean().optional().describe("Skip touch/reinforcement on results (for background queries)"),
   },
@@ -161,7 +161,7 @@ server.tool(
     layer: z.number().int().min(1).max(3).optional().describe("Filter by layer"),
     source: z.string().optional().describe("Filter by source (e.g. session)"),
     min_importance: z.number().min(0).max(1).optional().describe("Minimum importance threshold"),
-    namespace: z.string().optional().describe("Filter by namespace"),
+    namespace: z.string().optional().describe("Filter by namespace (also includes \"default\" namespace automatically)"),
   },
   async ({ hours, limit, layer, source, min_importance, namespace }) => {
     const params = new URLSearchParams();
@@ -187,7 +187,7 @@ server.tool(
     "Compact mode (default) minimizes token usage.",
   {
     hours: z.number().positive().optional().describe("Look back N hours for recent/sessions (default 4)"),
-    namespace: z.string().optional().describe("Filter by namespace"),
+    namespace: z.string().optional().describe("Filter by namespace (also includes \"default\" namespace automatically)"),
     workspace: z.string().optional().describe("Comma-separated workspace tags to filter core/working memories (e.g. 'engram,rust')"),
     compact: z.boolean().optional().describe("Compact output: content+tags only (default true)"),
     budget: z.number().optional().describe("Max chars across all sections (default 8000, 0=unlimited)"),
@@ -234,7 +234,7 @@ server.tool(
   {
     q: z.string().describe("Search query"),
     limit: z.number().int().min(1).max(50).optional().describe("Max results (default 10)"),
-    namespace: z.string().optional().describe("Filter by namespace"),
+    namespace: z.string().optional().describe("Filter by namespace (also includes \"default\" namespace automatically)"),
   },
   async ({ q, limit, namespace }) => {
     const params = new URLSearchParams({ q });

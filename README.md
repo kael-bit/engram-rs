@@ -245,6 +245,8 @@ curl -X POST http://localhost:3917/memories \
   -d '{"content": "User prefers concise Chinese replies"}'
 ```
 
+Consolidation merge is directional: project memories can be absorbed into `default`, but `default` memories are never pulled into a project namespace.
+
 ### Triggers
 
 Pre-action safety recall. Tag memories with `trigger:action-name`, then query before risky operations:
