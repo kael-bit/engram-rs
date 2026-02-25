@@ -23,7 +23,13 @@ pub struct VecEntry {
 const HNSW_MAX_NB_CONN: usize = 16;
 const HNSW_EF_CONSTRUCTION: usize = 200;
 const HNSW_MAX_LAYER: usize = 16;
-const HNSW_EF_SEARCH: usize = 64;
+fn hnsw_ef_search() -> usize {
+    static VAL: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+        std::env::var("ENGRAM_HNSW_EF_SEARCH")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(64)
+    });
+    *VAL
+}
 const HNSW_INITIAL_CAPACITY: usize = 10_000;
 /// Over-fetch factor when filtering HNSW results by namespace.
 const NS_OVERFETCH: usize = 5;
@@ -96,7 +102,7 @@ impl VecIndex {
         if self.entries.is_empty() {
             return vec![];
         }
-        let neighbours = self.hnsw.search(query, k, HNSW_EF_SEARCH);
+        let neighbours = self.hnsw.search(query, k, hnsw_ef_search());
         neighbours
             .into_iter()
             .filter_map(|n| {

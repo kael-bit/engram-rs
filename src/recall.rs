@@ -385,6 +385,8 @@ pub fn recall(
         };
 
         if !query_terms.is_empty() {
+            let no_fts_penalty: f64 = std::env::var("ENGRAM_NO_FTS_PENALTY")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(0.85);
             for sm in scored.iter_mut() {
                 // Only penalize semantic-only hits (not boosted by FTS)
                 if fts_ids.contains(&sm.memory.id) {
@@ -394,7 +396,7 @@ pub fn recall(
                 let has_any = query_terms.iter().any(|t| content_lower.contains(t));
                 if !has_any {
                     // No query terms found — likely a false-positive embedding match
-                    sm.relevance *= 0.7;
+                    sm.relevance *= no_fts_penalty;
                     let rescored = score_memory(&sm.memory, sm.relevance);
                     sm.score = rescored.score;
                     sm.recency = rescored.recency;

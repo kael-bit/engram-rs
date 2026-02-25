@@ -104,7 +104,7 @@ async fn main() {
                 };
                 let ai_cfg = bg_state.ai.clone();
                 let r = consolidate::consolidate(
-                    bg_state.db.clone(), req, ai_cfg,
+                    bg_state.db.clone(), req, ai_cfg, false,
                 ).await;
                 if r.promoted > 0 || r.decayed > 0 || r.merged > 0
                     || r.gate_rejected > 0 || r.demoted > 0 || r.reconciled > 0

@@ -47,6 +47,12 @@ pub struct ConsolidateRequest {
     pub merge: Option<bool>,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct DryRunEntry {
+    pub id: String,
+    pub preview: String,
+}
+
 #[derive(Debug, Serialize, Default)]
 pub struct ConsolidateResponse {
     pub promoted: usize,
@@ -85,6 +91,18 @@ pub struct ConsolidateResponse {
     /// Number of session notes distilled into project context.
     #[serde(skip_serializing_if = "is_zero")]
     pub distilled: usize,
+    /// Whether this was a dry-run (no writes).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub dry_run: bool,
+    /// Memories that would be promoted (dry-run only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub would_promote: Vec<DryRunEntry>,
+    /// Memories that would be decayed/dropped (dry-run only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub would_decay: Vec<DryRunEntry>,
+    /// Memories that would be demoted (dry-run only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub would_demote: Vec<DryRunEntry>,
 }
 
 fn is_zero(n: &usize) -> bool { *n == 0 }
@@ -99,7 +117,22 @@ pub async fn consolidate(
     db: SharedDB,
     req: Option<ConsolidateRequest>,
     ai: Option<AiConfig>,
+    dry_run: bool,
 ) -> ConsolidateResponse {
+    // Dry-run: evaluate what consolidate_sync would do, but skip all writes.
+    if dry_run {
+        let db2 = db.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            consolidate_dry_run(&db2, req.as_ref())
+        })
+        .await
+        .unwrap_or_else(|e| {
+            warn!(error = %e, "consolidate_dry_run task panicked");
+            ConsolidateResponse { dry_run: true, ..Default::default() }
+        });
+        return result;
+    }
+
     let do_merge = req.as_ref().and_then(|r| r.merge).unwrap_or(false);
 
     let llm_level = std::env::var("ENGRAM_LLM_LEVEL")
@@ -381,7 +414,9 @@ pub async fn consolidate(
             }
             result.promoted += count;
         } else if let Some(ref cfg) = ai {
-            let (count, ids) = triage_buffer(&db, cfg, min_age, 20, &result.promoted_ids, &llm_level).await;
+            let triage_batch: usize = std::env::var("ENGRAM_TRIAGE_BATCH")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+            let (count, ids) = triage_buffer(&db, cfg, min_age, triage_batch, &result.promoted_ids, &llm_level).await;
             result.triaged = count;
             for id in ids {
                 result.promoted_ids.push(id);
@@ -500,6 +535,155 @@ pub fn fix_stuck_buffer(db: &MemoryDB) {
 
     if fixed > 0 || cleaned > 0 {
         info!(decay_reset = fixed, expired_deleted = cleaned, "buffer maintenance");
+    }
+}
+
+/// Dry-run consolidation: evaluates what would happen without writing anything.
+/// Returns counts and preview lists of memories that would be promoted, decayed, or demoted.
+pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> ConsolidateResponse {
+    let now = crate::db::now_ms();
+
+    let promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
+    let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
+    let decay_threshold = req.and_then(|r| r.decay_drop_threshold).unwrap_or(0.01);
+    let buffer_ttl = req.and_then(|r| r.buffer_ttl_secs).unwrap_or(86400)
+        .saturating_mul(1000);
+    let working_age = req.and_then(|r| r.working_age_promote_secs).unwrap_or(7 * 86400)
+        .saturating_mul(1000);
+
+    let mut would_promote = Vec::new();
+    let mut would_decay = Vec::new();
+    let mut would_demote = Vec::new();
+
+    let buffer_threshold = promote_threshold.max(5) as f64;
+    let lesson_cooldown_ms: i64 = 2 * 3600 * 1000;
+
+    // --- Demote session/ephemeral Core memories ---
+    for mem in db.list_by_layer_meta(Layer::Core, 10000, 0).unwrap_or_default() {
+        if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral") {
+            would_demote.push(DryRunEntry {
+                id: mem.id.clone(),
+                preview: truncate_chars(&mem.content, 100).to_string(),
+            });
+        }
+    }
+
+    // --- Demote auto-extract Working memories ---
+    for m in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_default() {
+        if m.tags.iter().any(|t| t == "auto-extract") {
+            would_demote.push(DryRunEntry {
+                id: m.id.clone(),
+                preview: truncate_chars(&m.content, 100).to_string(),
+            });
+        }
+    }
+
+    // --- Working -> Core promotion candidates ---
+    let mut promoted_ids: HashSet<String> = HashSet::new();
+    for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_default() {
+        if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral" || t == "auto-distilled" || t == "distilled") {
+            continue;
+        }
+        if mem.tags.iter().any(|t| t == "gate-rejected-final") { continue; }
+        let score = reinforcement_score(&mem);
+        let by_score = score >= promote_threshold as f64 && mem.importance >= promote_min_imp;
+        let by_age = (now - mem.created_at) > working_age && score > 0.0 && mem.importance >= promote_min_imp;
+        if by_score || by_age {
+            would_promote.push(DryRunEntry {
+                id: mem.id.clone(),
+                preview: truncate_chars(&mem.content, 100).to_string(),
+            });
+            promoted_ids.insert(mem.id.clone());
+        }
+    }
+
+    // --- Buffer -> Working promotions ---
+    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_default() {
+        if mem.tags.iter().any(|t| t == "distilled") { continue; }
+        let score = reinforcement_score(&mem);
+        let is_lesson = mem.tags.iter().any(|t| t == "lesson");
+        let is_procedural = mem.kind == "procedural";
+        let age = now - mem.created_at;
+        let by_score = score >= buffer_threshold;
+        let by_kind = (is_lesson || is_procedural) && age > lesson_cooldown_ms;
+        if by_score || by_kind {
+            would_promote.push(DryRunEntry {
+                id: mem.id.clone(),
+                preview: truncate_chars(&mem.content, 100).to_string(),
+            });
+            promoted_ids.insert(mem.id.clone());
+        }
+    }
+
+    // --- Buffer TTL drops ---
+    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_default() {
+        let is_lesson = mem.tags.iter().any(|t| t == "lesson");
+        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson { continue; }
+        let age = now - mem.created_at;
+        if age > buffer_ttl {
+            let rescue_score = reinforcement_score(&mem);
+            let worth_keeping = rescue_score >= buffer_threshold / 2.0
+                || mem.importance >= crate::thresholds::BUFFER_RESCUE_IMPORTANCE;
+            if !worth_keeping {
+                would_decay.push(DryRunEntry {
+                    id: mem.id.clone(),
+                    preview: truncate_chars(&mem.content, 100).to_string(),
+                });
+            }
+        }
+    }
+
+    // --- Buffer capacity cap evictions ---
+    let buffer_cap: usize = std::env::var("ENGRAM_BUFFER_CAP")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let buffer_mems: Vec<Memory> = db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_default();
+    if buffer_mems.len() > buffer_cap {
+        let mut evictable: Vec<&Memory> = buffer_mems.iter()
+            .filter(|m| {
+                m.kind != "procedural"
+                    && !m.tags.iter().any(|t| t == "lesson")
+                    && !promoted_ids.contains(&m.id)
+            })
+            .collect();
+        let overflow = buffer_mems.len().saturating_sub(buffer_cap);
+        if overflow > 0 && !evictable.is_empty() {
+            evictable.sort_by(|a, b| {
+                a.importance.partial_cmp(&b.importance).unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.created_at.cmp(&b.created_at))
+            });
+            let to_drop = overflow.min(evictable.len());
+            for mem in &evictable[..to_drop] {
+                would_decay.push(DryRunEntry {
+                    id: mem.id.clone(),
+                    preview: truncate_chars(&mem.content, 100).to_string(),
+                });
+            }
+        }
+    }
+
+    // --- Decayed entries ---
+    for mem in db.get_decayed(decay_threshold).unwrap_or_default() {
+        let is_lesson = mem.tags.iter().any(|t| t == "lesson");
+        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson { continue; }
+        would_decay.push(DryRunEntry {
+            id: mem.id.clone(),
+            preview: truncate_chars(&mem.content, 100).to_string(),
+        });
+    }
+
+    let promoted = would_promote.len();
+    let decayed = would_decay.len();
+    let demoted = would_demote.len();
+
+    ConsolidateResponse {
+        promoted,
+        decayed,
+        demoted,
+        dry_run: true,
+        would_promote,
+        would_decay,
+        would_demote,
+        ..Default::default()
     }
 }
 
@@ -804,8 +988,11 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
             .collect();
         let overflow = buffer_mems.len().saturating_sub(buffer_cap);
         if overflow > 0 && !evictable.is_empty() {
-            // Oldest first (FIFO)
-            evictable.sort_by_key(|m| m.created_at);
+            // Lowest importance first; ties broken by oldest first
+            evictable.sort_by(|a, b| {
+                a.importance.partial_cmp(&b.importance).unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.created_at.cmp(&b.created_at))
+            });
             let to_drop = overflow.min(evictable.len());
             for mem in &evictable[..to_drop] {
                 if db.delete(&mem.id).unwrap_or(false) {
@@ -814,7 +1001,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
                 }
             }
             info!(buffer_size = buffer_mems.len(), cap = buffer_cap,
-                dropped = to_drop, "buffer over cap — evicted oldest");
+                dropped = to_drop, "buffer over cap — evicted lowest importance");
         }
     }
 
@@ -880,6 +1067,10 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
         facts_extracted: 0,
         promotion_candidates,
         distilled: 0,
+        dry_run: false,
+        would_promote: vec![],
+        would_decay: vec![],
+        would_demote: vec![],
     }
 }
 

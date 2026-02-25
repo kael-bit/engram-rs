@@ -10,8 +10,15 @@ use crate::extract::LenientJson;
 use crate::{ai, consolidate, db, AppState};
 use super::{blocking, get_namespace, spawn_embed_batch};
 
+#[derive(Deserialize, Default)]
+pub(super) struct ConsolidateQuery {
+    #[serde(default)]
+    dry_run: bool,
+}
+
 pub(super) async fn do_consolidate(
     State(state): State<AppState>,
+    Query(q): Query<ConsolidateQuery>,
     body: axum::body::Bytes,
 ) -> Result<Json<consolidate::ConsolidateResponse>, EngramError> {
     let parsed: Option<consolidate::ConsolidateRequest> = if body.is_empty() {
@@ -21,7 +28,7 @@ pub(super) async fn do_consolidate(
     };
 
     let result =
-        consolidate::consolidate(state.db.clone(), parsed, state.ai.clone()).await;
+        consolidate::consolidate(state.db.clone(), parsed, state.ai.clone(), q.dry_run).await;
 
     Ok(Json(result))
 }
