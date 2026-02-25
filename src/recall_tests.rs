@@ -90,8 +90,10 @@ fn budget_limits_output() {
         ..Default::default()
     };
     let result = recall(&db, &req, None, None);
-    assert!(result.memories.len() <= 2, "budget should limit results");
-    assert!(result.total_tokens <= 10, "shouldn't overshoot budget by much");
+    assert!(result.memories.len() <= 2, "budget=5 should limit to at most 2 results");
+    // Budget allows one overshoot (the memory that crosses the threshold is included)
+    // but total shouldn't be wildly over budget
+    assert!(result.total_tokens <= 8, "budget=5 shouldn't overshoot to {}", result.total_tokens);
 }
 
 #[test]
@@ -112,7 +114,16 @@ fn budget_zero_means_unlimited() {
         ..Default::default()
     };
     let result = recall(&db, &req, None, None);
+    // budget=0 means unlimited — should return same as no budget
+    let req_no_budget = RecallRequest {
+        query: "rust".into(),
+        limit: Some(10),
+        ..Default::default()
+    };
+    let result_no_budget = recall(&db, &req_no_budget, None, None);
     assert!(!result.memories.is_empty(), "budget=0 should be treated as unlimited");
+    assert_eq!(result.memories.len(), result_no_budget.memories.len(),
+        "budget=0 should return same count as no budget");
 }
 
 #[test]
@@ -274,17 +285,20 @@ fn min_score_filters_low() {
 }
 
 #[test]
-fn empty_query_returns_something() {
+fn empty_query_does_not_panic() {
     let db = test_db_with_data();
     let req = RecallRequest {
         query: "".into(),
         limit: Some(5),
         ..Default::default()
     };
-    // Empty query shouldn't panic — FTS returns nothing, but that's fine
+    // Empty query must not panic; it may return 0 results (no FTS/semantic match)
     let result = recall(&db, &req, None, None);
-    // May or may not find results, but must not crash
-    assert!(result.memories.len() <= 5);
+    assert!(result.memories.len() <= 5, "should respect limit");
+    // Verify result structure is valid even with empty query
+    for sm in &result.memories {
+        assert!(!sm.memory.id.is_empty(), "returned memory must have an id");
+    }
 }
 
 #[test]
@@ -489,8 +503,9 @@ fn dry_recall_skips_touch() {
     let id = &res.memories[0].memory.id;
     let after_normal = db.get(id).unwrap().unwrap();
     // FTS hit with relevance > 0.5 should have touched
-    assert!(after_normal.access_count >= 1 || after_normal.access_count == 0,
-        "touch depends on relevance threshold");
+    // FTS-only recall (no embeddings) may not exceed touch relevance threshold (0.5)
+    // The important assertion is below: dry recall must NOT touch regardless
+    let ac_after_normal = after_normal.access_count;
 
     // Dry recall should NOT touch
     let before = db.get(id).unwrap().unwrap();
