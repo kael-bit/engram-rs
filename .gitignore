@@ -7,9 +7,6 @@
 /mcp/node_modules
 /mcp/dist
 .sync_state
-AUDIT.md
-*-INTERNAL*
 
-literal:# Local
-.local-prompt.md
-.githooks/
+# Local docs
+*-INTERNAL*
