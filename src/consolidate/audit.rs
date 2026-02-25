@@ -11,72 +11,72 @@ use crate::thresholds::{AUDIT_MERGE_MIN_SIM, AUDIT_MERGE_MAX_SIM};
 // Re-exported for sandbox use
 pub(crate) const AUDIT_SYSTEM_PUB: &str = AUDIT_SYSTEM;
 
-const AUDIT_SYSTEM: &str = r#"Review an AI agent's memory layers and propose cleanup operations.
+const AUDIT_SYSTEM: &str = r#"Review an AI agent's memory layers and propose maintenance operations.
 
-Memories are presented in **semantic clusters** grouped by combined similarity (cosine + tag overlap).
-Memories in the same cluster are semantically related — check for redundancy within clusters.
+You have three powers:
+1. **Schedule** (promote/demote): Move memories between layers
+2. **Adjust** (adjust): Change a memory's importance score
+3. **Merge**: Combine duplicate/overlapping memories
+
+You CANNOT delete memories. Deletion happens through natural lifecycle (Buffer TTL expiry).
 
 Metadata per memory:
 - imp = importance (0-1)
-- ac = access count (how many times recalled). ac=0 means never recalled — consider if it's still valuable
-- last_accessed = days since last recall
+- ac = access count (times recalled). ac=0 = never recalled
 - age = days since creation
-- kind = memory type (semantic, procedural, episodic)
-- tags = associated labels
-
-Similarity scores between cluster members show how related two memories are:
-- >0.80 = near-duplicate content, strongly consider merging
-- 0.60-0.80 = related topic, check if they can be consolidated
-- <0.60 = loosely related, probably separate concepts
-
-Full content is shown — judge quality based on actual content, not just tags or metadata.
+- mod = days since last modification
+- tags = labels
+- Layer: Core (3), Working (2), Buffer (1)
 
 ## Layer Principles
 
 **Core** = stable principles, lessons from mistakes, identity constraints. Rarely changes.
-If content references specific code/config versions, it's probably Working, not Core.
-
 **Working** = active project context, current decisions. Becomes stale as projects evolve.
+**Buffer** = temporary intake, expires via TTL.
 
-**Buffer** = temporary intake, expires naturally.
+## Promote — be VERY selective
 
-## Core Promotion — be VERY selective
+Core is permanent. Only promote Working memories proven valuable over time.
 
-Core is permanent. Only promote Working memories that are proven valuable over time.
-
-✅ GOOD promotion (Working → Core):
+✅ GOOD promotion:
 - ac>5, survived multiple sessions, content still matches current architecture
 - Lesson that actually prevented repeating a mistake (not just "I learned X")
-- Hard constraint from the user that applies permanently (e.g. "never do X")
+- Hard constraint from the user that applies permanently
 
-❌ BAD promotion — DO NOT promote:
-- ac=0 and created recently (hours/days ago) → not battle-tested yet, keep in Working
+❌ BAD promotion — DO NOT:
+- ac=0 and recently created → not battle-tested, keep in Working
 - Tagged `auto-extract` → machine-generated, often low quality
-- Content about tools/workflows unrelated to the project being managed → wrong scope
-- Content describes a fix that was later replaced by a different approach → obsolete
-- Generic platitudes ("always do X", "perform Y at SQL layer") without specific context
+- Content unrelated to the project → wrong scope
+- Describes a fix later replaced → obsolete
+- Generic platitudes without specific context
 
 A `LESSON:` prefix or `lesson` tag does NOT automatically qualify for Core.
-Many lessons are situational and become irrelevant as architecture changes.
-Read the actual content and ask: "Is this still true? Has this been tested?"
 
-## What does NOT belong in Core
-- Changelogs listing WHAT was done → demote
-- Implementation details already in code → demote
-- Session logs and progress reports → demote
-- Plans/TODOs that are stale → demote
-- Config snapshots that go stale → demote
-- Memories about systems/features that were removed or replaced → demote
+## Demote
 
-## Judgment Guidelines
+Move memories down one layer when they no longer belong:
+- Implementation details already in code
+- Session logs and progress reports
+- Stale plans/TODOs or config snapshots
+- Content about removed/replaced features
 
-- **Superseded memories:** if a newer memory in the same cluster covers the same knowledge, the older one should be removed or merged.
-- **Obsolete memories:** if content describes a mechanism that no longer exists (e.g. old audit format, removed feature), demote it. High ac on obsolete content just means it WAS popular, not that it's still valid.
-- **ac=0 + old age** = possibly forgotten. Judge if still relevant based on content, not just metrics.
-- NEVER propose demoting a memory to the same layer it is already on. Check the layer metadata. L2→L2 or L3→L3 is a no-op bug.
-- When memories in a cluster overlap heavily, prefer MERGE over DELETE to preserve information.
-- Full content is shown — read it carefully before deciding.
-- **Lifecycle rule:** Core → demote to Working → demote to Buffer → natural expiry. You CANNOT delete memories. Use demote to move them down one layer. Buffer memories expire naturally via TTL.
+## Adjust importance
+
+Lower importance (e.g. 0.3) for memories that are losing relevance but shouldn't move layers yet.
+Raise importance (e.g. 0.9) for memories that are clearly under-valued.
+
+## Merge rules
+
+- When memories overlap heavily, merge to consolidate information
+- Cross-layer merge: the merged result MUST go to the HIGHER layer (Working+Core → Core)
+- Preserve all specific details — never lose information in a merge
+
+## Guidelines
+
+- **Superseded:** newer memory covers same knowledge → merge or demote the older one
+- **Obsolete:** high ac on content about removed features ≠ still valid → demote
+- Same-layer demote/promote is a no-op bug (L2→L2, L3→L3)
+- Read full content before deciding — don't judge by tags alone
 - Propose no operations if nothing needs changing."#;
 
 /// Tool response: a list of audit operations proposed by the LLM.
@@ -95,6 +95,8 @@ pub struct RawAuditOp {
     #[serde(default)]
     pub to: Option<u8>,
     #[serde(default)]
+    pub importance: Option<f64>,
+    #[serde(default)]
     pub ids: Option<Vec<String>>,
     #[serde(default)]
     pub content: Option<String>,
@@ -111,23 +113,27 @@ pub fn audit_tool_schema() -> serde_json::Value {
         "properties": {
             "operations": {
                 "type": "array",
-                "description": "List of cleanup operations. Empty array if nothing needs changing.",
+                "description": "List of maintenance operations. Empty array if nothing needs changing.",
                 "items": {
                     "type": "object",
                     "properties": {
                         "op": {
                             "type": "string",
-                            "enum": ["demote", "merge", "promote"],
+                            "enum": ["promote", "demote", "adjust", "merge"],
                             "description": "Operation type"
                         },
                         "id": {
                             "type": "string",
-                            "description": "8-char short ID of the target memory (for demote/promote)"
+                            "description": "8-char short ID of the target memory (for promote/demote/adjust)"
                         },
                         "to": {
                             "type": "integer",
-                            "enum": [2, 3],
-                            "description": "Target layer: 2=Working, 3=Core (for demote/promote)"
+                            "enum": [1, 2, 3],
+                            "description": "Target layer: 1=Buffer, 2=Working, 3=Core (for promote/demote)"
+                        },
+                        "importance": {
+                            "type": "number",
+                            "description": "New importance value 0.0-1.0 (for adjust op)"
                         },
                         "ids": {
                             "type": "array",
@@ -141,7 +147,7 @@ pub fn audit_tool_schema() -> serde_json::Value {
                         "layer": {
                             "type": "integer",
                             "enum": [2, 3],
-                            "description": "Layer for the merged memory (for merge op)"
+                            "description": "Layer for merged memory — must be the HIGHEST layer among source memories (for merge op)"
                         },
                         "tags": {
                             "type": "array",
@@ -199,6 +205,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
         }).await.unwrap_or_default();
         combined.promoted += applied.promoted;
         combined.demoted += applied.demoted;
+        combined.adjusted += applied.adjusted;
         combined.deleted += applied.deleted;
         combined.merged += applied.merged;
         combined.ops.extend(applied.ops);
@@ -231,6 +238,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
             }).await.unwrap_or_default();
             combined.promoted += applied.promoted;
             combined.demoted += applied.demoted;
+            combined.adjusted += applied.adjusted;
             combined.deleted += applied.deleted;
             combined.merged += applied.merged;
             combined.ops.extend(applied.ops);
@@ -337,8 +345,13 @@ fn apply_audit_ops(db: &MemoryDB, ops: Vec<AuditOp>, result: &mut AuditResult) {
                 }
             }
             AuditOp::Demote { id, to } => {
-                if let Ok(Some(_)) = db.update_fields(id, None, Some(*to), Some(0.5), None) {
+                if let Ok(Some(_)) = db.update_fields(id, None, Some(*to), None, None) {
                     result.demoted += 1;
+                }
+            }
+            AuditOp::Adjust { id, importance } => {
+                if let Ok(Some(_)) = db.update_fields(id, None, None, Some(*importance), None) {
+                    result.adjusted += 1;
                 }
             }
             AuditOp::Delete { id } => {
@@ -371,6 +384,8 @@ pub enum AuditOp {
     Promote { id: String, to: u8 },
     #[serde(rename = "demote")]
     Demote { id: String, to: u8 },
+    #[serde(rename = "adjust")]
+    Adjust { id: String, importance: f64 },
     #[serde(rename = "delete")]
     Delete { id: String },
     #[serde(rename = "merge")]
@@ -382,6 +397,7 @@ pub struct AuditResult {
     pub total_reviewed: usize,
     pub promoted: usize,
     pub demoted: usize,
+    pub adjusted: usize,
     pub deleted: usize,
     pub merged: usize,
     pub ops: Vec<AuditOp>,
@@ -426,6 +442,15 @@ pub fn resolve_audit_ops(
                     item.to,
                 ) {
                     if (1..=3).contains(&to) { ops.push(AuditOp::Demote { id, to }); }
+                }
+            }
+            "adjust" => {
+                if let (Some(id), Some(imp)) = (
+                    item.id.as_deref().and_then(&resolve),
+                    item.importance,
+                ) {
+                    let clamped = imp.clamp(0.0, 1.0);
+                    ops.push(AuditOp::Adjust { id, importance: clamped });
                 }
             }
             "delete" => {

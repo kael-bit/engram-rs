@@ -311,24 +311,7 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
     Ok(ToolCallResult { value, usage: chat.usage, model, duration_ms })
 }
 
-const EXPAND_PROMPT: &str = "Given a search query for a PERSONAL knowledge base (notes, decisions, logs), \
-    generate 4-6 alternative search phrases that would help find relevant stored notes. \
-    Bridge abstraction levels: abstract→concrete, concrete→abstract. \
-    \
-    CRITICAL: The knowledge base contains BOTH Chinese and English notes. \
-    You MUST include expansions in BOTH languages regardless of query language. \
-    \
-    Examples: \
-    who am I → my identity, my identity and role, who am I, my name and positioning, identity bootstrap. \
-    security lessons → security lesson, security mistakes and lessons, security discipline. \
-    部署 → deploy procedure, 部署流程和步骤, deployment workflow, systemd 部署. \
-    task delegation workflow → task specifications, task delegation workflow, subagent best practices. \
-    GitHub配置 → GitHub SSH setup, GitHub 仓库和账号, repo migration. \
-    \
-    Focus on rephrasing the INTENT, not listing random related technologies. \
-    If the query asks about a tool/library choice, rephrase as: why/decision/migration/选择/替换. \
-    NEVER output explanations, commentary, or bullet points with dashes. \
-    Even for very short queries (1-2 words), always produce at least 4 phrases.";
+use crate::prompts;
 
 /// Generate alternative query phrasings for better recall coverage.
 /// Returns (expansions, ToolCallResult metadata) for optional usage logging.
@@ -336,20 +319,10 @@ pub async fn expand_query(cfg: &AiConfig, query: &str) -> (Vec<String>, Option<T
     #[derive(Deserialize)]
     struct ExpandResult { queries: Vec<String> }
 
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "queries": {
-                "type": "array",
-                "items": { "type": "string" },
-                "description": "Alternative search phrases (3-5)"
-            }
-        },
-        "required": ["queries"]
-    });
+    let schema = prompts::expand_query_schema();
 
     match llm_tool_call::<ExpandResult>(
-        cfg, "expand", EXPAND_PROMPT, query,
+        cfg, "expand", prompts::EXPAND_PROMPT, query,
         "expanded_queries", "Generate alternative search phrases for the query",
         schema,
     ).await {

@@ -6,6 +6,7 @@ pub mod consolidate;
 pub mod db;
 pub mod error;
 pub mod extract;
+pub mod prompts;
 pub mod proxy;
 pub mod recall;
 pub mod thresholds;

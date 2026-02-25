@@ -90,8 +90,7 @@ impl<'a> RuleChecker<'a> {
                 if !self.memories.contains_key(id) {
                     return bad(op, "target not found");
                 }
-                // Audit cannot delete — only demote. Lifecycle handles deletion.
-                bad(op, "audit cannot delete memories — use demote instead, let lifecycle handle expiry")
+                bad(op, "audit cannot delete — use demote, let lifecycle handle expiry")
             }
             AuditOp::Demote { id, to } => {
                 if let Some(mem) = self.memories.get(id) {
@@ -109,13 +108,22 @@ impl<'a> RuleChecker<'a> {
                 }
                 good(op, "ok")
             }
+            AuditOp::Adjust { id, importance } => {
+                if !self.memories.contains_key(id) {
+                    return bad(op, "target not found");
+                }
+                if *importance < 0.0 || *importance > 1.0 {
+                    return bad(op, &format!("importance {} out of range 0.0-1.0", importance));
+                }
+                good(op, "ok")
+            }
             AuditOp::Promote { id, to: _ } => {
                 if !self.memories.contains_key(id) {
                     return bad(op, "target not found");
                 }
                 good(op, "ok")
             }
-            AuditOp::Merge { ids, content, .. } => {
+            AuditOp::Merge { ids, content, layer, .. } => {
                 let found = ids
                     .iter()
                     .filter(|id| self.memories.contains_key(id.as_str()))
@@ -124,6 +132,19 @@ impl<'a> RuleChecker<'a> {
                     return bad(
                         op,
                         &format!("only {}/{} merge source IDs found", found, ids.len()),
+                    );
+                }
+                // Merge must target the highest layer among source memories
+                let max_layer = ids
+                    .iter()
+                    .filter_map(|id| self.memories.get(id.as_str()))
+                    .map(|m| m.layer as u8)
+                    .max()
+                    .unwrap_or(1);
+                if *layer < max_layer {
+                    return bad(
+                        op,
+                        &format!("merge target layer L{} lower than source max L{} — must merge into highest layer", layer, max_layer),
                     );
                 }
                 let min_len = ids
@@ -313,7 +334,7 @@ pub async fn sandbox_audit(
             })
             .await
             .map_err(|e| EngramError::Internal(format!("spawn: {e}")))?;
-            applied = actual.promoted + actual.demoted + actual.deleted + actual.merged;
+            applied = actual.promoted + actual.demoted + actual.adjusted + actual.deleted + actual.merged;
             info!(applied, skipped, op_count, "audit sandbox: auto-applied ops");
         }
     }

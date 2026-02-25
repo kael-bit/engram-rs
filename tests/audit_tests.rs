@@ -28,6 +28,7 @@ fn raw_op(op: &str) -> RawAuditOp {
         op: op.to_string(),
         id: None,
         to: None,
+        importance: None,
         ids: None,
         content: None,
         layer: None,
