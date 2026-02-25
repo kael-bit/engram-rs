@@ -20,27 +20,6 @@ fn tokens_mixed() {
     assert!(tokens >= 2);
 }
 
-#[test]
-fn parse_rerank_basic() {
-    assert_eq!(parse_rerank_response("3, 1, 2", 3), vec![2, 0, 1]);
-}
-
-#[test]
-fn parse_rerank_with_noise() {
-    // number 5 is out of range (count=3), should be filtered
-    assert_eq!(parse_rerank_response("3,1,2,5", 3), vec![2, 0, 1]);
-}
-
-#[test]
-fn parse_rerank_newlines() {
-    assert_eq!(parse_rerank_response("2\n1\n3", 3), vec![1, 0, 2]);
-}
-
-#[test]
-fn parse_rerank_empty() {
-    assert!(parse_rerank_response("no numbers here", 3).is_empty());
-}
-
 // --- recall integration tests ---
 
 use crate::db::{MemoryDB, MemoryInput};

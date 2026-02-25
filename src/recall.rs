@@ -19,7 +19,6 @@ const WEIGHT_RECENCY: f64 = 0.2;
 /// `text-embedding-3-small` produces uniformly high cosine scores for short
 /// Chinese queries (< 10 chars), making discrimination poor.  For these cases
 /// FTS keyword matching is a stronger signal than cosine.
-#[allow(dead_code)] // used by future CJK-aware recall path
 fn is_short_cjk_query(query: &str) -> bool {
     let char_count = query.chars().count();
     char_count > 0 && char_count < 10 && query.chars().any(is_cjk)
@@ -616,16 +615,6 @@ pub async fn rerank_results(
             warn!(error = %e, "LLM rerank failed, keeping original order");
         }
     }
-}
-
-#[allow(dead_code)]
-fn parse_rerank_response(raw: &str, count: usize) -> Vec<usize> {
-    raw.split(|c: char| !c.is_ascii_digit())
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| s.parse::<usize>().ok())
-        .filter(|&n| n >= 1 && n <= count)
-        .map(|n| n - 1)
-        .collect()
 }
 
 /// Check if content is semantically similar to an existing memory.
