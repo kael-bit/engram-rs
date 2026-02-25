@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.10.0
+
+### Highlights
+
+- **Anthropic native API support**: Set `ENGRAM_LLM_PROVIDER=anthropic` to use Anthropic's `/v1/messages` format directly — no OpenAI-compatible proxy needed. Supports tool_use format with `input_schema`.
+- **Per-component LLM routing**: Each component (gate, audit, merge, extract, expand, rerank, proxy, triage, summary) can have its own `_URL`, `_KEY`, `_MODEL`, `_PROVIDER`. Mix OpenAI for cheap text processing with Anthropic for quality judgment — no proxy required.
+- **Importance-weighted buffer eviction**: Buffer overflow now evicts lowest-importance memories first (was FIFO). Lessons and procedurals remain exempt.
+- **Consolidation dry-run**: `POST /consolidate?dry_run=true` previews what would be promoted, decayed, and demoted — without writing anything.
+- **npm package renamed**: Published as `engram-rs-mcp` on npm (was `engram-mcp`, which was taken).
+
+### Features
+
+- `ENGRAM_LLM_PROVIDER` env var: `openai` (default) or `anthropic`/`claude`
+- Per-component env vars: `ENGRAM_{GATE,AUDIT,...}_{URL,KEY,MODEL,PROVIDER}`
+- `ResolvedConfig` fallback chain: component-specific → global defaults
+- `ENGRAM_NO_FTS_PENALTY` env var (default 0.85) — tunable keyword affinity penalty
+- `ENGRAM_HNSW_EF_SEARCH` env var (default 64) — tunable HNSW search breadth
+- `ENGRAM_TRIAGE_BATCH` env var (default 20) — tunable triage batch size
+- Dry-run response includes `would_promote`, `would_decay`, `would_demote` with ID + content preview
+- macOS builds (x86_64 + aarch64) in CI
+
+### Fixes
+
+- Keyword affinity penalty relaxed from 0.7 to 0.85 — less aggressive on cross-concept semantic matches
+- Initial importance for lessons and procedurals boosted from 0.5 to 0.75
+- Audit interval reduced from 24h to 12h
+
+### Refactoring
+
+- `AiConfig` replaced 7 per-component model fields with `HashMap<String, ComponentConfig>`
+- `add_auth`, `llm_chat_*`, `llm_tool_call_*` take `ResolvedConfig` instead of global `AiConfig`
+- Single `component_config_from_env()` helper eliminates repeated env var reading
+
+### Documentation
+
+- SETUP.md: mixed-provider configuration examples
+- README: updated LLM requirements to mention Anthropic support
+- Mermaid diagram updated with audit cycle
+
 ## 0.9.0
 
 ### Highlights
