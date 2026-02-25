@@ -516,3 +516,34 @@ fn reconcile_pair_key_uuid_style() {
     assert_eq!(k1, k2);
     assert!(k1.starts_with("550e"), "lexicographically smaller UUID should come first");
 }
+
+#[test]
+fn buffer_cap_evicts_oldest() {
+    std::env::set_var("ENGRAM_BUFFER_CAP", "5");
+    let db = std::sync::Arc::new(MemoryDB::open(":memory:").unwrap());
+
+    for i in 0..8 {
+        let input = MemoryInput::new(format!("buffer item {i}"))
+            .layer(1); // 1 = Buffer
+        db.insert(input).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let before = db.list_by_layer_meta(Layer::Buffer, 100, 0).unwrap();
+    assert_eq!(before.len(), 8);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all().build().unwrap();
+    rt.block_on(async {
+        engram::consolidate::consolidate(db.clone(), None, None).await;
+    });
+
+    let after = db.list_by_layer_meta(Layer::Buffer, 100, 0).unwrap();
+    assert!(after.len() <= 5, "buffer should be capped at 5, got {}", after.len());
+
+    let contents: Vec<String> = after.iter().map(|m| m.content.clone()).collect();
+    assert!(contents.contains(&"buffer item 7".to_string()),
+        "newest item should survive: {contents:?}");
+
+    std::env::remove_var("ENGRAM_BUFFER_CAP");
+}

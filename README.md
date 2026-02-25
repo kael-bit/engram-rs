@@ -381,6 +381,7 @@ All default to `ENGRAM_LLM_MODEL` if not set. If you only set one model, everyth
 | `ENGRAM_AUTO_RERANK` | `false` | Auto-rerank all recall results via LLM |
 | `ENGRAM_AUDIT_HOURS` | `24` | Background audit interval (0 = off) |
 | `ENGRAM_WORKING_CAP` | `30` | Max Working memories (excess evicted by utility) |
+| `ENGRAM_BUFFER_CAP` | `200` | Max Buffer memories (overflow evicted FIFO) |
 | `ENGRAM_PROXY_UPSTREAM` | — | Upstream LLM URL (enables proxy) |
 | `ENGRAM_PROXY_KEY` | — | Fallback API key for proxy |
 | `ENGRAM_STRIP_MARKERS` | *(generic)* | Comma-separated boilerplate markers to strip from proxy context |

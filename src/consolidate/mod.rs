@@ -515,6 +515,37 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
         }
     }
 
+    // Buffer capacity cap — protects against proxy extraction flooding.
+    // If the consolidation LLM is down or rate-limited, buffer grows unbounded.
+    // Hard cap with FIFO eviction (oldest first, exempt lessons/procedural).
+    let buffer_cap: usize = std::env::var("ENGRAM_BUFFER_CAP")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let buffer_mems: Vec<Memory> = db.list_by_layer_meta(Layer::Buffer, 10000, 0)
+        .unwrap_or_else(|e| { warn!(error = %e, "list buffer for cap check failed"); vec![] });
+    if buffer_mems.len() > buffer_cap {
+        let mut evictable: Vec<&Memory> = buffer_mems.iter()
+            .filter(|m| {
+                m.kind != "procedural"
+                    && !m.tags.iter().any(|t| t == "lesson")
+                    && !promoted_ids.contains(&m.id)
+            })
+            .collect();
+        let overflow = buffer_mems.len().saturating_sub(buffer_cap);
+        if overflow > 0 && !evictable.is_empty() {
+            // Oldest first (FIFO)
+            evictable.sort_by_key(|m| m.created_at);
+            let to_drop = overflow.min(evictable.len());
+            for mem in &evictable[..to_drop] {
+                if db.delete(&mem.id).unwrap_or(false) {
+                    dropped_ids.push(mem.id.clone());
+                    decayed += 1;
+                }
+            }
+            info!(buffer_size = buffer_mems.len(), cap = buffer_cap,
+                dropped = to_drop, "buffer over cap — evicted oldest");
+        }
+    }
+
     // Working gate-rejected TTL: memories that received final rejection
     // (gate-rejected-final) or were rejected and idle expire after 7 days.
     // gate-rejected / gate-rejected-2 still have retry chances, so only
