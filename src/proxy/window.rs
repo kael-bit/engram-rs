@@ -93,7 +93,7 @@ pub async fn flush_window(state: &AppState) {
 }
 
 /// Apply watermark logic to extract new user messages from the request.
-fn extract_user_via_watermark(state: &AppState, req_raw: &[u8], session_key: &str) -> Option<String> {
+pub(super) fn extract_user_via_watermark(state: &AppState, req_raw: &[u8], session_key: &str) -> Option<String> {
     let text = String::from_utf8_lossy(req_raw);
     let body: serde_json::Value = serde_json::from_str(&text).ok()?;
 
