@@ -189,7 +189,7 @@ fn apply_audit_ops(db: &MemoryDB, ops: Vec<AuditOp>, result: &mut AuditResult) {
                 }
             }
             AuditOp::Delete { id } => {
-                if db.delete(id).is_ok() {
+                if db.delete(id).unwrap_or(false) {
                     result.deleted += 1;
                 }
             }
