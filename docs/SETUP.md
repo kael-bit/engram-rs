@@ -188,6 +188,7 @@ If the same insight comes up again, store it again — repetition strengthens me
 - Workflows/procedures → `kind="procedural"` (never decay). **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural — leave `kind` unset.
 - Lessons → `tags=["lesson", "trigger:kebab-verb"]`
 - High-confidence knowledge (user corrections, explicit rules) → `layer=2` (direct to Working, skip Buffer)
+- Information that must survive more than a day (reminders, scheduled tasks, deadlines) → `layer=2`. Buffer decays fast; anything that needs to last should skip it.
 - Cross-project knowledge (identity, preferences) → `namespace="default"`
 
 ### 3. Recalling Memories (Tools: `engram_recall` & `engram_triggers`)
@@ -246,6 +247,7 @@ If the same insight comes up again, store it again — repetition strengthens me
 - Workflows/procedures → `"kind": "procedural"` (never decay). **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural — leave `kind` unset.
 - Lessons → `"tags": ["lesson", "trigger:kebab-verb"]`
 - High-confidence knowledge (user corrections, explicit rules) → `"layer": 2` (direct to Working, skip Buffer)
+- Information that must survive more than a day (reminders, scheduled tasks, deadlines) → `"layer": 2`. Buffer decays fast; anything that needs to last should skip it.
 - Cross-project knowledge (identity, preferences) → `-H "X-Namespace: default"`
 
 ```bash
