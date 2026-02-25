@@ -489,6 +489,9 @@ CREATE TABLE IF NOT EXISTS memories (
 CREATE INDEX IF NOT EXISTS idx_layer ON memories(layer);
 CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance);
 CREATE INDEX IF NOT EXISTS idx_last_accessed ON memories(last_accessed);
+CREATE INDEX IF NOT EXISTS idx_ns_layer ON memories(namespace, layer);
+CREATE INDEX IF NOT EXISTS idx_ns_accessed ON memories(namespace, last_accessed);
+CREATE INDEX IF NOT EXISTS idx_ns_created ON memories(namespace, created_at);
 
 CREATE TABLE IF NOT EXISTS facts (
     id TEXT PRIMARY KEY,
