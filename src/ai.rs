@@ -3,6 +3,7 @@
 //! All optional — see AiConfig::from_env().
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 use tracing::debug;
 
@@ -21,39 +22,83 @@ pub enum LlmProvider {
     Anthropic,
 }
 
+/// Per-component LLM connection overrides. Falls back to global AiConfig defaults.
+#[derive(Clone, Debug, Default)]
+struct ComponentConfig {
+    url: Option<String>,
+    key: Option<String>,
+    model: Option<String>,
+    provider: Option<LlmProvider>,
+}
+
+/// Fully resolved LLM connection config for a specific component call.
+pub struct ResolvedConfig {
+    pub url: String,
+    pub key: String,
+    pub model: String,
+    pub provider: LlmProvider,
+}
+
+/// All known LLM component names.
+const COMPONENTS: &[&str] = &[
+    "gate", "audit", "merge", "extract", "expand", "rerank", "proxy", "triage", "summary",
+];
+
+/// Read per-component overrides from environment variables.
+/// Pattern: `ENGRAM_{COMPONENT}_URL`, `_KEY`, `_MODEL`, `_PROVIDER`.
+fn component_config_from_env(component: &str) -> ComponentConfig {
+    let prefix = format!("ENGRAM_{}", component.to_uppercase());
+    ComponentConfig {
+        url: std::env::var(format!("{prefix}_URL")).ok(),
+        key: std::env::var(format!("{prefix}_KEY")).ok(),
+        model: std::env::var(format!("{prefix}_MODEL")).ok(),
+        provider: std::env::var(format!("{prefix}_PROVIDER")).ok().and_then(|v| {
+            match v.to_lowercase().as_str() {
+                "anthropic" | "claude" => Some(LlmProvider::Anthropic),
+                "openai" => Some(LlmProvider::OpenAI),
+                _ => None,
+            }
+        }),
+    }
+}
+
 #[derive(Clone)]
 pub struct AiConfig {
+    // Global defaults
     pub provider: LlmProvider,
     pub llm_url: String,
     pub llm_key: String,
     pub llm_model: String,
+
+    // Embedding (always OpenAI format, independent)
     pub embed_url: String,
     pub embed_key: String,
     pub embed_model: String,
+
     pub client: reqwest::Client,
-    // Per-component model overrides (fall back to llm_model if None)
-    pub merge_model: Option<String>,
-    pub extract_model: Option<String>,
-    pub rerank_model: Option<String>,
-    pub expand_model: Option<String>,
-    pub proxy_model: Option<String>,
-    pub gate_model: Option<String>,
-    pub audit_model: Option<String>,
+
+    // Per-component overrides (accessed via for_component / model_for)
+    components: HashMap<String, ComponentConfig>,
 }
 
 impl AiConfig {
+    /// Get fully resolved LLM config for a component (component-specific > global fallback).
+    pub fn for_component(&self, component: &str) -> ResolvedConfig {
+        let comp = self.components.get(component);
+        ResolvedConfig {
+            url: comp.and_then(|c| c.url.clone()).unwrap_or_else(|| self.llm_url.clone()),
+            key: comp.and_then(|c| c.key.clone()).unwrap_or_else(|| self.llm_key.clone()),
+            model: comp.and_then(|c| c.model.clone()).unwrap_or_else(|| self.llm_model.clone()),
+            provider: comp.and_then(|c| c.provider.clone()).unwrap_or_else(|| self.provider.clone()),
+        }
+    }
+
+    /// Convenience: get model name for a component (backward compat).
     pub fn model_for(&self, component: &str) -> &str {
-        let m = match component {
-            "merge" => self.merge_model.as_deref(),
-            "extract" => self.extract_model.as_deref(),
-            "rerank" => self.rerank_model.as_deref(),
-            "expand" => self.expand_model.as_deref(),
-            "proxy" => self.proxy_model.as_deref(),
-            "gate" => self.gate_model.as_deref(),
-            "audit" => self.audit_model.as_deref().or(self.gate_model.as_deref()),
-            _ => None,
-        };
-        m.unwrap_or(&self.llm_model)
+        self.components
+            .get(component)
+            .and_then(|c| c.model.as_deref())
+            .unwrap_or(&self.llm_model)
     }
 
     /// Returns `None` if `ENGRAM_LLM_URL` is not set.
@@ -64,7 +109,11 @@ impl AiConfig {
             std::env::var("ENGRAM_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
 
         // Determine provider from env, default to openai
-        let provider = match std::env::var("ENGRAM_LLM_PROVIDER").unwrap_or_default().to_lowercase().as_str() {
+        let provider = match std::env::var("ENGRAM_LLM_PROVIDER")
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str()
+        {
             "anthropic" | "claude" => LlmProvider::Anthropic,
             _ => LlmProvider::OpenAI,
         };
@@ -77,8 +126,7 @@ impl AiConfig {
                 format!("{}/embeddings", llm_url.trim_end_matches('/'))
             }
         });
-        let embed_key =
-            std::env::var("ENGRAM_EMBED_KEY").unwrap_or_else(|_| llm_key.clone());
+        let embed_key = std::env::var("ENGRAM_EMBED_KEY").unwrap_or_else(|_| llm_key.clone());
         let embed_model = std::env::var("ENGRAM_EMBED_MODEL")
             .unwrap_or_else(|_| "text-embedding-3-small".into());
 
@@ -86,6 +134,13 @@ impl AiConfig {
             .timeout(AI_TIMEOUT)
             .build()
             .expect("failed to build HTTP client");
+
+        // Build per-component configs from env vars
+        let components: HashMap<String, ComponentConfig> = COMPONENTS
+            .iter()
+            .map(|&name| (name.to_string(), component_config_from_env(name)))
+            .filter(|(_, c)| c.url.is_some() || c.key.is_some() || c.model.is_some() || c.provider.is_some())
+            .collect();
 
         Some(Self {
             provider,
@@ -96,13 +151,7 @@ impl AiConfig {
             embed_key,
             embed_model,
             client,
-            merge_model: std::env::var("ENGRAM_MERGE_MODEL").ok(),
-            extract_model: std::env::var("ENGRAM_EXTRACT_MODEL").ok(),
-            rerank_model: std::env::var("ENGRAM_RERANK_MODEL").ok(),
-            expand_model: std::env::var("ENGRAM_EXPAND_MODEL").ok(),
-            proxy_model: std::env::var("ENGRAM_PROXY_MODEL").ok(),
-            gate_model: std::env::var("ENGRAM_GATE_MODEL").ok(),
-            audit_model: std::env::var("ENGRAM_AUDIT_MODEL").ok(),
+            components,
         })
     }
 
@@ -299,17 +348,17 @@ pub struct EmbedResult {
 // Helper: add auth headers based on provider
 // ---------------------------------------------------------------------------
 
-fn add_auth(cfg: &AiConfig, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+fn add_auth(resolved: &ResolvedConfig, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     let mut b = builder;
-    if !cfg.llm_key.is_empty() {
-        match cfg.provider {
+    if !resolved.key.is_empty() {
+        match resolved.provider {
             LlmProvider::Anthropic => {
                 b = b
-                    .header("x-api-key", &cfg.llm_key)
+                    .header("x-api-key", &resolved.key)
                     .header("anthropic-version", "2023-06-01");
             }
             LlmProvider::OpenAI => {
-                b = b.header("Authorization", format!("Bearer {}", cfg.llm_key));
+                b = b.header("Authorization", format!("Bearer {}", resolved.key));
             }
         }
     }
@@ -329,17 +378,17 @@ pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String
 /// Like llm_chat but uses a component-specific model if configured.
 /// Returns LlmResult with usage stats and model info.
 pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &str) -> Result<LlmResult, EngramError> {
-    let model = cfg.model_for(component).to_string();
+    let resolved = cfg.for_component(component);
 
-    match cfg.provider {
-        LlmProvider::Anthropic => llm_chat_anthropic(cfg, &model, system, user).await,
-        LlmProvider::OpenAI => llm_chat_openai(cfg, &model, system, user).await,
+    match resolved.provider {
+        LlmProvider::Anthropic => llm_chat_anthropic(&cfg.client, &resolved, system, user).await,
+        LlmProvider::OpenAI => llm_chat_openai(&cfg.client, &resolved, system, user).await,
     }
 }
 
-async fn llm_chat_openai(cfg: &AiConfig, model: &str, system: &str, user: &str) -> Result<LlmResult, EngramError> {
+async fn llm_chat_openai(client: &reqwest::Client, resolved: &ResolvedConfig, system: &str, user: &str) -> Result<LlmResult, EngramError> {
     let req = ChatRequest {
-        model: model.to_string(),
+        model: resolved.model.clone(),
         messages: vec![
             ChatMessage { role: "system".into(), content: system.into() },
             ChatMessage { role: "user".into(), content: user.into() },
@@ -349,7 +398,7 @@ async fn llm_chat_openai(cfg: &AiConfig, model: &str, system: &str, user: &str) 
         tool_choice: None,
     };
 
-    let builder = add_auth(cfg, cfg.client.post(&cfg.llm_url).json(&req));
+    let builder = add_auth(resolved, client.post(&resolved.url).json(&req));
 
     let start = std::time::Instant::now();
     let resp = builder
@@ -372,12 +421,12 @@ async fn llm_chat_openai(cfg: &AiConfig, model: &str, system: &str, user: &str) 
         .first()
         .and_then(|c| c.message.content.clone())
         .unwrap_or_default();
-    Ok(LlmResult { content, usage: chat.usage, model: model.to_string(), duration_ms })
+    Ok(LlmResult { content, usage: chat.usage, model: resolved.model.clone(), duration_ms })
 }
 
-async fn llm_chat_anthropic(cfg: &AiConfig, model: &str, system: &str, user: &str) -> Result<LlmResult, EngramError> {
+async fn llm_chat_anthropic(client: &reqwest::Client, resolved: &ResolvedConfig, system: &str, user: &str) -> Result<LlmResult, EngramError> {
     let req = AnthropicRequest {
-        model: model.to_string(),
+        model: resolved.model.clone(),
         max_tokens: 4096,
         system: if system.is_empty() { None } else { Some(system.to_string()) },
         messages: vec![AnthropicMessage { role: "user".into(), content: user.into() }],
@@ -386,7 +435,7 @@ async fn llm_chat_anthropic(cfg: &AiConfig, model: &str, system: &str, user: &st
         tool_choice: None,
     };
 
-    let builder = add_auth(cfg, cfg.client.post(&cfg.llm_url).json(&req));
+    let builder = add_auth(resolved, client.post(&resolved.url).json(&req));
 
     let start = std::time::Instant::now();
     let resp = builder
@@ -412,7 +461,7 @@ async fn llm_chat_anthropic(cfg: &AiConfig, model: &str, system: &str, user: &st
         .join("");
 
     let usage = ar.usage.as_ref().map(|u| u.to_usage());
-    Ok(LlmResult { content, usage, model: model.to_string(), duration_ms })
+    Ok(LlmResult { content, usage, model: resolved.model.clone(), duration_ms })
 }
 
 // ---------------------------------------------------------------------------
@@ -430,17 +479,17 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
     fn_desc: &str,
     parameters: serde_json::Value,
 ) -> Result<ToolCallResult<T>, EngramError> {
-    let model = cfg.model_for(component).to_string();
+    let resolved = cfg.for_component(component);
 
-    match cfg.provider {
-        LlmProvider::Anthropic => llm_tool_call_anthropic(cfg, &model, system, user, fn_name, fn_desc, parameters).await,
-        LlmProvider::OpenAI => llm_tool_call_openai(cfg, &model, system, user, fn_name, fn_desc, parameters).await,
+    match resolved.provider {
+        LlmProvider::Anthropic => llm_tool_call_anthropic(&cfg.client, &resolved, system, user, fn_name, fn_desc, parameters).await,
+        LlmProvider::OpenAI => llm_tool_call_openai(&cfg.client, &resolved, system, user, fn_name, fn_desc, parameters).await,
     }
 }
 
 async fn llm_tool_call_openai<T: serde::de::DeserializeOwned>(
-    cfg: &AiConfig,
-    model: &str,
+    client: &reqwest::Client,
+    resolved: &ResolvedConfig,
     system: &str,
     user: &str,
     fn_name: &str,
@@ -448,7 +497,7 @@ async fn llm_tool_call_openai<T: serde::de::DeserializeOwned>(
     parameters: serde_json::Value,
 ) -> Result<ToolCallResult<T>, EngramError> {
     let req = ChatRequest {
-        model: model.to_string(),
+        model: resolved.model.clone(),
         messages: vec![
             ChatMessage { role: "system".into(), content: system.into() },
             ChatMessage { role: "user".into(), content: user.into() },
@@ -465,7 +514,7 @@ async fn llm_tool_call_openai<T: serde::de::DeserializeOwned>(
         tool_choice: Some(serde_json::json!({"type": "function", "function": {"name": fn_name}})),
     };
 
-    let builder = add_auth(cfg, cfg.client.post(&cfg.llm_url).json(&req));
+    let builder = add_auth(resolved, client.post(&resolved.url).json(&req));
 
     let start = std::time::Instant::now();
     let resp = builder
@@ -493,12 +542,12 @@ async fn llm_tool_call_openai<T: serde::de::DeserializeOwned>(
     let value: T = serde_json::from_str(&args)
         .map_err(|e| ai_err(format!("tool call arguments parse failed: {e}: {args}")))?;
 
-    Ok(ToolCallResult { value, usage: chat.usage, model: model.to_string(), duration_ms })
+    Ok(ToolCallResult { value, usage: chat.usage, model: resolved.model.clone(), duration_ms })
 }
 
 async fn llm_tool_call_anthropic<T: serde::de::DeserializeOwned>(
-    cfg: &AiConfig,
-    model: &str,
+    client: &reqwest::Client,
+    resolved: &ResolvedConfig,
     system: &str,
     user: &str,
     fn_name: &str,
@@ -506,7 +555,7 @@ async fn llm_tool_call_anthropic<T: serde::de::DeserializeOwned>(
     parameters: serde_json::Value,
 ) -> Result<ToolCallResult<T>, EngramError> {
     let req = AnthropicRequest {
-        model: model.to_string(),
+        model: resolved.model.clone(),
         max_tokens: 4096,
         system: if system.is_empty() { None } else { Some(system.to_string()) },
         messages: vec![AnthropicMessage { role: "user".into(), content: user.into() }],
@@ -519,7 +568,7 @@ async fn llm_tool_call_anthropic<T: serde::de::DeserializeOwned>(
         tool_choice: Some(serde_json::json!({"type": "tool", "name": fn_name})),
     };
 
-    let builder = add_auth(cfg, cfg.client.post(&cfg.llm_url).json(&req));
+    let builder = add_auth(resolved, client.post(&resolved.url).json(&req));
 
     let start = std::time::Instant::now();
     let resp = builder
@@ -551,7 +600,7 @@ async fn llm_tool_call_anthropic<T: serde::de::DeserializeOwned>(
         .map_err(|e| ai_err(format!("tool call arguments parse failed: {e}: {args}")))?;
 
     let usage = ar.usage.as_ref().map(|u| u.to_usage());
-    Ok(ToolCallResult { value, usage, model: model.to_string(), duration_ms })
+    Ok(ToolCallResult { value, usage, model: resolved.model.clone(), duration_ms })
 }
 
 // ---------------------------------------------------------------------------
