@@ -56,10 +56,11 @@ Be aggressive cleaning Working garbage. Output [] if nothing to do."#;
 /// Chunks automatically if total prompt would exceed ~100K chars.
 pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult, EngramError> {
     let db2 = db.clone();
-    let (core, working) = tokio::task::spawn_blocking(move || {
+    let (core, working, merge_hints) = tokio::task::spawn_blocking(move || {
         let c = db2.list_by_layer_meta(crate::db::Layer::Core, 500, 0).unwrap_or_default();
         let w = db2.list_by_layer_meta(crate::db::Layer::Working, 500, 0).unwrap_or_default();
-        (c, w)
+        let hints = find_merge_candidates(&db2, &w);
+        (c, w, hints)
     }).await.map_err(|e| EngramError::Internal(format!("spawn failed: {e}")))?;
 
     let all: Vec<&Memory> = core.iter().chain(working.iter()).collect();
@@ -78,7 +79,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
     // Working gets chunked if needed
     if all.len() <= max_per_batch {
         // single batch
-        let prompt = format_audit_prompt(&core, &working);
+        let prompt = format_audit_prompt(&core, &working, &merge_hints);
         let result = ai::llm_chat_as(cfg, "audit", AUDIT_SYSTEM, &prompt).await?;
         if let Some(ref u) = result.usage {
             let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
@@ -134,7 +135,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
     Ok(combined)
 }
 
-fn format_audit_prompt(core: &[Memory], working: &[Memory]) -> String {
+fn format_audit_prompt(core: &[Memory], working: &[Memory], merge_hints: &[(String, String, f64)]) -> String {
     let now = crate::db::now_ms();
     let mut prompt = String::with_capacity(16_000);
     prompt.push_str("## Core Layer (L3)\n");
@@ -163,6 +164,15 @@ fn format_audit_prompt(core: &[Memory], working: &[Memory]) -> String {
         prompt.push_str(&format!("- [{}] [Layer: Working (2)] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
             crate::util::short_id(&m.id), m.importance, m.access_count, age_d, mod_d, tags, preview));
     }
+
+    if !merge_hints.is_empty() {
+        prompt.push_str("\n## Merge Hints (pre-computed similarity)\n");
+        prompt.push_str("These Working memories are semantically similar — review and merge if they cover the same topic:\n");
+        for (a, b, sim) in merge_hints {
+            prompt.push_str(&format!("- [{}] ↔ [{}] (similarity: {:.2})\n", a, b, sim));
+        }
+    }
+
     prompt
 }
 
@@ -173,6 +183,34 @@ fn format_layer_summary(name: &str, memories: &[Memory]) -> String {
         s.push_str(&format!("- [{}] {}\n", crate::util::short_id(&m.id), preview));
     }
     s
+}
+
+/// Find Working memory pairs with high semantic similarity (merge candidates).
+/// Returns short ID pairs + similarity score, sorted by similarity descending, max 10.
+fn find_merge_candidates(db: &MemoryDB, working: &[Memory]) -> Vec<(String, String, f64)> {
+    let ids: Vec<String> = working.iter().map(|m| m.id.clone()).collect();
+    let embeddings = db.get_embeddings_by_ids(&ids);
+    if embeddings.len() < 2 {
+        return vec![];
+    }
+
+    let mut pairs: Vec<(String, String, f64)> = Vec::new();
+    for i in 0..embeddings.len() {
+        for j in (i + 1)..embeddings.len() {
+            let sim = crate::ai::cosine_similarity(&embeddings[i].1, &embeddings[j].1);
+            if sim > 0.65 && sim < 0.78 {
+                // 0.65-0.78 = related but not identical (merge sweet spot)
+                // > 0.78 is handled by auto-merge in consolidation
+                let a = crate::util::short_id(&embeddings[i].0);
+                let b = crate::util::short_id(&embeddings[j].0);
+                pairs.push((a.to_string(), b.to_string(), sim));
+            }
+        }
+    }
+
+    pairs.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    pairs.truncate(10);
+    pairs
 }
 
 fn apply_audit_ops(db: &MemoryDB, ops: Vec<AuditOp>, result: &mut AuditResult) {

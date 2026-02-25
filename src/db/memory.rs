@@ -908,6 +908,15 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Reset a memory's decay rate (used to fix stuck buffer entries).
+    pub fn update_decay_rate(&self, id: &str, rate: f64) -> Result<(), EngramError> {
+        self.conn()?.execute(
+            "UPDATE memories SET decay_rate = ?1, modified_at = ?3 WHERE id = ?2",
+            params![rate, id, crate::db::now_ms()],
+        )?;
+        Ok(())
+    }
+
     /// Export all memories as a JSON-serializable vec (for backup/migration).
     /// Embeddings are excluded to keep exports portable.
     pub fn export_all(&self) -> Result<Vec<Memory>, EngramError> {

@@ -301,8 +301,44 @@ pub(crate) fn cleanup_stale_tags(db: &MemoryDB) {
     }
 }
 
+/// Fix buffer memories stuck by ultra-low decay rates or abandoned with no access.
+pub(crate) fn fix_stuck_buffer(db: &MemoryDB) {
+    let now = crate::db::now_ms();
+    let two_days_ms = 48 * 3600 * 1000_i64;
+    let seven_days_ms = 7 * 24 * 3600 * 1000_i64;
+    let mut fixed = 0_usize;
+    let mut cleaned = 0_usize;
+
+    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_default() {
+        let age_ms = now - mem.created_at;
+
+        // Reset stuck decay rates (< 1.0 after 48h means it'll never leave naturally)
+        if age_ms > two_days_ms
+            && mem.decay_rate < 1.0
+            && db.update_decay_rate(&mem.id, 5.0).is_ok()
+        {
+            fixed += 1;
+        }
+
+        // Delete abandoned buffer entries (> 7 days, barely accessed, not protected)
+        if age_ms > seven_days_ms
+            && mem.access_count < 2
+            && mem.kind != "procedural"
+            && !mem.tags.iter().any(|t| t == "lesson")
+            && db.delete(&mem.id).unwrap_or(false)
+        {
+            cleaned += 1;
+        }
+    }
+
+    if fixed > 0 || cleaned > 0 {
+        info!(decay_reset = fixed, expired_deleted = cleaned, "buffer maintenance");
+    }
+}
+
 pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> ConsolidateResponse {
     cleanup_stale_tags(db);
+    fix_stuck_buffer(db);
 
     let promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
     let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
