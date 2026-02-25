@@ -3,6 +3,8 @@
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::Deserialize;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Below this relevance, auto-expand the query via LLM.
 const AUTO_EXPAND_THRESHOLD: f64 = 0.25;
@@ -167,8 +169,21 @@ pub(super) async fn get_triggers(
     })))
 }
 
+/// Compute a cache key for a resume section based on memory IDs + modified_at.
+/// Any update to any memory in the section invalidates the cache.
+fn section_cache_key(prefix: &str, memories: &[db::Memory], char_budget: usize) -> String {
+    let mut hasher = DefaultHasher::new();
+    for m in memories {
+        m.id.hash(&mut hasher);
+        m.modified_at.hash(&mut hasher);
+    }
+    char_budget.hash(&mut hasher);
+    format!("resume_cache:{}:{:x}", prefix, hasher.finish())
+}
+
 /// LLM-compress a section of memories into a budget. Returns compressed text
 /// or None if AI is unavailable or compression fails.
+/// Results are cached in engram_meta keyed by section content hash.
 async fn compress_section(
     ai: &ai::AiConfig,
     db: &db::MemoryDB,
@@ -178,6 +193,13 @@ async fn compress_section(
 ) -> Option<String> {
     if mems.is_empty() || char_budget < 100 {
         return None;
+    }
+
+    // Check cache first — keyed by section label + memory IDs + modified_at + budget
+    let cache_key = section_cache_key(label, mems, char_budget);
+    if let Some(cached) = db.get_meta(&cache_key) {
+        debug!(section = label, key = %cache_key, "resume compression cache hit");
+        return Some(cached);
     }
 
     let input: String = mems.iter().map(|m| {
@@ -198,21 +220,28 @@ async fn compress_section(
     match ai::llm_chat_as(ai, "resume", &system, &input).await {
         Ok(result) => {
             if let Some(ref u) = result.usage {
-                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                let cached_tokens = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
                 let _ = db.log_llm_call(
                     "resume_compress", &result.model,
-                    u.prompt_tokens, u.completion_tokens, cached,
+                    u.prompt_tokens, u.completion_tokens, cached_tokens,
                     result.duration_ms,
                 );
             }
             let text = result.content.trim().to_string();
             // Hard limit safety: truncate if LLM exceeded budget
-            if text.len() > char_budget {
+            let text = if text.len() > char_budget {
                 let boundary = text.floor_char_boundary(char_budget.saturating_sub(1));
-                Some(format!("{}…", &text[..boundary]))
+                format!("{}…", &text[..boundary])
             } else {
-                Some(text)
+                text
+            };
+            // Store in cache for next time
+            if let Err(e) = db.set_meta(&cache_key, &text) {
+                warn!(section = label, error = %e, "failed to cache compression result");
+            } else {
+                debug!(section = label, key = %cache_key, "resume compression cached");
             }
+            Some(text)
         }
         Err(e) => {
             tracing::warn!(section = label, error = %e, "resume compression failed, falling back to truncation");

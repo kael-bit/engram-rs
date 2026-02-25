@@ -136,6 +136,9 @@ impl MemoryDB {
             }
         }
 
+        // Invalidate resume compression cache on any memory write
+        let _ = self.clear_meta_prefix("resume_cache:");
+
         Ok(Memory {
             id,
             content: input.content,
@@ -287,6 +290,8 @@ impl MemoryDB {
         if n > 0 {
             self.fts_delete(id)?;
             self.vec_index_remove(id);
+            // Invalidate resume compression cache
+            let _ = self.clear_meta_prefix("resume_cache:");
         }
         Ok(n > 0 || moved > 0)
     }
@@ -680,7 +685,7 @@ impl MemoryDB {
         params_vec.push(Box::new(limit as i64));
         let limit_idx = params_vec.len();
 
-        let mut sql = "SELECT * FROM memories WHERE created_at >= ?1".to_string();
+        let mut sql = format!("SELECT {META_COLS} FROM memories WHERE created_at >= ?1");
         for c in &clauses {
             sql.push_str(" AND ");
             sql.push_str(c);
@@ -691,7 +696,7 @@ impl MemoryDB {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params_vec.iter().map(std::convert::AsRef::as_ref).collect();
         let rows = stmt
-            .query_map(param_refs.as_slice(), row_to_memory)?
+            .query_map(param_refs.as_slice(), row_to_memory_meta)?
             .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
             .collect();
         Ok(rows)
@@ -750,6 +755,8 @@ impl MemoryDB {
             "UPDATE memories SET layer = ?1, decay_rate = ?2 WHERE id = ?3",
             params![target as u8, target.default_decay(), id],
         )?;
+        // Invalidate resume compression cache on layer change
+        let _ = self.clear_meta_prefix("resume_cache:");
         self.get(id)
     }
 
@@ -920,6 +927,9 @@ impl MemoryDB {
                 self.fts_insert(id, &mem.content, &tags_json)?;
             }
         }
+
+        // Invalidate resume compression cache on any memory update
+        let _ = self.clear_meta_prefix("resume_cache:");
 
         self.get(id)
     }

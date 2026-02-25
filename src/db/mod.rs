@@ -628,6 +628,15 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Delete all engram_meta entries whose key starts with `prefix`.
+    pub fn clear_meta_prefix(&self, prefix: &str) -> Result<(), EngramError> {
+        self.conn()?.execute(
+            "DELETE FROM engram_meta WHERE key LIKE ?1",
+            rusqlite::params![format!("{}%", prefix)],
+        )?;
+        Ok(())
+    }
+
     pub fn log_llm_call(
         &self, component: &str, model: &str,
         input_tokens: u32, output_tokens: u32, cached_tokens: u32,

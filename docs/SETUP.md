@@ -127,62 +127,61 @@ Or create `.mcp.json` in the project root:
 Then add the prompt template below to your project instructions (`CLAUDE.md`, `AGENTS.md`, or equivalent):
 
 ````markdown
-## Memory
+## Memory System
 
 You have persistent memory via engram MCP tools.
 
-### Every session start or after context compaction
-Restore context first. Read the core and working sections.
-- Call `engram_resume` with hours=6, compact=true
+### 1. Context Restoration (Tool: `engram_resume`)
 
-**After compaction** (you see a `<summary>` block or "Compacted" system message): resume immediately, before responding to any user message. Compaction summaries are lossy.
+**Trigger:** Every session start OR after context compaction.
 
-### When to store what
+- Call `engram_resume` with hours=6 and compact=true.
+- **Rule:** If you see a `<summary>` block or "Compacted" system message, you MUST resume immediately, before responding to any user message. Compaction summaries are lossy; read the core and working sections returned by the tool.
+
+### 2. When & What to Store (Tool: `engram_store`)
 
 | What | Tags | Kind | Example |
 |------|------|------|---------|
-| Design decisions | topic tags | *(default)* | "API uses REST, auth via Bearer token" |
+| Design decisions | topic tags | *(default)* | "API uses REST, auth via token" |
 | Lessons from mistakes | `lesson` + topic | *(default)* | "LESSON: never force-push to main" |
-| Step-by-step workflows | `procedure` + topic | `procedural` | "Deploy: test → build → stop → cp → start" |
+| Step-by-step workflows | `procedure` + topic | `procedural` | "Deploy: test → build → stop → start" |
 | User preferences | `preference` | *(default)* | "User prefers concise Chinese replies" |
-| Session recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
+| Milestone recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
 
-**Don't store**: routine output, things already in code/config files, transient status.
+🚫 **DO NOT store:** routine output, things already in code/config files, or transient status.
 
-### ⚠️ User feedback is the highest-value signal!
-Corrections, criticism, preferences, and rules from the user are **never** automatically captured.
-You must store them yourself — immediately, before replying.
+🔄 **Memory Reinforcement (Repetition is Good!)**
 
-**Rule: When the user corrects you, criticizes, or states a new rule → store the lesson first, then reply. No store = no reply.**
+The engram system uses repetition to strengthen memory weights. If an important rule, user preference, or lesson comes up again — store it again. Do not skip storing a critical insight just because you think "I already saved this before." Engram handles dedup and reinforcement automatically.
 
-### Storing memories
-- Decisions, preferences, lessons → store immediately with topic tags
-- Workflows, procedures → store with kind="procedural" (never decay)
-- "Remember this" from the user → store with importance=0.9
-- Lessons from mistakes → store with tags=["lesson", "trigger:action-name"]
+⚠️ **HIGHEST PRIORITY: User Feedback**
 
-How: `engram_store`
+Corrections, criticism, preferences, and rules from the user are NEVER automatically captured. You must store them yourself immediately.
 
-### Recalling memories
-Before acting on any non-trivial task, recall first. Don't assume you remember — check.
-Default recall is fast (~30ms cached). For short/vague queries, add expand=true (+1-2s).
-Before risky operations, check triggers for relevant lessons.
+**CRITICAL RULE:** When the user corrects you, criticizes, or states a new rule → call `engram_store` FIRST, then reply. No store = no reply.
 
-Key parameters:
-- `query` (required) — search query
-- `limit` — max results (default 20)
-- `budget_tokens` — token budget for results (default 2000, 0 = unlimited)
-- `expand` — LLM query expansion for short/vague queries (+1-2s)
-- `rerank` — LLM reranking for better ordering (+2-4s)
-- `tags` — filter by tags
-- `since` / `until` — ISO 8601 time range filter
-- `min_score` — minimum relevance threshold (0.0-1.0)
+**Storage modifiers:**
+- Workflows/procedures → set kind="procedural" (never decay).
+- "Remember this" from user → set importance=0.9.
+- Lessons from mistakes → include tags like `["lesson", "trigger:kebab-case-verb"]` (e.g., `trigger:git-push`, `trigger:deploy`).
 
-How: `engram_recall` with the topic as query. `engram_triggers` for pre-action checks.
+### 3. Recalling Memories (Tools: `engram_recall` & `engram_triggers`)
 
-### Before session ends
-Store what you did + what was decided + what to do next. Tag as "session".
-Without the "next" part, you'll wake up not knowing what to do.
+Before acting on any non-trivial task, you **MUST** check your memory. Do not assume you remember.
+
+- **Pre-action check:** Before risky operations (e.g., deploying, pushing code), call `engram_triggers` to check for relevant lessons.
+- **General search:** Call `engram_recall` with the topic as the query.
+  - `query` (required): Search string.
+  - `expand` (boolean): Set to true for short/vague queries (+1-2s).
+  - `limit` (default 20), `budget_tokens` (default 2000), `tags`, `min_score`.
+
+### 4. Milestone Recaps
+
+You cannot predict when a session ends. Instead, proactively store a recap immediately after completing any major task or reaching a decision point.
+
+- **Content:** What was done + Decisions made + What to do next.
+- **Tags:** Include `session`.
+- *Note: Without the "what to do next" part, you will wake up in the next session not knowing what to do.*
 ````
 
 ---
@@ -192,85 +191,85 @@ Without the "next" part, you'll wake up not knowing what to do.
 No build step. Add the prompt template below to your project instructions (`CLAUDE.md`, `AGENTS.md`, or equivalent):
 
 ````markdown
-## Memory
+## Memory System
 
 You have persistent memory via engram at http://localhost:3917
 
-### Every session start or after context compaction
-Restore context first. Read the core and working sections.
+### 1. Context Restoration
+
+**Trigger:** Every session start OR after context compaction.
+
 ```bash
 curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 ```
 
-**After compaction** (you see a `<summary>` block or "Compacted" system message): resume immediately, before responding to any user message. Compaction summaries are lossy.
+**Rule:** If you see a `<summary>` block or "Compacted" system message, you MUST resume immediately, before responding to any user message. Compaction summaries are lossy; read the core and working sections returned.
 
-### When to store what
+### 2. When & What to Store
 
 | What | Tags | Kind | Example |
 |------|------|------|---------|
-| Design decisions | topic tags | *(default)* | "API uses REST, auth via Bearer token" |
+| Design decisions | topic tags | *(default)* | "API uses REST, auth via token" |
 | Lessons from mistakes | `lesson` + topic | *(default)* | "LESSON: never force-push to main" |
-| Step-by-step workflows | `procedure` + topic | `procedural` | "Deploy: test → build → stop → cp → start" |
+| Step-by-step workflows | `procedure` + topic | `procedural` | "Deploy: test → build → stop → start" |
 | User preferences | `preference` | *(default)* | "User prefers concise Chinese replies" |
-| Session recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
+| Milestone recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
 
-**Don't store**: routine output, things already in code/config files, transient status.
+🚫 **DO NOT store:** routine output, things already in code/config files, or transient status.
 
-### ⚠️ User feedback is the highest-value signal!
-Corrections, criticism, preferences, and rules from the user are **never** automatically captured.
-You must store them yourself — immediately, before replying.
+🔄 **Memory Reinforcement (Repetition is Good!)**
 
-**Rule: When the user corrects you, criticizes, or states a new rule → store the lesson first, then reply. No store = no reply.**
+The engram system uses repetition to strengthen memory weights. If an important rule, user preference, or lesson comes up again — store it again. Do not skip storing a critical insight just because you think "I already saved this before." Engram handles dedup and reinforcement automatically.
 
-### Storing memories
-- Decisions, preferences, lessons → store immediately with topic tags
-- Workflows, procedures → store with kind="procedural" (never decay)
-- "Remember this" from the user → store with importance=0.9
-- Lessons from mistakes → store with tags=["lesson", "trigger:action-name"]
+⚠️ **HIGHEST PRIORITY: User Feedback**
 
-How:
+Corrections, criticism, preferences, and rules from the user are NEVER automatically captured. You must store them yourself immediately.
+
+**CRITICAL RULE:** When the user corrects you, criticizes, or states a new rule → store the lesson FIRST, then reply. No store = no reply.
+
+**Storage modifiers:**
+- Workflows/procedures → set kind="procedural" (never decay).
+- "Remember this" from user → set importance=0.9.
+- Lessons from mistakes → include tags like `["lesson", "trigger:kebab-case-verb"]` (e.g., `trigger:git-push`, `trigger:deploy`).
+
 ```bash
 curl -sf -X POST http://localhost:3917/memories \
   -d '{"content": "...", "tags": ["topic"]}'
 
+# Procedures (never decay)
+curl -sf -X POST http://localhost:3917/memories \
+  -d '{"content": "deploy: test → build → stop → start", "tags": ["deploy"], "kind": "procedural"}'
+
 # Lessons with trigger
 curl -sf -X POST http://localhost:3917/memories \
   -d '{"content": "LESSON: never force-push to main", "tags": ["lesson","trigger:git-push"]}'
-
-# Procedures (never decay)
-curl -sf -X POST http://localhost:3917/memories \
-  -d '{"content": "deploy: test → build → stop → cp → start", "tags": ["deploy"], "kind": "procedural"}'
 ```
 
-### Recalling memories
-Before acting on any non-trivial task, recall first. Don't assume you remember — check.
-Default recall is fast (~30ms cached). For short/vague queries, add expand=true (+1-2s).
-Before risky operations, check triggers for relevant lessons.
+### 3. Recalling Memories
 
-Key parameters:
-- `query` (required) — search query
-- `limit` — max results (default 20)
-- `budget_tokens` — token budget for results (default 2000, 0 = unlimited)
-- `expand` — LLM query expansion for short/vague queries (+1-2s)
-- `rerank` — LLM reranking for better ordering (+2-4s)
-- `tags` — filter by tags
-- `since` / `until` — ISO 8601 time range filter
-- `min_score` — minimum relevance threshold (0.0-1.0)
+Before acting on any non-trivial task, you **MUST** check your memory. Do not assume you remember.
 
-How:
+- **Pre-action check:** Before risky operations (e.g., deploying, pushing code), check triggers for relevant lessons.
+- **General search:** Query with the topic.
+  - `query` (required): Search string.
+  - `expand` (boolean): Set to true for short/vague queries (+1-2s).
+  - `limit` (default 20), `budget_tokens` (default 2000), `tags`, `min_score`.
+
 ```bash
 curl -sf -X POST http://localhost:3917/recall \
   -d '{"query": "how do we deploy"}'
-```
 
-Pre-action trigger check:
-```bash
+# Pre-action trigger check
 curl -sf http://localhost:3917/triggers/deploy
 ```
 
-### Before session ends
-Store what you did + what was decided + what to do next. Tag as "session".
-Without the "next" part, you'll wake up not knowing what to do.
+### 4. Milestone Recaps
+
+You cannot predict when a session ends. Instead, proactively store a recap immediately after completing any major task or reaching a decision point.
+
+- **Content:** What was done + Decisions made + What to do next.
+- **Tags:** Include `session`.
+- *Note: Without the "what to do next" part, you will wake up in the next session not knowing what to do.*
 ````
 
 ---
