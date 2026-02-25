@@ -163,6 +163,60 @@ pub(super) async fn get_triggers(
     })))
 }
 
+/// LLM-compress a section of memories into a budget. Returns compressed text
+/// or None if AI is unavailable or compression fails.
+async fn compress_section(
+    ai: &ai::AiConfig,
+    db: &db::MemoryDB,
+    label: &str,
+    mems: &[db::Memory],
+    char_budget: usize,
+) -> Option<String> {
+    if mems.is_empty() || char_budget < 100 {
+        return None;
+    }
+
+    let input: String = mems.iter().map(|m| {
+        let tags = if m.tags.is_empty() { String::new() } else { format!(" [{}]", m.tags.join(", ")) };
+        let kind = if m.kind == "semantic" { String::new() } else { format!(" ({})", m.kind) };
+        format!("- {}{}{}\n", m.content, tags, kind)
+    }).collect();
+
+    let system = format!(
+        "Compress the following {} memories into ≤{} characters.\n\
+         Preserve ALL: identities, constraints, lessons, decisions, procedures, names, numbers.\n\
+         Drop: routine updates, transient status, redundant detail.\n\
+         Output raw text only, no markdown headers or bullet formatting.\n\
+         Combine related items. Be dense but complete.",
+        label, char_budget
+    );
+
+    match ai::llm_chat_as(ai, "resume", &system, &input).await {
+        Ok(result) => {
+            if let Some(ref u) = result.usage {
+                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                let _ = db.log_llm_call(
+                    "resume_compress", &result.model,
+                    u.prompt_tokens, u.completion_tokens, cached,
+                    result.duration_ms,
+                );
+            }
+            let text = result.content.trim().to_string();
+            // Hard limit safety: truncate if LLM exceeded budget
+            if text.len() > char_budget {
+                let boundary = text.floor_char_boundary(char_budget.saturating_sub(1));
+                Some(format!("{}…", &text[..boundary]))
+            } else {
+                Some(text)
+            }
+        }
+        Err(e) => {
+            tracing::warn!(section = label, error = %e, "resume compression failed, falling back to truncation");
+            None
+        }
+    }
+}
+
 pub(super) async fn do_resume(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -454,8 +508,11 @@ pub(super) async fn do_resume(
         .map(|m| m.content.len() + core_overhead)
         .sum();
 
-    let (core_out, core_summary_used) = if core_total_cost > core_budget && core.len() >= 10 {
-        // Try the cached summary
+    // Can we use LLM compression?
+    let can_compress = state.ai.as_ref().is_some_and(ai::AiConfig::has_llm);
+
+    let (core_out, core_summary_used, core_compressed) = if core_total_cost > core_budget && core.len() >= 10 {
+        // Try the cached summary first (free, no LLM call)
         let db_sum = state.db.clone();
         let summary = tokio::task::spawn_blocking(move || db_sum.get_meta("core_summary"))
             .await
@@ -463,26 +520,72 @@ pub(super) async fn do_resume(
         if let Some(ref s) = summary {
             if s.len() + core_overhead < core_budget {
                 core_budget -= s.len() + core_overhead;
-                (vec![], true)
+                (vec![], true, None)
+            } else if can_compress {
+                // Summary doesn't fit either — compress via LLM
+                if let Some(compressed) = compress_section(
+                    state.ai.as_ref().unwrap(), &state.db, "core", &core, core_budget
+                ).await {
+                    core_budget = core_budget.saturating_sub(compressed.len());
+                    (vec![], false, Some(compressed))
+                } else {
+                    (fit_section(&core, &mut core_budget, compact), false, None)
+                }
             } else {
-                // Summary itself doesn't fit — fall back to hard truncation
-                (fit_section(&core, &mut core_budget, compact), false)
+                (fit_section(&core, &mut core_budget, compact), false, None)
+            }
+        } else if can_compress {
+            if let Some(compressed) = compress_section(
+                state.ai.as_ref().unwrap(), &state.db, "core", &core, core_budget
+            ).await {
+                core_budget = core_budget.saturating_sub(compressed.len());
+                (vec![], false, Some(compressed))
+            } else {
+                (fit_section(&core, &mut core_budget, compact), false, None)
             }
         } else {
-            (fit_section(&core, &mut core_budget, compact), false)
+            (fit_section(&core, &mut core_budget, compact), false, None)
         }
     } else {
-        (fit_section(&core, &mut core_budget, compact), false)
+        (fit_section(&core, &mut core_budget, compact), false, None)
     };
     budget_left = budget_left.saturating_sub(main_budget.min(core_cap) - core_budget);
 
     // Sessions come before Working — continuity matters more
     let mut session_budget = budget_left.saturating_sub(recent_reserve);
-    let sessions_out = fit_section(&sessions, &mut session_budget, compact);
+    let session_cost: usize = sessions.iter()
+        .map(|m| m.content.len() + core_overhead)
+        .sum();
+    let (sessions_out, sessions_compressed) = if session_cost > session_budget && can_compress && sessions.len() >= 3 {
+        if let Some(compressed) = compress_section(
+            state.ai.as_ref().unwrap(), &state.db, "sessions", &sessions, session_budget
+        ).await {
+            session_budget = session_budget.saturating_sub(compressed.len());
+            (vec![], Some(compressed))
+        } else {
+            (fit_section(&sessions, &mut session_budget, compact), None)
+        }
+    } else {
+        (fit_section(&sessions, &mut session_budget, compact), None)
+    };
     budget_left = budget_left.saturating_sub(budget_left.saturating_sub(recent_reserve) - session_budget);
 
     let mut working_budget = budget_left.saturating_sub(recent_reserve);
-    let working_out = fit_section(&working, &mut working_budget, compact);
+    let working_cost: usize = working.iter()
+        .map(|m| m.content.len() + core_overhead)
+        .sum();
+    let (working_out, working_compressed) = if working_cost > working_budget && can_compress && working.len() >= 3 {
+        if let Some(compressed) = compress_section(
+            state.ai.as_ref().unwrap(), &state.db, "working", &working, working_budget
+        ).await {
+            working_budget = working_budget.saturating_sub(compressed.len());
+            (vec![], Some(compressed))
+        } else {
+            (fit_section(&working, &mut working_budget, compact), None)
+        }
+    } else {
+        (fit_section(&working, &mut working_budget, compact), None)
+    };
     budget_left = budget_left.saturating_sub(budget_left.saturating_sub(recent_reserve) - working_budget);
 
     // Recent context gets whatever is left (at least the reserved 20%)
@@ -502,29 +605,43 @@ pub(super) async fn do_resume(
         None
     };
 
-    let core_json = if let Some(ref summary) = core_summary_text {
+    let core_json = if let Some(ref compressed) = core_compressed {
+        serde_json::json!([{"content": compressed, "kind": "compressed", "tags": ["core-compressed"]}])
+    } else if let Some(ref summary) = core_summary_text {
         // Single summary entry instead of individual memories
         serde_json::json!([{"content": summary, "kind": "summary", "tags": ["core-summary"]}])
     } else {
         serde_json::json!(to_json(&core_out))
     };
 
-    let core_count = if core_summary_used { core.len() } else { core_out.len() };
+    let sessions_json = if let Some(ref compressed) = sessions_compressed {
+        serde_json::json!([{"content": compressed, "kind": "compressed", "tags": ["sessions-compressed"]}])
+    } else {
+        serde_json::json!(to_json(&sessions_out))
+    };
+
+    let working_json = if let Some(ref compressed) = working_compressed {
+        serde_json::json!([{"content": compressed, "kind": "compressed", "tags": ["working-compressed"]}])
+    } else {
+        serde_json::json!(to_json(&working_out))
+    };
+
+    let core_count = if core_summary_used || core_compressed.is_some() { core.len() } else { core_out.len() };
 
     Ok(Json(serde_json::json!({
         "core": core_json,
-        "working": to_json(&working_out),
+        "working": working_json,
         "buffer": to_json(&buffer_out),
         "recent": to_json(&recent_out),
-        "sessions": to_json(&sessions_out),
+        "sessions": sessions_json,
         "hours": hours,
         "core_count": core_count,
         "core_total": core.len(),
         "core_summary_used": core_summary_used,
-        "working_count": working_out.len(),
+        "working_count": if working_compressed.is_some() { working.len() } else { working_out.len() },
         "buffer_count": buffer_out.len(),
         "recent_count": recent_out.len(),
-        "session_count": sessions_out.len(),
+        "session_count": if sessions_compressed.is_some() { sessions.len() } else { sessions_out.len() },
     })))
 }
 
