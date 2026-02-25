@@ -508,9 +508,19 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
                     promoted_ids.insert(mem.id.clone());
                     promoted += 1;
                 }
-            } else if db.delete(&mem.id).unwrap_or(false) {
-                dropped_ids.push(mem.id.clone());
-                decayed += 1;
+            } else {
+                // Safety net: memories never touched by any process
+                // (modified_at == created_at and no _triaged tag) get 48h
+                // instead of 24h, preventing data loss from triage failures.
+                let was_triaged = mem.tags.iter().any(|t| t == "_triaged")
+                    || mem.modified_at != mem.created_at;
+                let hard_cap = buffer_ttl * 2; // 48h
+                if !was_triaged && age <= hard_cap {
+                    debug!(id = %mem.id, "buffer TTL extended: never triaged");
+                } else if db.delete(&mem.id).unwrap_or(false) {
+                    dropped_ids.push(mem.id.clone());
+                    decayed += 1;
+                }
             }
         }
     }
@@ -564,43 +574,6 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
                 info!(id = %mem.id, content = %truncate_chars(&mem.content, 50),
                     days_since_access = since_access / 86_400_000,
                     "gate-rejected Working memory expired");
-        }
-    }
-
-    // Working layer capacity cap — evict least-useful memories when over limit.
-    // Time-based decay doesn't work at vibecoding speed (3 days of decay threshold
-    // when the entire project was built in 3 days). Instead, cap Working at a fixed
-    // size and evict by utility: lowest access_count first, then oldest.
-    // Lessons and procedural memories are exempt from eviction.
-    let working_cap: usize = std::env::var("ENGRAM_WORKING_CAP")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(30);
-    let mut working_mems: Vec<Memory> = db.list_by_layer_meta(Layer::Working, 10000, 0)
-        .unwrap_or_else(|e| { warn!(error = %e, "list working for cap check failed"); vec![] });
-
-    // Partition: exempt (lesson/procedural) vs evictable
-    let (exempt, mut evictable): (Vec<_>, Vec<_>) = working_mems.drain(..).partition(|m| {
-        m.kind == "procedural"
-            || m.tags.iter().any(|t| t == "lesson")
-            || promoted_ids.contains(&m.id)
-    });
-
-    if exempt.len() + evictable.len() > working_cap && evictable.len() > 0 {
-        let target = working_cap.saturating_sub(exempt.len());
-        if evictable.len() > target {
-            // Sort: lowest access_count first, then oldest first
-            evictable.sort_by(|a, b| {
-                a.access_count.cmp(&b.access_count)
-                    .then(a.last_accessed.cmp(&b.last_accessed))
-            });
-            let to_demote = evictable.len() - target;
-            for mem in &evictable[..to_demote] {
-                if db.demote(&mem.id, Layer::Buffer).is_ok() {
-                    info!(id = %mem.id, content = %truncate_chars(&mem.content, 50),
-                        access_count = mem.access_count,
-                        "Working over cap — demoted to Buffer");
-                    decayed += 1;
-                }
-            }
         }
     }
 

@@ -344,13 +344,13 @@ pub(super) async fn do_resume(
         }
         sessions.truncate(10);
 
-        // Core relevance filtering: use recent context (buffer + sessions) as
-        // signal for what matters right now. Core memories unrelated to current
-        // context are excluded — they're not deleted, just not in this resume.
-        // Always-relevant: lesson, identity, procedural tags or kind.
-        let core = if buffer.is_empty() && sessions.is_empty() && recent.is_empty() {
-            // Fresh session with no context — return all Core unfiltered
-            core
+        // Context-based relevance filtering for Core and Working.
+        // Use recent context (buffer + sessions + recent) as signal for what
+        // matters right now. Memories unrelated to current context are excluded
+        // — they're not deleted, just not in this resume.
+        let (core, working) = if buffer.is_empty() && sessions.is_empty() && recent.is_empty() {
+            // Fresh session with no context — return all unfiltered
+            (core, working)
         } else {
             let context_ids: Vec<String> = buffer.iter()
                 .chain(sessions.iter())
@@ -360,9 +360,9 @@ pub(super) async fn do_resume(
             let context_embeds = d.get_embeddings_by_ids(&context_ids);
 
             if context_embeds.is_empty() {
-                core // no embeddings available, skip filtering
+                (core, working) // no embeddings available, skip filtering
             } else {
-                // Compute centroid of context embeddings
+                // Compute centroid of context embeddings (shared for Core + Working)
                 let dim = context_embeds[0].1.len();
                 let mut centroid = vec![0.0f32; dim];
                 for (_, emb) in &context_embeds {
@@ -375,16 +375,15 @@ pub(super) async fn do_resume(
                     *v /= n;
                 }
 
-                let core_ids: Vec<String> = core.iter().map(|m| m.id.clone()).collect();
-                let core_embeds = d.get_embeddings_by_ids(&core_ids);
-                let core_embed_map: std::collections::HashMap<&str, &Vec<f32>> = core_embeds.iter()
+                // Fetch embeddings for Core + Working in one batch
+                let all_layer_ids: Vec<String> = core.iter().chain(working.iter())
+                    .map(|m| m.id.clone()).collect();
+                let all_embeds = d.get_embeddings_by_ids(&all_layer_ids);
+                let embed_map: std::collections::HashMap<&str, &Vec<f32>> = all_embeds.iter()
                     .map(|(id, emb)| (id.as_str(), emb))
                     .collect();
 
-                // No exemptions — every Core memory competes for slots via
-                // cosine relevance to current context. Identity/lesson get
-                // boosts but still must be somewhat relevant. Hard cap at 20
-                // ensures resume stays manageable even at 600+ Core.
+                // --- Core filtering ---
                 let identity_boost = |m: &db::Memory| -> f64 {
                     if m.tags.iter().any(|t| matches!(t.as_str(), "identity" | "constraint" | "bootstrap")) {
                         crate::thresholds::RESUME_HIGH_RELEVANCE
@@ -395,8 +394,8 @@ pub(super) async fn do_resume(
                     }
                 };
 
-                let mut scored: Vec<(db::Memory, f64)> = core.into_iter().map(|m| {
-                    let raw = core_embed_map.get(m.id.as_str())
+                let mut core_scored: Vec<(db::Memory, f64)> = core.into_iter().map(|m| {
+                    let raw = embed_map.get(m.id.as_str())
                         .map(|emb| ai::cosine_similarity(&centroid, emb))
                         .unwrap_or(0.4);
                     let boosted = raw + identity_boost(&m);
@@ -407,21 +406,55 @@ pub(super) async fn do_resume(
                     (m, boosted)
                 }).collect();
 
-                scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                core_scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                 let max_core = 20;
-                let threshold = crate::thresholds::RESUME_CORE_THRESHOLD;
-                let total = scored.len();
-                let kept: Vec<db::Memory> = scored.into_iter()
-                    .filter(|(_, s)| *s >= threshold)
+                let core_threshold = crate::thresholds::RESUME_CORE_THRESHOLD;
+                let core_total = core_scored.len();
+                let core_kept: Vec<db::Memory> = core_scored.into_iter()
+                    .filter(|(_, s)| *s >= core_threshold)
                     .take(max_core)
                     .map(|(m, _)| m)
                     .collect();
-                if kept.len() < total {
-                    debug!(total, kept = kept.len(),
-                        dropped = total - kept.len(),
-                        threshold, max_core, "core relevance filtering");
+                if core_kept.len() < core_total {
+                    debug!(total = core_total, kept = core_kept.len(),
+                        dropped = core_total - core_kept.len(),
+                        threshold = core_threshold, max_core, "core relevance filtering");
                 }
-                kept
+
+                // --- Working filtering ---
+                let working_boost = |m: &db::Memory| -> f64 {
+                    if m.kind == "procedural" || m.tags.iter().any(|t| matches!(t.as_str(), "lesson" | "procedural" | "preference")) {
+                        0.08
+                    } else {
+                        0.0
+                    }
+                };
+
+                let mut working_scored: Vec<(db::Memory, f64)> = working.into_iter().map(|m| {
+                    let raw = embed_map.get(m.id.as_str())
+                        .map(|emb| ai::cosine_similarity(&centroid, emb))
+                        .unwrap_or(0.3);
+                    let boosted = raw + working_boost(&m);
+                    (m, boosted)
+                }).collect();
+
+                working_scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                let max_working = 40;
+                let working_threshold = crate::thresholds::RESUME_WORKING_THRESHOLD;
+                let working_total = working_scored.len();
+                let working_kept: Vec<db::Memory> = working_scored.into_iter()
+                    .filter(|(_, s)| *s >= working_threshold)
+                    .take(max_working)
+                    .map(|(m, _)| m)
+                    .collect();
+                if working_kept.len() < working_total {
+                    debug!(total = working_total, kept = working_kept.len(),
+                        dropped = working_total - working_kept.len(),
+                        threshold = working_threshold, max_working,
+                        "working relevance filtering");
+                }
+
+                (core_kept, working_kept)
             }
         };
 
@@ -467,8 +500,19 @@ pub(super) async fn do_resume(
 
     // Apply budget with proportional content truncation.
     // Default 16000 chars (~4K tokens). 0 = unlimited.
+    // Adaptive scaling: default budget grows with total memory count.
     let budget_val = q.budget.unwrap_or(16_000);
-    let mut budget_left = if budget_val == 0 { usize::MAX } else { budget_val };
+    let total_memories = core.len() + working.len() + buffer.len() + sessions.len() + recent.len();
+    let adaptive_budget = if budget_val == 0 {
+        usize::MAX
+    } else if budget_val == 16_000 {
+        // Default: scale with memory count, min 16K, max 64K
+        let scaled = 8_000 + total_memories * 120;
+        scaled.clamp(16_000, 64_000)
+    } else {
+        budget_val // user-specified, respect it
+    };
+    let mut budget_left = adaptive_budget;
 
     // Fit memories into budget. When total exceeds budget, keep the most
     // important items at full length and compress the rest to one-line
@@ -527,11 +571,11 @@ pub(super) async fn do_resume(
 
     // Reserve 20% for recent context (sessions + recent + buffer) so they
     // never get starved by Core/Working bloat.
-    let recent_reserve = if budget_val == 0 { 0 } else { budget_val * 20 / 100 };
+    let recent_reserve = if adaptive_budget == usize::MAX { 0 } else { adaptive_budget * 20 / 100 };
     let main_budget = budget_left.saturating_sub(recent_reserve);
 
     // Core: 45% cap of total budget
-    let core_cap = if budget_val == 0 { usize::MAX } else { budget_val * 45 / 100 };
+    let core_cap = if adaptive_budget == usize::MAX { usize::MAX } else { adaptive_budget * 45 / 100 };
     let mut core_budget = main_budget.min(core_cap);
 
     // Estimate cost of full Core listing. If it would blow the budget,
@@ -590,7 +634,7 @@ pub(super) async fn do_resume(
     let sessions_compressed: Option<String> = None;
     budget_left = budget_left.saturating_sub(budget_left.saturating_sub(recent_reserve) - session_budget);
 
-    let working_floor = if budget_val == 0 { usize::MAX } else { budget_val * 30 / 100 };
+    let working_floor = if adaptive_budget == usize::MAX { usize::MAX } else { adaptive_budget * 30 / 100 };
     let mut working_budget = budget_left.saturating_sub(recent_reserve).max(working_floor);
     let working_out = fit_section(&working, &mut working_budget, compact);
     let working_compressed: Option<String> = None;

@@ -63,8 +63,7 @@ pub(super) async fn triage_buffer(
             .filter(|m| {
                 let dominated = m.tags.iter().any(|t| t == "distilled" || t == "ephemeral");
                 let old_enough = (now - m.created_at) > min_age_ms;
-                let has_signal = m.access_count > 0 || m.repetition_count > 0;
-                !dominated && old_enough && has_signal && !promoted_set.contains(&m.id)
+                !dominated && old_enough && !promoted_set.contains(&m.id)
             })
             .collect()
     }).await.unwrap_or_default();
@@ -150,6 +149,23 @@ pub(super) async fn triage_buffer(
                     debug!(id = %mem.id, ns = %ns, kind = ?d.kind, "triage: promoted buffer → working");
                     all_ids.push(mem.id.clone());
                     total_promoted += 1;
+                }
+            }
+        }
+
+        // Mark KEEP decisions with _triaged tag so buffer TTL safety net
+        // knows triage has evaluated them (prevents 48h extension).
+        for d in &result.decisions {
+            if d.action != "keep" { continue; }
+            if let Some(mem) = candidates.iter().find(|m| m.id.starts_with(&d.id)) {
+                if !mem.tags.iter().any(|t| t == "_triaged") {
+                    let db4 = db.clone();
+                    let mid = mem.id.clone();
+                    let mut tags: Vec<String> = mem.tags.to_vec();
+                    tags.push("_triaged".into());
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let _ = db4.update_fields(&mid, None, None, None, Some(&tags));
+                    }).await;
                 }
             }
         }
