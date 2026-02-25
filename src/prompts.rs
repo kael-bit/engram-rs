@@ -10,17 +10,16 @@
 
 pub const EXPAND_PROMPT: &str = r#"Given a search query for a PERSONAL knowledge base (notes, decisions, logs), generate 3-5 alternative search phrases that would help find relevant stored notes. Bridge abstraction levels: abstract→concrete, concrete→abstract.
 
-CRITICAL: The knowledge base contains BOTH Chinese and English notes. You MUST include expansions in BOTH languages regardless of query language.
+CRITICAL: If the query contains CJK characters, include expansions in BOTH the original language AND English. If the query is in English, include English expansions only.
 
 Examples:
-who am I → my identity, my identity and role, who am I, my name and positioning, identity bootstrap.
-security lessons → security lesson, security mistakes and lessons, security discipline.
-部署 → deploy procedure, 部署流程和步骤, deployment workflow, systemd 部署.
-task delegation workflow → task specifications, task delegation workflow, subagent best practices.
-GitHub配置 → GitHub SSH setup, GitHub 仓库和账号, repo migration.
+deploy → deployment procedure, deploy steps, systemd restart, CI/CD pipeline.
+auth bug → authentication fix, login issue, token validation error.
+user preferences → settings, config choices, UI defaults, what the user likes.
+project architecture → system design, module structure, how components connect.
 
 Focus on rephrasing the INTENT, not listing random related technologies.
-If the query asks about a tool/library choice, rephrase as: why/decision/migration/选择/替换.
+If the query asks about a tool/library choice, rephrase as: why/decision/migration/alternatives.
 NEVER output explanations, commentary, or bullet points with dashes.
 Even for very short queries (1-2 words), always produce at least 3 phrases."#;
 
@@ -46,7 +45,7 @@ pub fn expand_query_schema() -> serde_json::Value {
 pub const EXTRACT_SYSTEM_PROMPT: &str = r#"You are a memory extraction engine. Given a conversation or text, extract important facts, decisions, preferences, and events as discrete memory entries.
 
 Importance levels:
-- "critical": User EXPLICITLY asked to remember this ("记住", "remember this", "don't forget"). Core knowledge.
+- "critical": User EXPLICITLY asked to remember this ("remember this", "don't forget"). Core knowledge.
 - "high": Significant decisions, lessons learned, identity-defining facts.
 - "medium": Useful context, minor preferences. May fade if not reinforced.
 - "low": Background info, probably not worth keeping long-term.
@@ -56,7 +55,7 @@ Rules:
 - Each entry must be self-contained (understandable without context)
 - Prefer concise entries (1-2 concise sentences) over verbose ones
 - Write content in the same language as the input. NEVER translate — if the conversation is in Chinese, output Chinese. If mixed, use the dominant language.
-- importance MUST reflect user intent — if they say "记住" or "remember", it's "critical"
+- importance MUST reflect user intent — if they say "remember" or "don't forget", it's "critical"
 
 EXTRACT these (worth remembering):
 - Identity: who someone is, their preferences, principles, personality
@@ -72,7 +71,7 @@ SKIP these (not worth remembering):
 - Transient states: "service is running", "memory at 33%", "tests passing"
 - Debug info, log output, error messages
 - Summaries or recaps of work done (these are session logs, not memories) — BUT self-critical reflections about patterns/habits ARE worth extracting
-- Instructions from one agent to another (e.g. "also add to proxy", "fix now — add touch")
+- Instructions from one agent to another (task delegation, implementation orders)
 
 HARD REJECT — NEVER extract these as memories (they are scaffolding, not knowledge):
 - System/agent configuration: persona definitions, workflow templates, framework-injected instructions
