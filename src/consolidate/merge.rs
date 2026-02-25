@@ -8,6 +8,13 @@ use tracing::{debug, info, warn};
 
 use super::{format_ts, layer_label, merge_tags};
 
+/// Cosine threshold for near-duplicate detection and merging.
+const MERGE_SIMILARITY: f64 = 0.78;
+
+/// Cosine window for reconcile: related-but-not-duplicate pairs.
+const RECONCILE_MIN_SIM: f64 = 0.55;
+const RECONCILE_MAX_SIM: f64 = MERGE_SIMILARITY;
+
 const MERGE_SYSTEM: &str = "Merge these related memory entries into a single concise note. Rules:\n\
     - Preserve ALL specific names, tools, libraries, versions, and technical terms.\n\
     - If one entry updates or supersedes the other, keep the latest state.\n\
@@ -32,8 +39,8 @@ pub fn reconcile_pair_key(id_a: &str, id_b: &str) -> String {
 }
 
 /// Runs every consolidation cycle. Uses a moderate similarity threshold
-/// (0.55-0.78) to find topically related but not near-duplicate pairs.
-/// Near-duplicates (>0.78) are handled by merge_similar instead.
+/// (RECONCILE_MIN_SIM..MERGE_SIMILARITY) to find topically related but not near-duplicate pairs.
+/// Near-duplicates (>MERGE_SIMILARITY) are handled by merge_similar instead.
 pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
     let db2 = db.clone();
     let all = tokio::task::spawn_blocking(move || db2.get_all_with_embeddings())
@@ -157,7 +164,7 @@ async fn try_reconcile_pair(
     }
 
     let sim = cosine_similarity(a_emb, b_emb);
-    if !(0.55..=0.78).contains(&sim) { return None; }
+    if !(RECONCILE_MIN_SIM..=RECONCILE_MAX_SIM).contains(&sim) { return None; }
 
     let (older, newer) = if a.created_at <= b.created_at { (a, b) } else { (b, a) };
 
@@ -300,8 +307,8 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
         // text-embedding-3-small produces lower cosine scores for short CJK text,
         // but 0.68 was too aggressive — it merged related-but-distinct memories
         // (e.g. two v0.6.0 progress notes), destroying specific terms like "r2d2".
-        // 0.78 limits merging to near-duplicates with high content overlap.
-        let clusters = find_clusters(&ns_mems, 0.78);
+        // MERGE_SIMILARITY limits merging to near-duplicates with high content overlap.
+        let clusters = find_clusters(&ns_mems, MERGE_SIMILARITY);
 
         for cluster in clusters {
             if cluster.len() < 2 {

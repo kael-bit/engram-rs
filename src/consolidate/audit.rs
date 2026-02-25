@@ -5,6 +5,10 @@ use crate::SharedDB;
 use crate::util::truncate_chars;
 use serde::{Deserialize, Serialize};
 
+/// Similarity range for audit merge hints (below auto-merge threshold).
+const AUDIT_MERGE_MIN_SIM: f64 = 0.65;
+const AUDIT_MERGE_MAX_SIM: f64 = 0.78;
+
 // Re-exported for sandbox use
 pub(crate) const AUDIT_SYSTEM_PUB: &str = AUDIT_SYSTEM;
 
@@ -279,9 +283,9 @@ fn find_merge_candidates(db: &MemoryDB, working: &[Memory]) -> Vec<(String, Stri
     for i in 0..embeddings.len() {
         for j in (i + 1)..embeddings.len() {
             let sim = crate::ai::cosine_similarity(&embeddings[i].1, &embeddings[j].1);
-            if sim > 0.65 && sim < 0.78 {
-                // 0.65-0.78 = related but not identical (merge sweet spot)
-                // > 0.78 is handled by auto-merge in consolidation
+            if sim > AUDIT_MERGE_MIN_SIM && sim < AUDIT_MERGE_MAX_SIM {
+                // Related but not identical (merge sweet spot)
+                // Higher similarity is handled by auto-merge in consolidation
                 let a = crate::util::short_id(&embeddings[i].0);
                 let b = crate::util::short_id(&embeddings[j].0);
                 pairs.push((a.to_string(), b.to_string(), sim));

@@ -7,6 +7,13 @@ use crate::SharedDB;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+/// Repetition carries more weight than incidental recall hits.
+const REPETITION_WEIGHT: f64 = 2.5;
+
+fn reinforcement_score(mem: &Memory) -> f64 {
+    mem.access_count as f64 + mem.repetition_count as f64 * REPETITION_WEIGHT
+}
+
 mod audit;
 mod distill;
 mod facts;
@@ -402,8 +409,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
     }
 
     // Working -> Core: collect candidates for LLM gate review.
-    // Reinforcement score = access_count + repetition_count * 2.5
-    // Repetition weighs 2.5x because restating > incidental recall hit.
+    // Reinforcement score: repetition weighs more because restating > incidental recall.
     // Session notes and ephemeral tags are always blocked.
     // gate-rejected memories get escalating retry cooldowns:
     //   1st rejection (gate-rejected): retry after 24h
@@ -443,7 +449,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
             let _ = db.update_fields(&mem.id, None, None, None, Some(&cleaned));
             info!(id = %mem.id, "gate-rejected cooldown expired, retrying promotion");
         }
-        let score = mem.access_count as f64 + mem.repetition_count as f64 * 2.5;
+        let score = reinforcement_score(&mem);
         let by_score = score >= promote_threshold as f64
             && mem.importance >= promote_min_imp;
         let by_age = (now - mem.created_at) > working_age
@@ -465,7 +471,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
         // summary — promoting them individually would be redundant.
         if mem.tags.iter().any(|t| t == "distilled") { continue; }
 
-        let score = mem.access_count as f64 + mem.repetition_count as f64 * 2.5;
+        let score = reinforcement_score(&mem);
         let is_lesson = mem.tags.iter().any(|t| t == "lesson");
         let is_procedural = mem.kind == "procedural";
         let age = now - mem.created_at;
@@ -491,7 +497,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
         }
         let age = now - mem.created_at;
         if age > buffer_ttl {
-            let rescue_score = mem.access_count as f64 + mem.repetition_count as f64 * 2.5;
+            let rescue_score = reinforcement_score(&mem);
             // Rescue if: enough access/repetition, OR importance is high enough
             // that the content itself is valuable even without being recalled.
             // This saves design decisions and architecture notes from silent death.

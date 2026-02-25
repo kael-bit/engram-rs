@@ -3,6 +3,12 @@ use tracing::{debug, info, warn};
 use crate::{ai, db, error::EngramError, util::truncate_chars, AppState};
 use super::stats::{bump_extracted, persist_proxy_counters};
 
+/// Minimum importance for proxy-extracted memories to be stored.
+const PROXY_MIN_IMPORTANCE: f64 = 0.5;
+
+/// Jaccard similarity threshold for proxy dedup (more aggressive than insert dedup).
+const PROXY_DEDUP_THRESHOLD: f64 = 0.5;
+
 pub(crate) async fn extract_from_context(state: AppState, context: &str) {
     let Some(ref ai_cfg) = state.ai else {
         return;
@@ -124,14 +130,14 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
             continue;
         }
 
-        if entry.importance.unwrap_or(0.5) < 0.5 {
+        if entry.importance.unwrap_or(PROXY_MIN_IMPORTANCE) < PROXY_MIN_IMPORTANCE {
             debug!("proxy: importance filter skip ({:.2}): {}",
                 entry.importance.unwrap_or(0.0), truncate_chars(&entry.content, 60));
             continue;
         }
 
         if batch_contents.iter().any(|prev| {
-            crate::db::jaccard_similar(prev, &entry.content, 0.5)
+            crate::db::jaccard_similar(prev, &entry.content, PROXY_DEDUP_THRESHOLD)
         }) {
             info!("proxy: dedup/intra-batch skip: {}", truncate_chars(&entry.content, 60));
             continue;
@@ -144,7 +150,7 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
                     let db = state.db.clone();
                     let c = entry.content.clone();
                     tokio::task::spawn_blocking(move || {
-                        if db.is_near_duplicate_with(&c, 0.5) { Some(String::new()) } else { None }
+                        if db.is_near_duplicate_with(&c, PROXY_DEDUP_THRESHOLD) { Some(String::new()) } else { None }
                     }).await.unwrap_or(None)
                 }
             };

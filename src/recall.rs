@@ -14,6 +14,9 @@ const WEIGHT_RELEVANCE: f64 = 0.6;
 const WEIGHT_IMPORTANCE: f64 = 0.2;
 const WEIGHT_RECENCY: f64 = 0.2;
 
+/// Default minimum cosine similarity to include a result.
+const DEFAULT_SIM_FLOOR: f64 = 0.3;
+
 /// Detect short CJK queries where cosine similarity is unreliable.
 ///
 /// `text-embedding-3-small` produces uniformly high cosine scores for short
@@ -274,7 +277,7 @@ pub fn recall(
             } else {
                 "semantic+fts".to_string()
             };
-            let sim_floor = req.min_score.unwrap_or(0.3);
+            let sim_floor = req.min_score.unwrap_or(DEFAULT_SIM_FLOOR);
             for (id, sim) in &semantic_results {
                 if *sim < sim_floor {
                     continue;
