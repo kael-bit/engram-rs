@@ -90,7 +90,8 @@ impl<'a> RuleChecker<'a> {
                 if !self.memories.contains_key(id) {
                     return bad(op, "target not found");
                 }
-                good(op, "ok")
+                // Audit cannot delete — only demote. Lifecycle handles deletion.
+                bad(op, "audit cannot delete memories — use demote instead, let lifecycle handle expiry")
             }
             AuditOp::Demote { id, to } => {
                 if let Some(mem) = self.memories.get(id) {

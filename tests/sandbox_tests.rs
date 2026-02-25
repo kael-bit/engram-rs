@@ -46,26 +46,19 @@ fn delete_not_found_is_bad() {
 }
 
 #[test]
-fn delete_any_existing_memory_is_good() {
-    // With simplified checker, any existing memory deletion passes
+fn delete_any_existing_memory_is_bad() {
+    // Audit has no delete permission at all — only demote. Lifecycle handles deletion.
     let core = [mem("id-001", Layer::Core, vec!["identity"], "I am atlas")];
     let working = [mem("id-002", Layer::Working, vec!["lesson"], "never force-push")];
     let checker = RuleChecker::new(&core, &working);
 
     let g1 = checker.check(&AuditOp::Delete { id: "id-001".into() });
-    assert_eq!(g1.grade, Grade::Good);
+    assert_eq!(g1.grade, Grade::Bad);
+    assert!(g1.reason.contains("demote"));
 
     let g2 = checker.check(&AuditOp::Delete { id: "id-002".into() });
-    assert_eq!(g2.grade, Grade::Good);
-}
-
-#[test]
-fn delete_normal_working_memory_is_good() {
-    let core: [Memory; 0] = [];
-    let working = [mem("id-008", Layer::Working, vec![], "ephemeral note")];
-    let checker = RuleChecker::new(&core, &working);
-    let grade = checker.check(&AuditOp::Delete { id: "id-008".into() });
-    assert_eq!(grade.grade, Grade::Good);
+    assert_eq!(g2.grade, Grade::Bad);
+    assert!(g2.reason.contains("demote"));
 }
 
 // ── Demote ───────────────────────────────────
@@ -279,9 +272,9 @@ fn check_dispatches_to_correct_method() {
     let working = [mem("disp-001", Layer::Working, vec![], "normal memory")];
     let checker = RuleChecker::new(&core, &working);
 
-    // Delete
+    // Delete Working → Bad (lifecycle: must demote instead)
     let g = checker.check(&AuditOp::Delete { id: "disp-001".into() });
-    assert_eq!(g.grade, Grade::Good);
+    assert_eq!(g.grade, Grade::Bad);
 
     // Promote (Working → Core)
     let g = checker.check(&AuditOp::Promote { id: "disp-001".into(), to: 3 });

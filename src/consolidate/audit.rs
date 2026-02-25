@@ -61,21 +61,22 @@ Many lessons are situational and become irrelevant as architecture changes.
 Read the actual content and ask: "Is this still true? Has this been tested?"
 
 ## What does NOT belong in Core
-- Changelogs listing WHAT was done → demote or delete
+- Changelogs listing WHAT was done → demote
 - Implementation details already in code → demote
-- Session logs and progress reports → delete
-- Plans/TODOs that are stale → delete
+- Session logs and progress reports → demote
+- Plans/TODOs that are stale → demote
 - Config snapshots that go stale → demote
-- Memories about systems/features that were removed or replaced → delete
+- Memories about systems/features that were removed or replaced → demote
 
 ## Judgment Guidelines
 
 - **Superseded memories:** if a newer memory in the same cluster covers the same knowledge, the older one should be removed or merged.
-- **Obsolete memories:** if content describes a mechanism that no longer exists (e.g. old audit format, removed feature), delete it regardless of access count. High ac on obsolete content just means it WAS popular, not that it's still valid.
+- **Obsolete memories:** if content describes a mechanism that no longer exists (e.g. old audit format, removed feature), demote it. High ac on obsolete content just means it WAS popular, not that it's still valid.
 - **ac=0 + old age** = possibly forgotten. Judge if still relevant based on content, not just metrics.
 - NEVER propose demoting a memory to the same layer it is already on. Check the layer metadata. L2→L2 or L3→L3 is a no-op bug.
 - When memories in a cluster overlap heavily, prefer MERGE over DELETE to preserve information.
 - Full content is shown — read it carefully before deciding.
+- **Lifecycle rule:** Core → demote to Working → demote to Buffer → natural expiry. You CANNOT delete memories. Use demote to move them down one layer. Buffer memories expire naturally via TTL.
 - Propose no operations if nothing needs changing."#;
 
 /// Tool response: a list of audit operations proposed by the LLM.
@@ -116,12 +117,12 @@ pub fn audit_tool_schema() -> serde_json::Value {
                     "properties": {
                         "op": {
                             "type": "string",
-                            "enum": ["delete", "demote", "merge", "promote"],
+                            "enum": ["demote", "merge", "promote"],
                             "description": "Operation type"
                         },
                         "id": {
                             "type": "string",
-                            "description": "8-char short ID of the target memory (for delete/demote/promote)"
+                            "description": "8-char short ID of the target memory (for demote/promote)"
                         },
                         "to": {
                             "type": "integer",
