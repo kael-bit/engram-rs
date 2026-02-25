@@ -221,17 +221,14 @@ curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 How:
 ```bash
 curl -sf -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
   -d '{"content": "...", "tags": ["topic"]}'
 
 # Lessons with trigger
 curl -sf -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
   -d '{"content": "LESSON: never force-push to main", "tags": ["lesson","trigger:git-push"]}'
 
 # Procedures (never decay)
 curl -sf -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
   -d '{"content": "deploy: test → build → stop → cp → start", "tags": ["deploy"], "kind": "procedural"}'
 ```
 
@@ -253,7 +250,6 @@ Key parameters:
 How:
 ```bash
 curl -sf -X POST http://localhost:3917/recall \
-  -H 'Content-Type: application/json' \
   -d '{"query": "how do we deploy"}'
 ```
 
@@ -297,12 +293,10 @@ curl -s http://localhost:3917/health
 
 # Store a test memory
 curl -sf -X POST http://localhost:3917/memories \
-  -H "Content-Type: application/json" \
   -d '{"content": "Test memory from setup", "tags": ["test"]}'
 
 # Recall it
 curl -sf -X POST http://localhost:3917/recall \
-  -H "Content-Type: application/json" \
   -d '{"query": "test setup"}'
 ```
 

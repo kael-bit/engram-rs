@@ -6,6 +6,7 @@ use serde::Deserialize;
 use tracing::debug;
 
 use crate::error::EngramError;
+use crate::extract::LenientJson;
 use crate::{ai, consolidate, db, AppState};
 use super::{blocking, get_namespace, spawn_embed_batch};
 
@@ -144,7 +145,7 @@ pub(super) struct ExtractResponse {
 
 pub(super) async fn do_extract(
     State(state): State<AppState>,
-    Json(req): Json<ExtractRequest>,
+    LenientJson(req): LenientJson<ExtractRequest>,
 ) -> Result<Json<ExtractResponse>, EngramError> {
     let cfg = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
 
@@ -229,7 +230,7 @@ pub(super) async fn do_export(
 pub(super) async fn do_import(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-    Json(body): Json<serde_json::Value>,
+    LenientJson(body): LenientJson<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let ns_override = get_namespace(&headers);
     let memories_val = body

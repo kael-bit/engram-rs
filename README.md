@@ -122,7 +122,6 @@ Three kinds of memory with different decay behavior:
 
 ```bash
 curl -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
   -d '{"content": "deploy with: cargo build --release && scp ...", "kind": "procedural"}'
 ```
 
@@ -133,7 +132,6 @@ engram extracts structured facts as (subject, predicate, object) triples from me
 ```bash
 # Store facts explicitly
 curl -X POST http://localhost:3917/facts \
-  -H 'Content-Type: application/json' \
   -d '{"facts": [{"subject": "alice", "predicate": "role", "object": "engineer"}]}'
 
 # Query by entity
@@ -141,7 +139,6 @@ curl 'http://localhost:3917/facts?entity=alice'
 
 # When a contradicting fact is inserted, the old one is auto-superseded
 curl -X POST http://localhost:3917/facts \
-  -H 'Content-Type: application/json' \
   -d '{"facts": [{"subject": "alice", "predicate": "role", "object": "manager"}]}'
 # Response includes {"resolved": 1} — the old "engineer" fact is now timestamped as superseded
 
@@ -169,17 +166,14 @@ Results are deduplicated across all search modes. When both semantic and keyword
 ```bash
 # Basic recall (fast — embedding lookup + local scoring)
 curl -X POST http://localhost:3917/recall \
-  -H 'Content-Type: application/json' \
   -d '{"query": "deploy process", "limit": 5}'
 
 # With LLM reranking (slower — adds ~2-4s for an LLM call, better ordering)
 curl -X POST http://localhost:3917/recall \
-  -H 'Content-Type: application/json' \
   -d '{"query": "deploy process", "limit": 5, "rerank": true}'
 
 # With query expansion (slower — adds ~1-2s, helps vague/short queries)
 curl -X POST http://localhost:3917/recall \
-  -H 'Content-Type: application/json' \
   -d '{"query": "部署", "limit": 5, "expand": true}'
 ```
 
@@ -257,7 +251,6 @@ Multi-agent support — each agent gets its own memory space:
 ```bash
 curl -X POST http://localhost:3917/memories \
   -H 'X-Namespace: agent-alpha' \
-  -H 'Content-Type: application/json' \
   -d '{"content": "agent-alpha private context"}'
 ```
 
@@ -268,7 +261,6 @@ Pre-action safety recall. Tag memories with `trigger:action-name`, then query be
 ```bash
 # Store a lesson
 curl -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
   -d '{"content": "never force-push to main", "tags": ["trigger:git-push"]}'
 
 # Before pushing, check

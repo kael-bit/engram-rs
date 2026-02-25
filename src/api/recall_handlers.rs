@@ -6,6 +6,7 @@ use serde::Deserialize;
 use tracing::{debug, warn};
 
 use crate::error::EngramError;
+use crate::extract::LenientJson;
 use crate::{ai, db, recall, AppState};
 use super::{blocking, get_namespace};
 
@@ -656,7 +657,7 @@ pub(super) async fn do_resume(
 pub(super) async fn do_recall(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-    Json(mut req): Json<recall::RecallRequest>,
+    LenientJson(mut req): LenientJson<recall::RecallRequest>,
 ) -> Result<Json<recall::RecallResponse>, EngramError> {
     if req.query.is_empty() {
         return Err(EngramError::EmptyQuery);

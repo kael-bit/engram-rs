@@ -5,6 +5,7 @@ use axum::Json;
 use serde::Deserialize;
 
 use crate::error::EngramError;
+use crate::extract::LenientJson;
 use crate::{db, AppState};
 use super::{blocking, get_namespace};
 
@@ -23,7 +24,7 @@ pub(super) struct CreateFactsResponse {
 pub(super) async fn create_facts(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-    Json(body): Json<CreateFactsBody>,
+    LenientJson(body): LenientJson<CreateFactsBody>,
 ) -> Result<Json<CreateFactsResponse>, EngramError> {
     let ns = get_namespace(&headers).unwrap_or_else(|| "default".into());
 

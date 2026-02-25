@@ -5,6 +5,7 @@ pub mod api;
 pub mod consolidate;
 pub mod db;
 pub mod error;
+pub mod extract;
 pub mod proxy;
 pub mod recall;
 pub mod util;

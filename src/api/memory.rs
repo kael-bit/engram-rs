@@ -3,6 +3,8 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
+
+use crate::extract::LenientJson;
 use serde::Deserialize;
 use tracing::warn;
 
@@ -13,7 +15,7 @@ use super::{blocking, get_namespace, spawn_embed, spawn_embed_batch};
 pub(super) async fn create_memory(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-    Json(mut input): Json<db::MemoryInput>,
+    LenientJson(mut input): LenientJson<db::MemoryInput>,
 ) -> Result<(StatusCode, Json<db::Memory>), EngramError> {
     if input.namespace.is_none() {
         input.namespace = get_namespace(&headers);
@@ -236,7 +238,7 @@ pub(super) struct UpdateBody {
 pub(super) async fn update_memory(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(body): Json<UpdateBody>,
+    LenientJson(body): LenientJson<UpdateBody>,
 ) -> Result<Json<db::Memory>, EngramError> {
     let db = state.db.clone();
     let mem = blocking(move || {
@@ -284,7 +286,7 @@ pub(super) struct BatchDeleteBody {
 
 pub(super) async fn batch_delete(
     State(state): State<AppState>,
-    Json(body): Json<BatchDeleteBody>,
+    LenientJson(body): LenientJson<BatchDeleteBody>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
     let deleted = blocking(move || {
