@@ -262,7 +262,48 @@ pub async fn consolidate(
     result
 }
 
+/// Strip stale process tags that should not persist:
+/// - `gate-rejected` on Working memories where `last_accessed` is > 24 h ago
+/// - `promotion` on anything already in Working or Core
+pub(crate) fn cleanup_stale_tags(db: &MemoryDB) {
+    let now = crate::db::now_ms();
+    let stale_cutoff = 24 * 3600 * 1000_i64;
+    let mut cleaned = 0_usize;
+
+    for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_default() {
+        if mem.tags.iter().any(|t| t == "gate-rejected")
+            && (now - mem.last_accessed) > stale_cutoff
+        {
+            let new_tags: Vec<String> = mem.tags.iter()
+                .filter(|t| t.as_str() != "gate-rejected")
+                .cloned().collect();
+            if db.update_fields(&mem.id, None, None, None, Some(&new_tags)).is_ok() {
+                cleaned += 1;
+            }
+        }
+    }
+
+    for layer in [Layer::Working, Layer::Core] {
+        for mem in db.list_by_layer_meta(layer, 10000, 0).unwrap_or_default() {
+            if mem.tags.iter().any(|t| t == "promotion") {
+                let new_tags: Vec<String> = mem.tags.iter()
+                    .filter(|t| t.as_str() != "promotion")
+                    .cloned().collect();
+                if db.update_fields(&mem.id, None, None, None, Some(&new_tags)).is_ok() {
+                    cleaned += 1;
+                }
+            }
+        }
+    }
+
+    if cleaned > 0 {
+        info!(cleaned, "stale tag cleanup");
+    }
+}
+
 pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> ConsolidateResponse {
+    cleanup_stale_tags(db);
+
     let promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
     let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
     let decay_threshold = req.and_then(|r| r.decay_drop_threshold).unwrap_or(0.01);
