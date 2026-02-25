@@ -418,7 +418,7 @@ fn format_sandbox_prompt(core: &[Memory], working: &[Memory]) -> String {
             age_d
         };
         let preview = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, kind={}, tags=[{}]) {}\n",
+        prompt.push_str(&format!("- [{}] [Layer: Core (3)] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, kind={}, tags=[{}]) {}\n",
             crate::util::short_id(&m.id), m.importance,
             m.access_count, age_d, mod_d, m.kind, tags, preview));
     }
@@ -432,7 +432,7 @@ fn format_sandbox_prompt(core: &[Memory], working: &[Memory]) -> String {
             age_d
         };
         let preview = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, kind={}, tags=[{}]) {}\n",
+        prompt.push_str(&format!("- [{}] [Layer: Working (2)] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, kind={}, tags=[{}]) {}\n",
             crate::util::short_id(&m.id), m.importance,
             m.access_count, age_d, mod_d, m.kind, tags, preview));
     }
