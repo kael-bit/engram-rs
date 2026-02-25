@@ -265,34 +265,42 @@ pub(super) struct TrashQuery {
 
 pub(super) async fn trash_list(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<TrashQuery>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let limit = q.limit.unwrap_or(100);
     let offset = q.offset.unwrap_or(0);
+    let ns = get_namespace(&headers);
     let db = state.db.clone();
     let total = {
         let db2 = db.clone();
-        blocking(move || db2.trash_count()).await??
+        let ns2 = ns.clone();
+        blocking(move || db2.trash_count(ns2.as_deref())).await??
     };
-    let entries = blocking(move || db.trash_list(limit, offset)).await??;
+    let ns2 = ns.clone();
+    let entries = blocking(move || db.trash_list(limit, offset, ns2.as_deref())).await??;
     let count = entries.len();
     Ok(Json(serde_json::json!({ "total": total, "count": count, "items": entries })))
 }
 
 pub(super) async fn trash_restore(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
-    let restored = blocking(move || db.trash_restore(&id)).await??;
+    let ns = get_namespace(&headers);
+    let restored = blocking(move || db.trash_restore(&id, ns.as_deref())).await??;
     Ok(Json(serde_json::json!({ "restored": restored })))
 }
 
 pub(super) async fn trash_purge(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
-    let purged = blocking(move || db.trash_purge()).await??;
+    let ns = get_namespace(&headers);
+    let purged = blocking(move || db.trash_purge(ns.as_deref())).await??;
     Ok(Json(serde_json::json!({ "purged": purged })))
 }
 

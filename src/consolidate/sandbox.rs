@@ -101,7 +101,7 @@ impl<'a> RuleChecker<'a> {
         {
             return OpGrade {
                 op: op.clone(), grade: Grade::Bad,
-                reason: format!("deleting protected memory (tags: {:?}, kind: {:?})", mem.tags, mem.kind),
+                reason: "protected tag: deletion of lesson/audit memories requires manual review".into(),
             };
         }
 
@@ -143,11 +143,11 @@ impl<'a> RuleChecker<'a> {
             return OpGrade { op: op.clone(), grade: Grade::Bad, reason: "target not found".into() };
         };
 
-        // Rule: no-op — already at target layer
+        // Rule: same-layer or upward demote is a no-op
         if mem.layer as u8 <= to {
             return OpGrade {
                 op: op.clone(), grade: Grade::Bad,
-                reason: format!("memory already at L{}, can't demote to L{}", mem.layer as u8, to),
+                reason: format!("same-layer or upward demote is a no-op (L{} → L{})", mem.layer as u8, to),
             };
         }
 
@@ -218,7 +218,7 @@ impl<'a> RuleChecker<'a> {
             };
         }
 
-        // Rule: promoting to Core with ac=0 is suspicious UNLESS recently created with lesson/constraint content
+        // Rule: promoting to Core with ac=0 is suspicious UNLESS recently created OR has lesson/constraint content
         if to == 3 && mem.access_count == 0 {
             let age_h = (self.now_ms - mem.created_at) as f64 / 3_600_000.0;
             let is_lesson_content = mem.tags.iter().any(|t| t == "lesson" || t == "constraint")
@@ -226,7 +226,7 @@ impl<'a> RuleChecker<'a> {
                 || mem.content.to_lowercase().contains("教训")
                 || mem.content.to_lowercase().contains("原则")
                 || mem.content.to_lowercase().contains("严禁");
-            if !(age_h < 48.0 && is_lesson_content) {
+            if !(age_h < 48.0 || is_lesson_content) {
                 return OpGrade {
                     op: op.clone(), grade: Grade::Marginal,
                     reason: "promoting to Core with zero accesses — unproven value".into(),

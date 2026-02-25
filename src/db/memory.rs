@@ -299,13 +299,14 @@ impl MemoryDB {
 
     // -- Trash (soft-delete recovery) --
 
-    pub fn trash_list(&self, limit: usize, offset: usize) -> Result<Vec<TrashEntry>, EngramError> {
+    pub fn trash_list(&self, limit: usize, offset: usize, namespace: Option<&str>) -> Result<Vec<TrashEntry>, EngramError> {
         let conn = self.conn()?;
+        let ns = namespace.unwrap_or("default");
         let mut stmt = conn.prepare(
             "SELECT id, content, layer, importance, created_at, deleted_at, tags, namespace, source, kind \
-             FROM trash ORDER BY deleted_at DESC LIMIT ?1 OFFSET ?2"
+             FROM trash WHERE namespace = ?3 ORDER BY deleted_at DESC LIMIT ?1 OFFSET ?2"
         )?;
-        let rows = stmt.query_map(params![limit as i64, offset as i64], |row| {
+        let rows = stmt.query_map(params![limit as i64, offset as i64, ns], |row| {
             let tags_json: String = row.get(6)?;
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
             Ok(TrashEntry {
@@ -324,15 +325,15 @@ impl MemoryDB {
         Ok(rows)
     }
 
-    pub fn trash_restore(&self, id: &str) -> Result<bool, EngramError> {
+    pub fn trash_restore(&self, id: &str, namespace: Option<&str>) -> Result<bool, EngramError> {
         let conn = self.conn()?;
-        // Read from trash
+        let ns = namespace.unwrap_or("default");
         let mut stmt = conn.prepare(
-            "SELECT id, content, layer, importance, created_at, tags, namespace, source, kind FROM trash WHERE id = ?1"
+            "SELECT id, content, layer, importance, created_at, tags, namespace, source, kind FROM trash WHERE id = ?1 AND namespace = ?2"
         )?;
         type TrashRow = (String, String, i64, f64, i64, String, String, String, String);
         let entry: Option<TrashRow> =
-            stmt.query_row(params![id], |row| {
+            stmt.query_row(params![id, ns], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
                     row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?))
             }).ok();
@@ -356,13 +357,15 @@ impl MemoryDB {
         }
     }
 
-    pub fn trash_purge(&self) -> Result<usize, EngramError> {
-        let n = self.conn()?.execute("DELETE FROM trash", [])?;
+    pub fn trash_purge(&self, namespace: Option<&str>) -> Result<usize, EngramError> {
+        let ns = namespace.unwrap_or("default");
+        let n = self.conn()?.execute("DELETE FROM trash WHERE namespace = ?1", params![ns])?;
         Ok(n)
     }
 
-    pub fn trash_count(&self) -> Result<usize, EngramError> {
-        let n: i64 = self.conn()?.query_row("SELECT COUNT(*) FROM trash", [], |r| r.get(0))?;
+    pub fn trash_count(&self, namespace: Option<&str>) -> Result<usize, EngramError> {
+        let ns = namespace.unwrap_or("default");
+        let n: i64 = self.conn()?.query_row("SELECT COUNT(*) FROM trash WHERE namespace = ?1", params![ns], |r| r.get(0))?;
         Ok(n as usize)
     }
 

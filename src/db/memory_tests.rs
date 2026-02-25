@@ -848,24 +848,61 @@ fn soft_delete_and_restore() {
     // Delete → goes to trash
     assert!(db.delete(&id).unwrap());
     assert!(db.get(&id).unwrap().is_none());
-    assert_eq!(db.trash_count().unwrap(), 1);
+    assert_eq!(db.trash_count(None).unwrap(), 1);
 
-    let trash = db.trash_list(10, 0).unwrap();
+    let trash = db.trash_list(10, 0, None).unwrap();
     assert_eq!(trash.len(), 1);
     assert_eq!(trash[0].content, "important fact");
     assert!(trash[0].importance >= 0.8);
 
     // Restore → back in memories
-    assert!(db.trash_restore(&id).unwrap());
+    assert!(db.trash_restore(&id, None).unwrap());
     assert!(db.get(&id).unwrap().is_some());
-    assert_eq!(db.trash_count().unwrap(), 0);
+    assert_eq!(db.trash_count(None).unwrap(), 0);
 
     // Purge
     db.delete(&id).unwrap();
-    assert_eq!(db.trash_count().unwrap(), 1);
-    let purged = db.trash_purge().unwrap();
+    assert_eq!(db.trash_count(None).unwrap(), 1);
+    let purged = db.trash_purge(None).unwrap();
     assert_eq!(purged, 1);
-    assert_eq!(db.trash_count().unwrap(), 0);
+    assert_eq!(db.trash_count(None).unwrap(), 0);
+}
+
+#[test]
+fn trash_namespace_isolation() {
+    let db = test_db();
+    let m1 = db.insert(MemoryInput::new("alpha ns item").namespace("alpha")).unwrap();
+    let m2 = db.insert(MemoryInput::new("beta ns item").namespace("beta")).unwrap();
+
+    db.delete(&m1.id).unwrap();
+    db.delete(&m2.id).unwrap();
+
+    // Each namespace only sees its own trash
+    assert_eq!(db.trash_count(Some("alpha")).unwrap(), 1);
+    assert_eq!(db.trash_count(Some("beta")).unwrap(), 1);
+
+    let alpha_trash = db.trash_list(10, 0, Some("alpha")).unwrap();
+    assert_eq!(alpha_trash.len(), 1);
+    assert_eq!(alpha_trash[0].content, "alpha ns item");
+
+    let beta_trash = db.trash_list(10, 0, Some("beta")).unwrap();
+    assert_eq!(beta_trash.len(), 1);
+    assert_eq!(beta_trash[0].content, "beta ns item");
+
+    // Cross-namespace restore should fail
+    assert!(!db.trash_restore(&m1.id, Some("beta")).unwrap());
+    // Same-namespace restore works
+    assert!(db.trash_restore(&m1.id, Some("alpha")).unwrap());
+    assert_eq!(db.trash_count(Some("alpha")).unwrap(), 0);
+    assert_eq!(db.trash_count(Some("beta")).unwrap(), 1);
+
+    // Purge only affects the target namespace
+    db.delete(&m1.id).unwrap();
+    assert_eq!(db.trash_count(Some("alpha")).unwrap(), 1);
+    let purged = db.trash_purge(Some("alpha")).unwrap();
+    assert_eq!(purged, 1);
+    assert_eq!(db.trash_count(Some("alpha")).unwrap(), 0);
+    assert_eq!(db.trash_count(Some("beta")).unwrap(), 1);
 }
 
 #[test]
