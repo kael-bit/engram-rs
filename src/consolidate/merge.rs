@@ -155,6 +155,13 @@ async fn try_reconcile_pair(
 
     let one_hour_ms: i64 = 3600 * 1000;
     if (newer.created_at - older.created_at) < one_hour_ms { return None; }
+
+    // Never let a lower-layer memory absorb a higher-layer one.
+    // e.g. Working(L2) must not supersede Core(L3).
+    if newer.layer < older.layer {
+        return None;
+    }
+
     if older.namespace != newer.namespace {
         // Allow project→default merging: if one is "default", the merge result
         // stays in "default". Never pull default memories into a project namespace.

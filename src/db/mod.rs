@@ -40,7 +40,7 @@ const MAX_TAG_LEN: usize = 32;
 
 
 /// Buffer → Working → Core, each with different decay and recall bonus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "u8", into = "u8")]
 pub enum Layer {
     Buffer = 1,

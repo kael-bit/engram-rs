@@ -536,12 +536,16 @@ pub(super) async fn do_resume(
     // Fit memories into budget. When total exceeds budget, keep the most
     // important items at full length and compress the rest to one-line
     // summaries rather than truncating everything proportionally.
+    // Cost calculation helper — use char count, not byte length,
+    // so CJK content doesn't consume 3x the budget.
+    let char_cost = |s: &str| -> usize { s.chars().count() };
+
     let fit_section = |mems: &[db::Memory], budget: &mut usize, compact: bool| -> Vec<db::Memory> {
         if *budget == 0 || mems.is_empty() { return vec![]; }
 
         let overhead = if compact { 20usize } else { 250 };
         let total_cost: usize = mems.iter()
-            .map(|m| m.content.len() + if compact { m.tags.iter().map(|t| t.len() + 3).sum::<usize>() } else { 0 } + overhead)
+            .map(|m| char_cost(&m.content) + if compact { m.tags.iter().map(|t| char_cost(t) + 3).sum::<usize>() } else { 0 } + overhead)
             .sum();
 
         if total_cost <= *budget {
@@ -550,18 +554,18 @@ pub(super) async fn do_resume(
         }
 
         // Budget is tight. Strategy: keep as many items at full length as
-        // possible, then compress remaining to one-line (~60 char) summaries.
-        let summary_len = 60;
+        // possible, then compress remaining to one-line (~120 char) summaries.
+        let summary_len = 120;
         let mut result = Vec::new();
         let mut spent = 0usize;
 
         for (i, m) in mems.iter().enumerate() {
-            let tag_cost = if compact { m.tags.iter().map(|t| t.len() + 3).sum::<usize>() } else { 0 };
-            let full_cost = m.content.len() + tag_cost + overhead;
+            let tag_cost = if compact { m.tags.iter().map(|t| char_cost(t) + 3).sum::<usize>() } else { 0 };
+            let full_cost = char_cost(&m.content) + tag_cost + overhead;
 
             // How much would remaining items cost if compressed?
             let remaining_compressed: usize = mems[i+1..].iter()
-                .map(|r| summary_len + if compact { r.tags.iter().map(|t| t.len() + 3).sum::<usize>() } else { 0 } + overhead)
+                .map(|r| summary_len + if compact { r.tags.iter().map(|t| char_cost(t) + 3).sum::<usize>() } else { 0 } + overhead)
                 .sum();
 
             if spent + full_cost + remaining_compressed <= *budget {
@@ -572,13 +576,18 @@ pub(super) async fn do_resume(
                 // Compress this and all remaining items
                 let mut item = m.clone();
                 let first_line = m.content.lines().next().unwrap_or(&m.content);
-                if first_line.len() > summary_len {
-                    let boundary = first_line.floor_char_boundary(summary_len.saturating_sub(1));
+                let char_count: usize = first_line.chars().count();
+                if char_count > summary_len {
+                    // Truncate by character count, not byte length (CJK-safe)
+                    let boundary: usize = first_line.char_indices()
+                        .nth(summary_len)
+                        .map(|(i, _)| i)
+                        .unwrap_or(first_line.len());
                     item.content = format!("{}…", &first_line[..boundary]);
                 } else if first_line.len() < m.content.len() {
                     item.content = format!("{}…", first_line);
                 }
-                let cost = item.content.len() + tag_cost + overhead;
+                let cost = char_cost(&item.content) + tag_cost + overhead;
                 if spent + cost > *budget && !result.is_empty() { break; }
                 spent += cost;
                 result.push(item);
@@ -601,7 +610,7 @@ pub(super) async fn do_resume(
     // check for a pre-computed summary from consolidation.
     let core_overhead = if compact { 20usize } else { 250 };
     let core_total_cost: usize = core.iter()
-        .map(|m| m.content.len() + core_overhead)
+        .map(|m| char_cost(&m.content) + core_overhead)
         .sum();
 
     // Can we use LLM compression?
@@ -614,8 +623,8 @@ pub(super) async fn do_resume(
             .await
             .unwrap_or(None);
         if let Some(ref s) = summary {
-            if s.len() + core_overhead < core_budget {
-                core_budget -= s.len() + core_overhead;
+            if char_cost(s) + core_overhead < core_budget {
+                core_budget -= char_cost(s) + core_overhead;
                 (vec![], true, None)
             } else if let Some(ai) = ai_cfg {
                 // Summary doesn't fit either — compress via LLM
