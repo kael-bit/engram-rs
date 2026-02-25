@@ -339,6 +339,17 @@ pub async fn expand_query(cfg: &AiConfig, query: &str) -> (Vec<String>, Option<T
 }
 
 
+/// Map importance label from LLM to numeric value.
+fn importance_from_label(label: &str) -> f64 {
+    match label.to_lowercase().as_str() {
+        "critical" => 0.9,
+        "high" => 0.7,
+        "medium" => 0.5,
+        "low" => 0.3,
+        _ => 0.5,
+    }
+}
+
 /// Extract structured memories from raw text using an LLM.
 pub async fn extract_memories(
     cfg: &AiConfig,
@@ -349,9 +360,24 @@ pub async fn extract_memories(
     let schema = prompts::extract_memories_schema();
 
     #[derive(serde::Deserialize)]
+    struct RawMemory {
+        content: String,
+        #[serde(default)]
+        importance: Option<String>,
+        #[serde(default)]
+        tags: Option<Vec<String>>,
+        #[serde(default)]
+        layer: Option<u8>,
+        #[serde(default)]
+        facts: Option<Vec<crate::db::FactInput>>,
+        #[serde(default)]
+        kind: Option<String>,
+    }
+
+    #[derive(serde::Deserialize)]
     struct ExtractResult {
         #[serde(default)]
-        memories: Vec<ExtractedMemory>,
+        memories: Vec<RawMemory>,
     }
 
     let result = llm_tool_call::<ExtractResult>(
@@ -361,8 +387,20 @@ pub async fn extract_memories(
         schema,
     ).await?;
 
-    debug!(count = result.value.memories.len(), "extracted memories from text");
-    Ok(result.value.memories)
+    let memories: Vec<ExtractedMemory> = result.value.memories.into_iter().map(|raw| {
+        let imp = raw.importance.as_deref().map_or(0.5, importance_from_label);
+        ExtractedMemory {
+            content: raw.content,
+            importance: Some(imp),
+            tags: raw.tags,
+            layer: raw.layer,
+            facts: raw.facts,
+            kind: raw.kind,
+        }
+    }).collect();
+
+    debug!(count = memories.len(), "extracted memories from text");
+    Ok(memories)
 }
 
 /// Extract a JSON array from LLM output that may be wrapped in markdown code blocks.

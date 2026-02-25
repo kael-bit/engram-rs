@@ -69,13 +69,13 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
     // Working gets chunked if needed
     if all.len() <= max_per_batch {
         // single batch
-        let prompt = format_audit_prompt(&core, &working, &merge_hints);
+        let (prompt, alias_map) = format_audit_prompt(&core, &working, &merge_hints);
         let tcr = call_audit_tool(cfg, &prompt).await?;
         if let Some(ref u) = tcr.usage {
             let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
             let _ = db.log_llm_call("audit", &tcr.model, u.prompt_tokens, u.completion_tokens, cached, tcr.duration_ms);
         }
-        let ops = resolve_audit_ops(tcr.value.operations, &core, &working);
+        let ops = resolve_audit_ops(tcr.value.operations, &alias_map);
         let db3 = db.clone();
         let applied = tokio::task::spawn_blocking(move || {
             let mut r = AuditResult::default();
@@ -90,15 +90,22 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
         combined.ops.extend(applied.ops);
     } else {
         // chunked: Core summary + Working in batches
-        let core_summary = format_layer_summary("Core", &core);
+        let mut core_alias_map = std::collections::HashMap::new();
+        let mut core_next_idx = 0usize;
+        let core_summary = format_layer_summary("Core", &core, &mut core_alias_map, &mut core_next_idx);
         for chunk in working.chunks(max_per_batch.saturating_sub(core.len())) {
+            let mut alias_map = core_alias_map.clone();
+            let mut idx = core_next_idx;
             let mut prompt = core_summary.clone();
             prompt.push_str(&format!("\n## Working Layer (batch of {})\n", chunk.len()));
             for m in chunk {
+                let alias = index_to_alias(idx);
+                alias_map.insert(alias.clone(), m.id.clone());
+                idx += 1;
                 let tags = m.tags.join(",");
                 let preview: String = truncate_chars(&m.content, 200);
                 prompt.push_str(&format!("- [{}] [Layer: Working (2)] (imp={:.1}, acc={}, tags=[{}]) {}\n",
-                    crate::util::short_id(&m.id), m.importance, m.access_count, tags, preview));
+                    alias, m.importance, m.access_count, tags, preview));
             }
 
             let tcr = call_audit_tool(cfg, &prompt).await?;
@@ -106,9 +113,8 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
                 let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
                 let _ = db.log_llm_call("audit", &tcr.model, u.prompt_tokens, u.completion_tokens, cached, tcr.duration_ms);
             }
-            // for chunked mode, resolve against core + this chunk only
-            let chunk_vec: Vec<Memory> = chunk.to_vec();
-            let ops = resolve_audit_ops(tcr.value.operations, &core, &chunk_vec);
+            // for chunked mode, resolve against the alias map for this batch
+            let ops = resolve_audit_ops(tcr.value.operations, &alias_map);
             let db4 = db.clone();
             let applied = tokio::task::spawn_blocking(move || {
                 let mut r = AuditResult::default();
@@ -137,11 +143,30 @@ async fn call_audit_tool(cfg: &AiConfig, prompt: &str) -> Result<ai::ToolCallRes
     ).await
 }
 
-fn format_audit_prompt(core: &[Memory], working: &[Memory], merge_hints: &[(String, String, f64)]) -> String {
+/// Generate a sequential alias: 0→A, 1→B, ..., 25→Z, 26→AA, 27→AB, ...
+pub(crate) fn index_to_alias(i: usize) -> String {
+    if i < 26 {
+        String::from((b'A' + i as u8) as char)
+    } else {
+        let first = (b'A' + ((i - 26) / 26) as u8) as char;
+        let second = (b'A' + ((i - 26) % 26) as u8) as char;
+        format!("{}{}", first, second)
+    }
+}
+
+fn format_audit_prompt(core: &[Memory], working: &[Memory], merge_hints: &[(String, String, f64)]) -> (String, std::collections::HashMap<String, String>) {
     let now = crate::db::now_ms();
     let mut prompt = String::with_capacity(16_000);
+    let mut alias_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut short_to_alias: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut idx = 0usize;
+
     prompt.push_str("## Core Layer (L3)\n");
     for m in core {
+        let alias = index_to_alias(idx);
+        alias_map.insert(alias.clone(), m.id.clone());
+        short_to_alias.insert(crate::util::short_id(&m.id).to_string(), alias.clone());
+        idx += 1;
         let tags = m.tags.join(",");
         let age_d = (now - m.created_at) as f64 / 86_400_000.0;
         let mod_d = if m.modified_at > 0 {
@@ -151,10 +176,14 @@ fn format_audit_prompt(core: &[Memory], working: &[Memory], merge_hints: &[(Stri
         };
         let preview: String = truncate_chars(&m.content, 200);
         prompt.push_str(&format!("- [{}] [Layer: Core (3)] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.importance, m.access_count, age_d, mod_d, tags, preview));
+            alias, m.importance, m.access_count, age_d, mod_d, tags, preview));
     }
     prompt.push_str(&format!("\n## Working Layer (L2, {} memories)\n", working.len()));
     for m in working {
+        let alias = index_to_alias(idx);
+        alias_map.insert(alias.clone(), m.id.clone());
+        short_to_alias.insert(crate::util::short_id(&m.id).to_string(), alias.clone());
+        idx += 1;
         let tags = m.tags.join(",");
         let age_d = (now - m.created_at) as f64 / 86_400_000.0;
         let mod_d = if m.modified_at > 0 {
@@ -164,25 +193,30 @@ fn format_audit_prompt(core: &[Memory], working: &[Memory], merge_hints: &[(Stri
         };
         let preview: String = truncate_chars(&m.content, 200);
         prompt.push_str(&format!("- [{}] [Layer: Working (2)] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.importance, m.access_count, age_d, mod_d, tags, preview));
+            alias, m.importance, m.access_count, age_d, mod_d, tags, preview));
     }
 
     if !merge_hints.is_empty() {
         prompt.push_str("\n## Merge Hints (pre-computed similarity)\n");
         prompt.push_str("These Working memories are semantically similar — review and merge if they cover the same topic:\n");
         for (a, b, sim) in merge_hints {
-            prompt.push_str(&format!("- [{}] ↔ [{}] (similarity: {:.2})\n", a, b, sim));
+            let alias_a = short_to_alias.get(a).cloned().unwrap_or_else(|| a.clone());
+            let alias_b = short_to_alias.get(b).cloned().unwrap_or_else(|| b.clone());
+            prompt.push_str(&format!("- [{}] ↔ [{}] (similarity: {:.2})\n", alias_a, alias_b, sim));
         }
     }
 
-    prompt
+    (prompt, alias_map)
 }
 
-fn format_layer_summary(name: &str, memories: &[Memory]) -> String {
+fn format_layer_summary(name: &str, memories: &[Memory], alias_map: &mut std::collections::HashMap<String, String>, idx: &mut usize) -> String {
     let mut s = format!("## {} Layer ({} memories, shown for context — do NOT reorganize these)\n", name, memories.len());
     for m in memories {
+        let alias = index_to_alias(*idx);
+        alias_map.insert(alias.clone(), m.id.clone());
+        *idx += 1;
         let preview: String = truncate_chars(&m.content, 80);
-        s.push_str(&format!("- [{}] {}\n", crate::util::short_id(&m.id), preview));
+        s.push_str(&format!("- [{}] {}\n", alias, preview));
     }
     s
 }
@@ -283,24 +317,16 @@ pub struct AuditResult {
 }
 
 /// Resolve raw LLM tool call operations into validated AuditOps.
-/// Short IDs (8-char) are resolved to full UUIDs. Invalid ops are skipped.
+/// Letter aliases are resolved to full UUIDs via the alias map. Invalid ops are skipped.
 pub fn resolve_audit_ops(
     raw_ops: Vec<RawAuditOp>,
-    core: &[Memory],
-    working: &[Memory],
+    alias_map: &std::collections::HashMap<String, String>,
 ) -> Vec<AuditOp> {
-    let mut id_map = std::collections::HashMap::new();
-    for m in core.iter().chain(working.iter()) {
-        if m.id.len() >= 8 {
-            id_map.insert(crate::util::short_id(&m.id).to_string(), m.id.clone());
-        }
-    }
-
-    let resolve = |short: &str| -> Option<String> {
-        if short.len() >= 32 {
-            Some(short.to_string())
+    let resolve = |alias: &str| -> Option<String> {
+        if alias.len() >= 32 {
+            Some(alias.to_string())
         } else {
-            id_map.get(short).cloned()
+            alias_map.get(alias).cloned()
         }
     };
 

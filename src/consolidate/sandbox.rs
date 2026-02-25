@@ -250,7 +250,7 @@ pub async fn sandbox_audit(
     for (batch_num, indices) in batch_indices.iter().enumerate() {
         let batch_clusters: Vec<&MemoryCluster> =
             indices.iter().map(|&i| &clusters[i]).collect();
-        let prompt = format_clustered_prompt(&batch_clusters, batch_num + 1, batch_count);
+        let (prompt, alias_map) = format_clustered_prompt(&batch_clusters, batch_num + 1, batch_count);
 
         let tcr = crate::ai::llm_tool_call::<super::audit::AuditToolResponse>(
             cfg,
@@ -278,7 +278,7 @@ pub async fn sandbox_audit(
             );
         }
 
-        let ops = super::audit::resolve_audit_ops(tcr.value.operations, &core, &working);
+        let ops = super::audit::resolve_audit_ops(tcr.value.operations, &alias_map);
         info!(
             batch = batch_num + 1,
             ops = ops.len(),
@@ -378,13 +378,17 @@ pub async fn sandbox_audit(
 
 /// Format a batch of clusters into the audit prompt.
 /// Shows full content, layer, metadata, and pairwise similarity scores.
+/// Returns the prompt and a mapping of letter aliases to full memory IDs.
 fn format_clustered_prompt(
     clusters: &[&MemoryCluster],
     batch_num: usize,
     total_batches: usize,
-) -> String {
+) -> (String, std::collections::HashMap<String, String>) {
     let now = crate::db::now_ms();
     let mut prompt = String::with_capacity(10_000);
+    let mut alias_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut short_to_alias: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut idx = 0usize;
 
     if total_batches > 1 {
         prompt.push_str(&format!(
@@ -403,6 +407,10 @@ fn format_clustered_prompt(
         ));
 
         for m in &cluster.memories {
+            let alias = super::audit::index_to_alias(idx);
+            alias_map.insert(alias.clone(), m.id.clone());
+            short_to_alias.insert(crate::util::short_id(&m.id).to_string(), alias.clone());
+            idx += 1;
             let tags = m.tags.join(", ");
             let age_d = (now - m.created_at) as f64 / 86_400_000.0;
             let last_accessed_days = (now - m.last_accessed) as f64 / 86_400_000.0;
@@ -414,7 +422,7 @@ fn format_clustered_prompt(
             // FULL content, no truncation
             prompt.push_str(&format!(
                 "[{}] {} | imp={:.1} | ac={} | last_accessed={:.1}d ago | age={:.1}d | kind={} | tags=[{}]\n{}\n\n",
-                crate::util::short_id(&m.id),
+                alias,
                 layer_name,
                 m.importance,
                 m.access_count,
@@ -430,15 +438,19 @@ fn format_clustered_prompt(
         if !cluster.similarities.is_empty() {
             prompt.push_str("Similarities:\n");
             for (id1, id2, sim) in &cluster.similarities {
+                let a1 = short_to_alias.get(crate::util::short_id(id1)).cloned()
+                    .unwrap_or_else(|| crate::util::short_id(id1).to_string());
+                let a2 = short_to_alias.get(crate::util::short_id(id2)).cloned()
+                    .unwrap_or_else(|| crate::util::short_id(id2).to_string());
                 prompt.push_str(&format!(
                     "  {}↔{} = {:.2}\n",
-                    crate::util::short_id(id1),
-                    crate::util::short_id(id2),
+                    a1,
+                    a2,
                     sim
                 ));
             }
         }
         prompt.push('\n');
     }
-    prompt
+    (prompt, alias_map)
 }

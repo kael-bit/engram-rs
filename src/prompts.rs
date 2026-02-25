@@ -45,17 +45,18 @@ pub fn expand_query_schema() -> serde_json::Value {
 // NOTE: "under 200 chars" matches extract_memories_schema() description
 pub const EXTRACT_SYSTEM_PROMPT: &str = r#"You are a memory extraction engine. Given a conversation or text, extract important facts, decisions, preferences, and events as discrete memory entries.
 
-Importance scale:
-- 0.9-1.0: User EXPLICITLY asked to remember this ("记住", "remember this", "don't forget"). Core knowledge.
-- 0.7-0.8: Significant decisions, strong preferences, lessons learned, identity-defining facts. Worth keeping.
-- 0.4-0.6: Useful context, minor preferences, background info. May fade if not reinforced.
+Importance levels:
+- "critical": User EXPLICITLY asked to remember this ("记住", "remember this", "don't forget"). Core knowledge.
+- "high": Significant decisions, lessons learned, identity-defining facts.
+- "medium": Useful context, minor preferences. May fade if not reinforced.
+- "low": Background info, probably not worth keeping long-term.
 
 Rules:
 - Extract 0-3 entries per input. Zero is fine if nothing is worth remembering.
 - Each entry must be self-contained (understandable without context)
-- Prefer concise entries (under 200 chars) over verbose ones
+- Prefer concise entries (1-2 concise sentences) over verbose ones
 - Write content in the same language as the input. NEVER translate — if the conversation is in Chinese, output Chinese. If mixed, use the dominant language.
-- importance MUST reflect user intent — if they say "记住" or "remember", it's 0.9+
+- importance MUST reflect user intent — if they say "记住" or "remember", it's "critical"
 
 EXTRACT these (worth remembering):
 - Identity: who someone is, their preferences, principles, personality
@@ -87,8 +88,8 @@ pub fn extract_memories_schema() -> serde_json::Value {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "content": {"type": "string", "description": "Concise memory text, under 200 chars"},
-                        "importance": {"type": "number", "description": "0.0-1.0 importance score"},
+                        "content": {"type": "string", "description": "Concise memory text, 1-2 concise sentences"},
+                        "importance": {"type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Importance level"},
                         "tags": {"type": "array", "items": {"type": "string"}},
                         "kind": {
                             "type": "string",
@@ -175,6 +176,8 @@ Use adjust when a memory belongs in its current layer but its importance score i
 
 ## Input Format
 
+Each memory is labeled with a letter alias (A, B, C, ... Z, AA, AB, ...). Use these aliases when referencing memories in operations.
+
 Memories are grouped into semantic clusters. Similar memories appear together with merge similarity hints when applicable. Use these hints to identify merge candidates.
 
 ## Guidelines
@@ -202,7 +205,7 @@ pub fn audit_tool_schema() -> serde_json::Value {
                         },
                         "id": {
                             "type": "string",
-                            "description": "8-char short ID of the target memory (for promote/demote/adjust)"
+                            "description": "Letter alias from the memory listing (A, B, C...) for promote/demote/adjust"
                         },
                         "to": {
                             "type": "integer",
@@ -216,7 +219,7 @@ pub fn audit_tool_schema() -> serde_json::Value {
                         "ids": {
                             "type": "array",
                             "items": { "type": "string" },
-                            "description": "Short IDs of memories to merge (for merge op, minimum 2)"
+                            "description": "Letter aliases from the memory listing (A, B, C...) for merge op, minimum 2"
                         },
                         "content": {
                             "type": "string",
@@ -329,7 +332,7 @@ pub fn gate_schema() -> serde_json::Value {
             },
             "kind": {
                 "type": "string",
-                "enum": ["semantic", "procedural", "episodic"],
+                "enum": ["semantic", "procedural"],
                 "description": "Memory kind (only when approving)"
             }
         },
@@ -346,7 +349,7 @@ pub const MERGE_SYSTEM: &str = r#"Merge these related memory entries into a sing
 - If one entry updates or supersedes the other, keep the latest state.
 - Remove only truly redundant/repeated sentences.
 - Names, numbers, versions, dates, tool names > vague summaries. Never drop specific terms.
-- Keep it under 400 characters if possible.
+- Keep it to 2-3 concise sentences if possible.
 - Same language as originals. Output only the merged text, nothing else."#;
 
 pub const RECONCILE_PROMPT: &str = r#"You are comparing two memory entries about potentially the same topic.
@@ -400,4 +403,4 @@ pub fn fact_extract_schema() -> serde_json::Value {
 // api/memory.rs — insert-time merge
 // ---------------------------------------------------------------------------
 
-pub const INSERT_MERGE_PROMPT: &str = r#"Merge two versions of the same memory into one. Preserve ALL specific details from BOTH versions — names, numbers, commands, constraints. Output ONLY the merged text, nothing else. Keep the same language as the input. Be concise; don't add commentary or explanation. Keep it under 400 characters if possible."#;
+pub const INSERT_MERGE_PROMPT: &str = r#"Merge two versions of the same memory into one. Preserve ALL specific details from BOTH versions — names, numbers, commands, constraints. Output ONLY the merged text, nothing else. Keep the same language as the input. Be concise; don't add commentary or explanation. Keep it to 2-3 concise sentences if possible."#;

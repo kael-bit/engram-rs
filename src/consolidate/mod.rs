@@ -408,42 +408,95 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
     }
 
     // Core overlap detection: find semantically similar Core memories.
-    // O(n²) pairwise scan — fine for <50 Core memories.
+    // Incremental scan — only compare NEW Core memories (since last scan)
+    // against all existing Core memories, using FTS as a pre-filter.
     {
+        let last_scan_ts: i64 = db.get_meta("last_core_overlap_ts")
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
+        let one_hour_ago = now - 3_600_000;
+
         let core_mems: Vec<Memory> = db.list_by_layer_meta(Layer::Core, 10000, 0)
             .unwrap_or_default();
-        let one_hour_ago = now - 3_600_000;
-        let core_ids: Vec<String> = core_mems.iter()
-            .filter(|m| m.created_at < one_hour_ago)
-            .map(|m| m.id.clone())
-            .collect();
-        let embeddings = db.get_embeddings_by_ids(&core_ids);
 
-        let mut candidates: Vec<(String, String, f64)> = Vec::new();
-        for i in 0..embeddings.len() {
-            for j in (i + 1)..embeddings.len() {
-                let sim = crate::ai::cosine_similarity(&embeddings[i].1, &embeddings[j].1);
-                if sim > crate::thresholds::CORE_OVERLAP_SIM {
-                    let (id_a, id_b) = if embeddings[i].0 < embeddings[j].0 {
-                        (&embeddings[i].0, &embeddings[j].0)
-                    } else {
-                        (&embeddings[j].0, &embeddings[i].0)
-                    };
-                    let key = format!("overlap:{}:{}", id_a, id_b);
-                    if db.get_meta(&key).is_some() {
+        // New memories: created or modified after last scan AND older than 1 hour
+        // (the 1-hour grace period avoids scanning memories still being processed)
+        let new_mems: Vec<&Memory> = core_mems.iter()
+            .filter(|m| {
+                let ts = if m.modified_at > 0 { m.modified_at.max(m.created_at) } else { m.created_at };
+                ts > last_scan_ts && m.created_at < one_hour_ago
+            })
+            .collect();
+
+        if new_mems.is_empty() {
+            info!("core overlap scan: no new memories since last scan, skipping");
+        } else {
+            // Build a set of all stable Core memory IDs (older than 1 hour)
+            let all_core_ids: Vec<String> = core_mems.iter()
+                .filter(|m| m.created_at < one_hour_ago)
+                .map(|m| m.id.clone())
+                .collect();
+            let all_core_set: HashSet<&str> = all_core_ids.iter().map(|s| s.as_str()).collect();
+
+            let mut candidates: Vec<(String, String, f64)> = Vec::new();
+
+            for new_mem in &new_mems {
+                // FTS pre-filter: extract keywords from the new memory's content
+                // and find Core memories that share tokens
+                let fts_hits: HashSet<String> = db.search_fts(&new_mem.content, 100)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(id, _rank)| id)
+                    .filter(|id| *id != new_mem.id && all_core_set.contains(id.as_str()))
+                    .collect();
+
+                if fts_hits.is_empty() {
+                    continue;
+                }
+
+                // Get embeddings only for this new memory + its FTS-matched candidates
+                let mut ids_to_fetch: Vec<String> = vec![new_mem.id.clone()];
+                ids_to_fetch.extend(fts_hits.iter().cloned());
+                let embeddings = db.get_embeddings_by_ids(&ids_to_fetch);
+
+                // Find the new memory's embedding
+                let new_emb = match embeddings.iter().find(|(id, _)| id == &new_mem.id) {
+                    Some((_, emb)) => emb,
+                    None => continue,
+                };
+
+                // Compare against each FTS candidate
+                for (cand_id, cand_emb) in &embeddings {
+                    if cand_id == &new_mem.id {
                         continue;
                     }
-                    db.set_meta(&key, &format!("{:.3}", sim)).ok();
-                    candidates.push((id_a.clone(), id_b.clone(), sim));
+                    let sim = crate::ai::cosine_similarity(new_emb, cand_emb);
+                    if sim > crate::thresholds::CORE_OVERLAP_SIM {
+                        let (id_a, id_b) = if new_mem.id < *cand_id {
+                            (&new_mem.id, cand_id)
+                        } else {
+                            (cand_id, &new_mem.id)
+                        };
+                        let key = format!("overlap:{}:{}", id_a, id_b);
+                        if db.get_meta(&key).is_some() {
+                            continue;
+                        }
+                        db.set_meta(&key, &format!("{:.3}", sim)).ok();
+                        candidates.push((id_a.clone(), id_b.clone(), sim));
+                    }
                 }
             }
-        }
-        if !candidates.is_empty() {
-            for (a, b, sim) in &candidates {
-                debug!(id_a = %a, id_b = %b, sim = format!("{:.3}", sim), "core overlap candidate");
+
+            if !candidates.is_empty() {
+                for (a, b, sim) in &candidates {
+                    debug!(id_a = %a, id_b = %b, sim = format!("{:.3}", sim), "core overlap candidate");
+                }
             }
+            info!(pairs = candidates.len(), new_core = new_mems.len(), "core overlap scan complete (incremental)");
         }
-        info!(pairs = candidates.len(), "core overlap scan complete");
+
+        // Update the scan timestamp so next cycle only processes newer memories
+        db.set_meta("last_core_overlap_ts", &now.to_string()).ok();
     }
 
     // Working -> Core: collect candidates for LLM gate review.

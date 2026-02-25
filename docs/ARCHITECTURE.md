@@ -2,6 +2,8 @@
 
 > Audience: AI auditing/optimizing prompts in `src/prompts.rs`.
 > Describes what the code DOES as of the current source. All thresholds from `src/thresholds.rs`.
+> All LLM prompts and tool schemas live in `src/prompts.rs`.
+> **This document must be updated whenever the architecture changes.**
 
 ---
 
@@ -305,15 +307,18 @@ The audit LLM has exactly three powers:
 | **Merge** | `merge` | Combine 2+ memories into one |
 
 **Audit CANNOT delete memories.** Deletion only happens through natural lifecycle (TTL, decay).
+Demote is restricted to one layer at a time (Core→Working or Working→Buffer, never Core→Buffer).
 
 ### 5.2 Audit Flow (`audit_memories` in `consolidate/audit.rs`)
 
 1. Fetch all Core + Working memories (meta only, no embeddings).
-2. Format with metadata: `[short_id] L{layer} imp={importance} ac={access} age={days}d mod={days}d tags=[...] (kind) content`.
-3. LLM call (`audit` model, falls back to `gate` model) with `AUDIT_SYSTEM` prompt.
-4. Returns `Vec<RawAuditOp>` — operations use 8-char short IDs.
-5. Resolve short IDs to full UUIDs (`resolve_audit_ops`).
-6. **Sandbox check** before execution.
+2. Group into semantic clusters with merge similarity hints (cosine `AUDIT_MERGE_MIN_SIM`–`AUDIT_MERGE_MAX_SIM`).
+3. Format with metadata: `[short_id] L{layer} imp={importance} ac={access} age={days}d mod={days}d tags=[...] (kind) content`.
+4. LLM call (`audit` model, falls back to `gate` model) with `AUDIT_SYSTEM` prompt.
+   Uses function calling with `audit_tool_schema()` for structured output.
+5. Returns `Vec<RawAuditOp>` — operations use 8-char short IDs.
+6. Resolve short IDs to full UUIDs (`resolve_audit_ops`).
+7. **Sandbox check** before execution.
 
 ### 5.3 Sandbox (`sandbox_audit` in `consolidate/sandbox.rs`)
 
@@ -321,23 +326,20 @@ Every audit operation passes through `RuleChecker` before execution:
 
 **Rules checked per operation:**
 
-| Rule | Check | Auto-fail condition |
-|------|-------|-------------------|
-| No same-layer moves | promote/demote must change layer | `from == to` |
-| Protected kinds | Procedural memories can't be demoted below Working | `kind=procedural && to=Buffer` |
-| High-importance guard | imp ≥ 0.8 memories can't be demoted | unless also `ac=0` |
-| New memory protection | Memories <`SANDBOX_NEW_AGE_HOURS (48h)` can't be demoted | age < 48h |
-| Recently modified guard | Modified within `SANDBOX_RECENT_MOD_HOURS (24h)` → warn | modified_at recent |
-| Importance bounds | Adjust must be in 0.0–1.0 range | out of bounds |
-| Drastic adjustment | Change >0.5 from current → warn | large delta |
-| Merge minimum | Merge needs ≥2 IDs | <2 IDs |
-| Cross-layer merge | Merged result must go to highest source layer | target < max(source layers) |
-| Merge content check | Merged text must exist and not be empty | missing content |
+| Rule | Check | Fail condition |
+|------|-------|---------------|
+| Delete blocked | Audit has no delete power | Any delete op → always fail |
+| Target exists | ID must resolve to a real memory | ID not found |
+| No same-layer demote | Demote target must be lower than current | `current_layer <= target` |
+| Importance bounds | Adjust value must be in 0.0–1.0 | Out of range |
+| Merge minimum | Merge needs ≥2 source IDs | <2 IDs |
+| Merge direction | Merged result must go to highest source layer | `target_layer < max(source_layers)` |
+| Merge content length | Merged text must preserve information | `output_len < shortest_input / 2` |
 
 **Grading:**
-- Each operation gets `Pass`, `Warn` (soft issue), or `Fail` (blocked).
-- Overall grades: `Safe` (all pass), `Caution` (warnings), `Blocked` (any fail).
-- Only operations that `Pass` or `Warn` with overall safety ≥ `SANDBOX_SAFETY_THRESHOLD (0.70)` execute.
+- Each operation gets `Good` (pass) or `Bad` (blocked).
+- Only `Good` operations execute. Bad operations are skipped and logged.
+- Overall score = `good_count / total_count`. Threshold: `SANDBOX_SAFETY_THRESHOLD (0.70)`.
 
 ---
 
@@ -486,13 +488,16 @@ Adaptive budget: default 16K chars, scales with total memory count (min 16K, max
 
 1. **Memories only move up layers through LLM review** (triage or gate). Mechanical promotion
    exists for Buffer→Working only (high reinforcement score or lesson/procedural kind).
-2. **Core is permanent** — the audit system cannot delete, only demote. Natural decay handles cleanup.
-3. **Procedural memories and lessons are protected** — exempt from buffer TTL, decay, and most cleanup.
-4. **Repetition > access for importance signal** — `REPETITION_WEIGHT = 2.5` means being restated
+2. **Audit cannot delete** — only schedule (promote/demote), adjust importance, or merge.
+   Natural lifecycle (TTL decay, Buffer expiry) handles cleanup.
+3. **Demotions are one-layer-at-a-time** — Core→Working or Working→Buffer, never skip.
+4. **Procedural memories and lessons are protected** — exempt from buffer TTL, decay, and most cleanup.
+5. **Repetition > access for importance signal** — `REPETITION_WEIGHT = 2.5` means being restated
    counts 2.5× more than being recalled.
-5. **Session notes never promote to Core** — they're episodic by nature. Instead, they're distilled
+6. **Session notes never promote to Core** — they're episodic by nature. Instead, they're distilled
    into project status snapshots that can promote normally.
-6. **All LLM decisions are logged** — component, model, token usage, and duration tracked in `llm_usage`.
-7. **Gate rejections escalate** — 3 chances with increasing cooldowns (24h, 72h, never), preventing
+7. **All LLM decisions are logged** — component, model, token usage, and duration tracked in `llm_usage`.
+8. **Gate rejections escalate** — 3 chances with increasing cooldowns (24h, 72h, never), preventing
    infinite retry loops while giving memories a fair hearing.
-8. **Resume doesn't touch memories** — only recall (query-driven) increments access counts.
+9. **Resume doesn't touch memories** — only recall (query-driven) increments access counts.
+10. **Merge direction is always upward** — cross-layer merge result goes to the highest source layer.

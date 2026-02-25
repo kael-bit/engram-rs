@@ -140,15 +140,22 @@ You have persistent memory via engram MCP tools.
 
 ### 2. When & What to Store (Tool: `engram_store`)
 
-| What | Tags | Kind | Example |
-|------|------|------|---------|
-| Design decisions | topic tags | *(default)* | "API uses REST, auth via token" |
-| Lessons from mistakes | `lesson` + topic | *(default)* | "LESSON: never force-push to main" |
-| Step-by-step workflows | `procedure` + topic | `procedural` | "Deploy: test → build → stop → start" |
-| User preferences | `preference` | *(default)* | "User prefers concise Chinese replies" |
-| Milestone recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
+**Principle:** Store anything that isn't routine log output. If losing it after a context reset would make you act worse — store it. When in doubt, store it; the system handles dedup and decay automatically.
 
-🚫 **DO NOT store:** routine output, things already in code/config files, or transient status.
+🚫 **DO NOT store:** routine command output, things already in code/config files, or step-by-step narration of what you just did.
+
+Common patterns and how to tag them:
+
+| What | Tags | Kind |
+|------|------|------|
+| Design decisions | topic tags | *(default)* |
+| Lessons from mistakes | `lesson` + `trigger:kebab-verb` | *(default)* |
+| Workflows / ordering constraints | `procedure` + topic | `procedural` |
+| User preferences / corrections | `preference` | *(default)* |
+| Ongoing rules (must stay in sync, etc.) | `procedure` + topic | `procedural` |
+| Milestone recap (decisions + next steps) | `session` | *(default)* |
+
+This list is not exhaustive — use the principle above.
 
 🔄 **Memory Reinforcement (Repetition is Good!)**
 
@@ -207,15 +214,22 @@ curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 
 ### 2. When & What to Store
 
-| What | Tags | Kind | Example |
-|------|------|------|---------|
-| Design decisions | topic tags | *(default)* | "API uses REST, auth via token" |
-| Lessons from mistakes | `lesson` + topic | *(default)* | "LESSON: never force-push to main" |
-| Step-by-step workflows | `procedure` + topic | `procedural` | "Deploy: test → build → stop → start" |
-| User preferences | `preference` | *(default)* | "User prefers concise Chinese replies" |
-| Milestone recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
+**Principle:** Store anything that isn't routine log output. If losing it after a context reset would make you act worse — store it. When in doubt, store it; the system handles dedup and decay automatically.
 
-🚫 **DO NOT store:** routine output, things already in code/config files, or transient status.
+🚫 **DO NOT store:** routine command output, things already in code/config files, or step-by-step narration of what you just did.
+
+Common patterns and how to tag them:
+
+| What | Tags | Kind |
+|------|------|------|
+| Design decisions | topic tags | *(default)* |
+| Lessons from mistakes | `lesson` + `trigger:kebab-verb` | *(default)* |
+| Workflows / ordering constraints | `procedure` + topic | `procedural` |
+| User preferences / corrections | `preference` | *(default)* |
+| Ongoing rules (must stay in sync, etc.) | `procedure` + topic | `procedural` |
+| Milestone recap (decisions + next steps) | `session` | *(default)* |
+
+This list is not exhaustive — use the principle above.
 
 🔄 **Memory Reinforcement (Repetition is Good!)**
 

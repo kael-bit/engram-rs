@@ -1,5 +1,6 @@
 use engram::consolidate::{AuditOp, RawAuditOp, AuditToolResponse, audit_tool_schema, resolve_audit_ops};
 use engram::db::{Layer, Memory};
+use std::collections::HashMap;
 
 /// Helper: create a Memory with the given id and layer, everything else zeroed/defaults.
 fn mem(id: &str, layer: Layer) -> Memory {
@@ -36,27 +37,46 @@ fn raw_op(op: &str) -> RawAuditOp {
     }
 }
 
+/// Helper: build an alias map from a list of memories (A, B, C, ...).
+fn build_alias_map(memories: &[Memory]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for (i, m) in memories.iter().enumerate() {
+        let alias = if i < 26 {
+            String::from((b'A' + i as u8) as char)
+        } else {
+            let first = (b'A' + ((i - 26) / 26) as u8) as char;
+            let second = (b'A' + ((i - 26) % 26) as u8) as char;
+            format!("{}{}", first, second)
+        };
+        map.insert(alias, m.id.clone());
+    }
+    map
+}
+
 // ── 1. Valid ops with all 4 op types ───────────────────────────────
 
 #[test]
 fn all_four_op_types() {
     let core = vec![
-        mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core),
-        mem("bbbbbbbb-1111-2222-3333-444444444444", Layer::Core),
+        mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core),   // A
+        mem("bbbbbbbb-1111-2222-3333-444444444444", Layer::Core),   // B
     ];
     let working = vec![
-        mem("cccccccc-1111-2222-3333-444444444444", Layer::Working),
-        mem("dddddddd-1111-2222-3333-444444444444", Layer::Working),
-        mem("eeeeeeee-1111-2222-3333-444444444444", Layer::Working),
+        mem("cccccccc-1111-2222-3333-444444444444", Layer::Working), // C
+        mem("dddddddd-1111-2222-3333-444444444444", Layer::Working), // D
+        mem("eeeeeeee-1111-2222-3333-444444444444", Layer::Working), // E
     ];
 
+    let all: Vec<Memory> = core.iter().chain(working.iter()).cloned().collect();
+    let alias_map = build_alias_map(&all);
+
     let raw_ops = vec![
-        RawAuditOp { op: "promote".into(), id: Some("cccccccc".into()), to: Some(3), ..raw_op("promote") },
-        RawAuditOp { op: "demote".into(), id: Some("aaaaaaaa".into()), to: Some(2), ..raw_op("demote") },
-        RawAuditOp { op: "delete".into(), id: Some("dddddddd".into()), ..raw_op("delete") },
+        RawAuditOp { op: "promote".into(), id: Some("C".into()), to: Some(3), ..raw_op("promote") },
+        RawAuditOp { op: "demote".into(), id: Some("A".into()), to: Some(2), ..raw_op("demote") },
+        RawAuditOp { op: "delete".into(), id: Some("D".into()), ..raw_op("delete") },
         RawAuditOp {
             op: "merge".into(),
-            ids: Some(vec!["bbbbbbbb".into(), "eeeeeeee".into()]),
+            ids: Some(vec!["B".into(), "E".into()]),
             content: Some("merged content".into()),
             layer: Some(3),
             tags: Some(vec!["t1".into(), "t2".into()]),
@@ -64,7 +84,7 @@ fn all_four_op_types() {
         },
     ];
 
-    let ops = resolve_audit_ops(raw_ops, &core, &working);
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
     assert_eq!(ops.len(), 4);
 
     match &ops[0] {
@@ -100,18 +120,21 @@ fn all_four_op_types() {
     }
 }
 
-// ── 2. Short IDs resolved against memory list ──────────────────────
+// ── 2. Letter aliases resolved against alias map ───────────────────
 
 #[test]
-fn short_ids_resolved() {
-    let core = vec![mem("abcd1234-aaaa-bbbb-cccc-dddddddddddd", Layer::Core)];
-    let working = vec![mem("ef567890-aaaa-bbbb-cccc-dddddddddddd", Layer::Working)];
+fn aliases_resolved() {
+    let core = vec![mem("abcd1234-aaaa-bbbb-cccc-dddddddddddd", Layer::Core)];   // A
+    let working = vec![mem("ef567890-aaaa-bbbb-cccc-dddddddddddd", Layer::Working)]; // B
+
+    let all: Vec<Memory> = core.iter().chain(working.iter()).cloned().collect();
+    let alias_map = build_alias_map(&all);
 
     let raw_ops = vec![
-        RawAuditOp { op: "delete".into(), id: Some("abcd1234".into()), ..raw_op("delete") },
-        RawAuditOp { op: "promote".into(), id: Some("ef567890".into()), to: Some(3), ..raw_op("promote") },
+        RawAuditOp { op: "delete".into(), id: Some("A".into()), ..raw_op("delete") },
+        RawAuditOp { op: "promote".into(), id: Some("B".into()), to: Some(3), ..raw_op("promote") },
     ];
-    let ops = resolve_audit_ops(raw_ops, &core, &working);
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
 
     assert_eq!(ops.len(), 2);
     match &ops[0] {
@@ -135,7 +158,8 @@ fn full_uuids_passed_through() {
     let raw_ops = vec![
         RawAuditOp { op: "delete".into(), id: Some(full_id.into()), ..raw_op("delete") },
     ];
-    let ops = resolve_audit_ops(raw_ops, &[], &[]);
+    let alias_map = HashMap::new();
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
 
     assert_eq!(ops.len(), 1);
     match &ops[0] {
@@ -148,7 +172,8 @@ fn full_uuids_passed_through() {
 
 #[test]
 fn empty_ops_array() {
-    let ops = resolve_audit_ops(vec![], &[], &[]);
+    let alias_map = HashMap::new();
+    let ops = resolve_audit_ops(vec![], &alias_map);
     assert!(ops.is_empty());
 }
 
@@ -157,13 +182,13 @@ fn empty_ops_array() {
 #[test]
 fn tool_response_deserializes_from_json() {
     let json = r#"{"operations":[
-        {"op":"delete","id":"aaaaaaaa"},
-        {"op":"promote","id":"bbbbbbbb","to":3}
+        {"op":"delete","id":"A"},
+        {"op":"promote","id":"B","to":3}
     ]}"#;
     let resp: AuditToolResponse = serde_json::from_str(json).unwrap();
     assert_eq!(resp.operations.len(), 2);
     assert_eq!(resp.operations[0].op, "delete");
-    assert_eq!(resp.operations[0].id.as_deref(), Some("aaaaaaaa"));
+    assert_eq!(resp.operations[0].id.as_deref(), Some("A"));
     assert_eq!(resp.operations[1].op, "promote");
     assert_eq!(resp.operations[1].to, Some(3));
 }
@@ -178,12 +203,12 @@ fn tool_response_empty_operations() {
 #[test]
 fn tool_response_merge_op_deserializes() {
     let json = r#"{"operations":[
-        {"op":"merge","ids":["aaa","bbb"],"content":"merged","layer":2,"tags":["x","y"]}
+        {"op":"merge","ids":["A","B"],"content":"merged","layer":2,"tags":["x","y"]}
     ]}"#;
     let resp: AuditToolResponse = serde_json::from_str(json).unwrap();
     assert_eq!(resp.operations.len(), 1);
     assert_eq!(resp.operations[0].op, "merge");
-    assert_eq!(resp.operations[0].ids.as_ref().unwrap(), &["aaa", "bbb"]);
+    assert_eq!(resp.operations[0].ids.as_ref().unwrap(), &["A", "B"]);
     assert_eq!(resp.operations[0].content.as_deref(), Some("merged"));
     assert_eq!(resp.operations[0].layer, Some(2));
     assert_eq!(resp.operations[0].tags.as_ref().unwrap(), &["x", "y"]);
@@ -202,74 +227,80 @@ fn merge_without_source_ids_skipped() {
             ..raw_op("merge")
         },
     ];
-    let ops = resolve_audit_ops(raw_ops, &[], &[]);
+    let alias_map = HashMap::new();
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
     assert!(ops.is_empty(), "merge without ids should be skipped");
 }
 
 #[test]
 fn merge_with_single_id_skipped() {
-    let core = vec![mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core)];
+    let core = vec![mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core)]; // A
+    let alias_map = build_alias_map(&core);
     let raw_ops = vec![
         RawAuditOp {
             op: "merge".into(),
-            ids: Some(vec!["aaaaaaaa".into()]),
+            ids: Some(vec!["A".into()]),
             content: Some("combined".into()),
             layer: Some(2),
             tags: Some(vec![]),
             ..raw_op("merge")
         },
     ];
-    let ops = resolve_audit_ops(raw_ops, &core, &[]);
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
     assert!(ops.is_empty(), "merge with only 1 id should be skipped");
 }
 
 #[test]
 fn merge_with_empty_content_skipped() {
     let core = vec![
-        mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core),
-        mem("bbbbbbbb-1111-2222-3333-444444444444", Layer::Core),
+        mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core), // A
+        mem("bbbbbbbb-1111-2222-3333-444444444444", Layer::Core), // B
     ];
+    let alias_map = build_alias_map(&core);
     let raw_ops = vec![
         RawAuditOp {
             op: "merge".into(),
-            ids: Some(vec!["aaaaaaaa".into(), "bbbbbbbb".into()]),
+            ids: Some(vec!["A".into(), "B".into()]),
             content: Some("".into()),
             layer: Some(2),
             tags: Some(vec![]),
             ..raw_op("merge")
         },
     ];
-    let ops = resolve_audit_ops(raw_ops, &core, &[]);
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
     assert!(ops.is_empty(), "merge with empty content should be skipped");
 }
 
 #[test]
 fn promote_without_to_skipped() {
-    let core = vec![mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core)];
+    let core = vec![mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core)]; // A
+    let alias_map = build_alias_map(&core);
     let raw_ops = vec![
-        RawAuditOp { op: "promote".into(), id: Some("aaaaaaaa".into()), ..raw_op("promote") },
+        RawAuditOp { op: "promote".into(), id: Some("A".into()), ..raw_op("promote") },
     ];
-    let ops = resolve_audit_ops(raw_ops, &core, &[]);
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
     assert!(ops.is_empty(), "promote without 'to' should be skipped");
 }
 
 #[test]
-fn delete_with_unresolvable_short_id_skipped() {
+fn delete_with_unresolvable_alias_skipped() {
+    let alias_map = HashMap::new();
     let raw_ops = vec![
-        RawAuditOp { op: "delete".into(), id: Some("zzzzzzzz".into()), ..raw_op("delete") },
+        RawAuditOp { op: "delete".into(), id: Some("ZZ".into()), ..raw_op("delete") },
     ];
-    let ops = resolve_audit_ops(raw_ops, &[], &[]);
-    assert!(ops.is_empty(), "unresolvable short id should be skipped");
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
+    assert!(ops.is_empty(), "unresolvable alias should be skipped");
 }
 
 // ── 7. Unknown op type → skipped ───────────────────────────────────
 
 #[test]
 fn unknown_op_type_skipped() {
+    let alias_map = HashMap::new();
     let raw_ops = vec![
-        RawAuditOp { op: "explode".into(), id: Some("aaaaaaaa".into()), ..raw_op("explode") },
+        RawAuditOp { op: "explode".into(), id: Some("A".into()), ..raw_op("explode") },
     ];
-    let ops = resolve_audit_ops(raw_ops, &[], &[]);
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
     assert!(ops.is_empty());
 }
 
@@ -278,23 +309,26 @@ fn unknown_op_type_skipped() {
 #[test]
 fn mix_valid_and_invalid() {
     let core = vec![
-        mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core),
+        mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core),   // A
     ];
     let working = vec![
-        mem("bbbbbbbb-1111-2222-3333-444444444444", Layer::Working),
+        mem("bbbbbbbb-1111-2222-3333-444444444444", Layer::Working), // B
     ];
+
+    let all: Vec<Memory> = core.iter().chain(working.iter()).cloned().collect();
+    let alias_map = build_alias_map(&all);
 
     let raw_ops = vec![
-        RawAuditOp { op: "delete".into(), id: Some("aaaaaaaa".into()), ..raw_op("delete") },
-        RawAuditOp { op: "unknown_type".into(), id: Some("bbbbbbbb".into()), ..raw_op("unknown_type") },
-        RawAuditOp { op: "promote".into(), id: Some("bbbbbbbb".into()), to: Some(3), ..raw_op("promote") },
-        RawAuditOp { op: "promote".into(), id: Some("nonexist".into()), ..raw_op("promote") },
-        RawAuditOp { op: "demote".into(), id: Some("aaaaaaaa".into()), to: Some(2), ..raw_op("demote") },
+        RawAuditOp { op: "delete".into(), id: Some("A".into()), ..raw_op("delete") },
+        RawAuditOp { op: "unknown_type".into(), id: Some("B".into()), ..raw_op("unknown_type") },
+        RawAuditOp { op: "promote".into(), id: Some("B".into()), to: Some(3), ..raw_op("promote") },
+        RawAuditOp { op: "promote".into(), id: Some("ZZ".into()), ..raw_op("promote") },
+        RawAuditOp { op: "demote".into(), id: Some("A".into()), to: Some(2), ..raw_op("demote") },
     ];
 
-    let ops = resolve_audit_ops(raw_ops, &core, &working);
-    // Valid: delete aaaaaaaa, promote bbbbbbbb to 3, demote aaaaaaaa to 2
-    // Invalid: unknown_type (skipped), promote nonexist (no 'to' + unresolvable)
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
+    // Valid: delete A, promote B to 3, demote A to 2
+    // Invalid: unknown_type (skipped), promote ZZ (unresolvable + no 'to')
     assert_eq!(ops.len(), 3);
     assert!(matches!(&ops[0], AuditOp::Delete { .. }));
     assert!(matches!(&ops[1], AuditOp::Promote { to: 3, .. }));
@@ -305,12 +339,13 @@ fn mix_valid_and_invalid() {
 
 #[test]
 fn to_out_of_range_skipped() {
-    let core = vec![mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core)];
+    let core = vec![mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core)]; // A
+    let alias_map = build_alias_map(&core);
     let raw_ops = vec![
-        RawAuditOp { op: "promote".into(), id: Some("aaaaaaaa".into()), to: Some(0), ..raw_op("promote") },
-        RawAuditOp { op: "demote".into(), id: Some("aaaaaaaa".into()), to: Some(4), ..raw_op("demote") },
+        RawAuditOp { op: "promote".into(), id: Some("A".into()), to: Some(0), ..raw_op("promote") },
+        RawAuditOp { op: "demote".into(), id: Some("A".into()), to: Some(4), ..raw_op("demote") },
     ];
-    let ops = resolve_audit_ops(raw_ops, &core, &[]);
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
     assert!(ops.is_empty(), "to=0 and to=4 should both be skipped");
 }
 
@@ -332,19 +367,20 @@ fn audit_tool_schema_is_valid_json() {
 #[test]
 fn merge_defaults_to_layer_2() {
     let core = vec![
-        mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core),
-        mem("bbbbbbbb-1111-2222-3333-444444444444", Layer::Core),
+        mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core), // A
+        mem("bbbbbbbb-1111-2222-3333-444444444444", Layer::Core), // B
     ];
+    let alias_map = build_alias_map(&core);
     let raw_ops = vec![
         RawAuditOp {
             op: "merge".into(),
-            ids: Some(vec!["aaaaaaaa".into(), "bbbbbbbb".into()]),
+            ids: Some(vec!["A".into(), "B".into()]),
             content: Some("merged".into()),
             // layer omitted — should default to 2
             ..raw_op("merge")
         },
     ];
-    let ops = resolve_audit_ops(raw_ops, &core, &[]);
+    let ops = resolve_audit_ops(raw_ops, &alias_map);
     assert_eq!(ops.len(), 1);
     match &ops[0] {
         AuditOp::Merge { layer, .. } => assert_eq!(*layer, 2),
