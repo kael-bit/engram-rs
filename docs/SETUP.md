@@ -8,15 +8,9 @@ After setup, you'll be able to store facts, recall context, and resume where you
 
 Before doing anything, ask:
 
-1. **Which coding tool are you using?**
-   - `claude-code` — Claude Code (Anthropic)
-   - `openclaw` — OpenClaw
-   - `codex` — OpenAI Codex CLI
-   - `other` — Cursor, Windsurf, etc.
-
-2. **How do you want memory integration?**
-   - `mcp` — MCP tools (recommended for Claude Code — explicit store/recall via tool calls)
-   - `http` — HTTP API via curl in your system prompt (works everywhere, no setup)
+**How do you want memory integration?**
+- `mcp` — MCP tools (recommended for Claude Code and MCP-compatible editors)
+- `http` — HTTP API via curl in your system prompt (works everywhere, no build step)
 
 ## Step 1: Install engram
 
@@ -88,13 +82,19 @@ Engram is now running on `http://localhost:3917`.
 
 Verify: `curl -s http://localhost:3917/health`
 
+
 ## Step 3: Configure your tool
 
-Follow the section matching the user's answers from Step 0.
+There are two integration methods. Pick one:
+
+| Method | How it works | Best for |
+|--------|-------------|----------|
+| **MCP** | Agent calls engram via MCP tool protocol | Claude Code, editors with MCP support |
+| **HTTP** | Agent runs curl commands from system prompt | Everything else (OpenClaw, Codex, Cursor, etc.) |
 
 ---
 
-### Claude Code + MCP
+### Option A: MCP
 
 Build the MCP server:
 
@@ -102,7 +102,7 @@ Build the MCP server:
 cd engram/mcp && npm install && npm run build && cd ..
 ```
 
-Register with Claude Code:
+**Claude Code** — register via CLI or `.mcp.json`:
 
 ```bash
 claude mcp add engram -- node /absolute/path/to/engram/mcp/dist/index.js
@@ -124,7 +124,9 @@ Or create `.mcp.json` in the project root:
 }
 ```
 
-Then add to the project's `CLAUDE.md`:
+**Other MCP-compatible editors** — follow the editor's MCP server registration docs using the same command/args above.
+
+Then add the prompt template below to your project instructions (`CLAUDE.md`, `AGENTS.md`, or equivalent):
 
 ````markdown
 ## Memory
@@ -132,11 +134,9 @@ Then add to the project's `CLAUDE.md`:
 You have persistent memory via engram MCP tools.
 
 ### Every session start or after context compaction
-Call `engram_resume` with hours=6 to restore context. Read the core and working sections — that's who you are and what you were doing.
+Call `engram_resume` with hours=6 to restore context. Read the core and working sections.
 
-**Compaction detection:** If you see a `<summary>` block replacing prior conversation, or a system message containing "Compacted", context was just compressed. Compaction summaries are lossy — they drop details, lessons, and recent decisions.
-
-**Hard rule: after compaction, your FIRST action must be `engram_resume` — before responding to any user message.** Nothing you say will be grounded without your memory.
+**After compaction** (you see a `<summary>` block or "Compacted" system message): call `engram_resume` immediately, before responding. Compaction summaries are lossy.
 
 ### When to store what
 
@@ -157,29 +157,20 @@ Call `engram_resume` with hours=6 to restore context. Read the core and working 
 - Before risky operations → `engram_triggers` with the action name
 
 ### Recalling memories
-Before acting on any non-trivial task, recall first. Don't assume you remember — check:
+Before acting on any non-trivial task, recall first:
 - `engram_recall` with the topic as query
-- Default recall is fast (~30ms cached). Only set `rerank: true` when result ordering is critical (+2-4s)
-- Use `expand: true` for very short or vague queries like single CJK words (+1-2s)
-
-Recall when:
-- Starting work on a topic you've touched before
-- The user asks about past decisions, preferences, or history
-- Before making architectural or design decisions
-- You're unsure about a convention or workflow
+- Default recall is fast (~30ms cached). Only set `rerank: true` when ordering is critical (+2-4s)
+- Use `expand: true` for short/vague queries like single words (+1-2s)
 
 ### Before session ends
-Store a summary: what you did + what was decided + what to do next.
-Tag as "session". Without the "next" part, you'll wake up lost.
+Store a summary: what you did + what was decided + what to do next. Tag as "session".
 ````
-
-**Done.** The agent now has persistent memory via MCP tool calls.
 
 ---
 
-### Claude Code + HTTP (no MCP)
+### Option B: HTTP
 
-No build step needed. Add to the project's `CLAUDE.md`:
+No build step. Add the prompt template below to your project instructions (`CLAUDE.md`, `AGENTS.md`, or equivalent):
 
 ````markdown
 ## Memory
@@ -191,9 +182,7 @@ You have persistent memory via engram at http://localhost:3917
 curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 ```
 
-**Compaction detection:** If you see a `<summary>` block replacing prior conversation, or a system message containing "Compacted", context was just compressed. Compaction summaries are lossy — they drop details and decisions.
-
-**Hard rule: after compaction, call resume BEFORE responding to any user message.** Nothing you say will be grounded without your memory.
+**After compaction** (you see a `<summary>` block or "Compacted" system message): call resume immediately, before responding. Compaction summaries are lossy.
 
 ### When to store what
 
@@ -207,190 +196,82 @@ curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 
 **Don't store**: routine output, things in code files, transient status.
 
-### Recalling memories
-Before acting on any non-trivial task, recall first. Don't assume you remember — check:
-```bash
-# Fast recall (default, ~30ms cached / ~1s first query)
-curl -sf -X POST \
-  -H "Content-Type: application/json" -d '{"query": "your question"}' http://localhost:3917/recall
-
-# For short/vague queries, add expand (adds ~1-2s LLM call)
-curl -sf -X POST \
-  -H "Content-Type: application/json" -d '{"query": "部署", "expand": true}' http://localhost:3917/recall
-```
-Recall when:
-- Starting work on a topic you've touched before
-- The user asks about past decisions, preferences, or history
-- Before making architectural or design decisions
-- You're unsure about a convention or workflow
-
-### Store
+### Storing memories
 ```bash
 # Fact or decision
-curl -sf -X POST \
-  -H "Content-Type: application/json" -d '{"content": "...", "tags": ["topic"]}' http://localhost:3917/memories
+curl -sf -X POST http://localhost:3917/memories \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "...", "tags": ["topic"]}'
 
-# Lesson (survives longer)
-curl -sf -X POST \
-  -H "Content-Type: application/json" -d '{"content": "LESSON: ...", "tags": ["lesson", "topic"]}' http://localhost:3917/memories
+# Lesson (with trigger for pre-action recall)
+curl -sf -X POST http://localhost:3917/memories \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "LESSON: never force-push to main", "tags": ["lesson","trigger:git-push"]}'
 
 # Procedure (never expires)
-curl -sf -X POST \
-  -H "Content-Type: application/json" -d '{"content": "Steps: 1. ... 2. ...", "tags": ["procedure"], "kind": "procedural"}' http://localhost:3917/memories
+curl -sf -X POST http://localhost:3917/memories \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "deploy: test → build → stop → cp → start", "tags": ["deploy"], "kind": "procedural"}'
 ```
+
+### Recalling memories
+Before acting on any non-trivial task, recall first:
+```bash
+curl -sf -X POST http://localhost:3917/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "how do we deploy"}'
+```
+Default recall is fast (~30ms cached). For short/vague queries, add `"expand": true` (+1-2s).
 
 ### Before risky operations
 ```bash
 curl -sf http://localhost:3917/triggers/deploy
 ```
 
-### End of session
+### Before session ends
 Store what you did + what to do next. Tag as "session".
 ````
-
-**Done.** The agent uses curl to talk to engram directly.
-
----
-
-### OpenClaw
-
-Add to `AGENTS.md` in the workspace:
-
-````markdown
-## Memory
-
-engram is your memory. Without it, every session starts from zero.
-
-### Every wake-up / heartbeat / post-compaction
-Restore context first — nothing else matters until you know who you are:
-  curl -s http://localhost:3917/resume?hours=6&compact=true
-
-Read the core section (identity, constraints, lessons) and working section (active context).
-
-**Compaction detection:** If you see a `<summary>` block replacing prior conversation, or a system message containing "Compacted", context was just compressed. Compaction summaries are lossy — they drop details, lessons, and recent decisions.
-
-**Hard rule: after compaction, resume is your FIRST action — before responding to any user message.** Nothing you say will be grounded without your memory.
-
-### When to store what
-
-| What | Tags | Kind | Example |
-|------|------|------|---------|
-| Design decisions | topic tags | *(default)* | "API uses REST, auth via Bearer token" |
-| Lessons from mistakes | `lesson` + topic | *(default)* | "LESSON: never force-push to main" |
-| Step-by-step workflows | `procedure` + topic | `procedural` | "Deploy: test → build → stop → cp → start" |
-| User preferences | `preference` | *(default)* | "User prefers concise Chinese replies" |
-| Session recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
-
-**Don't store**: routine output, things already in code/config files, transient status.
-
-### Storing memories
-```bash
-# Important facts, decisions, lessons
-curl -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
-  -d '{"content": "user prefers direct answers, no filler", "tags": ["preference"]}'
-
-# Lessons from mistakes (with trigger for pre-action recall)
-curl -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
-  -d '{"content": "never force-push to main", "tags": ["lesson","trigger:git-push"]}'
-
-# Workflows and procedures (these never decay)
-curl -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
-  -d '{"content": "deploy flow: cargo test && cargo build --release && systemctl stop && cp && systemctl start", "tags": ["deploy"], "kind": "procedural"}'
-```
-
-### Recalling memories
-Before acting on any non-trivial task, recall first. Don't assume you remember — check:
-```bash
-# Fast recall (default — ~30ms cached)
-curl -sf -X POST http://localhost:3917/recall \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "how do we deploy"}'
-
-# For short/vague queries, expand helps (+1-2s LLM call)
-# rerank: true improves ordering when it matters (+2-4s)
-```
-```
-Recall when:
-- Starting work on a topic you've touched before
-- The user asks about past decisions, preferences, or history
-- Before making architectural or design decisions
-- You're unsure about a convention or workflow
-
-### Before risky operations
-```bash
-curl -s http://localhost:3917/triggers/git-push
-curl -s http://localhost:3917/triggers/deploy
-```
-
-### Before session ends / compaction
-Store what you did and what comes next:
-```bash
-curl -X POST http://localhost:3917/memories \
-  -H 'Content-Type: application/json' \
-  -d '{"content": "Session: refactored auth module, decided to use JWT. Next: write integration tests.", "tags": ["session"]}'
-```
-
-Without the "next" part, you'll wake up not knowing what to do.
-````
-
-**Done.** OpenClaw agents use curl with heartbeat-driven memory cycles.
-
----
-
-### Codex / Other Editors
-
-Use the HTTP approach. Add the curl-based instructions from **Claude Code + HTTP** above to your editor's system prompt or project instructions file.
-
-For multi-agent setups, add `X-Namespace: agent-name` header to isolate each agent's memory.
 
 ---
 
 ## Extra: LLM Proxy (automatic capture)
 
-On top of any setup above, you can route API calls through engram's proxy to automatically extract memories from every conversation — no prompt changes needed.
+On top of either setup, you can route API calls through engram's proxy to automatically extract memories from every conversation — no prompt changes needed.
 
 ```bash
 # Start engram with proxy pointing at your real API
 ENGRAM_PROXY_UPSTREAM=https://api.anthropic.com \
-ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions \
-ENGRAM_LLM_KEY=sk-xxx \
-./target/release/engram
+./engram
 
-# Tell your tool to use engram as its API endpoint
-ANTHROPIC_BASE_URL=http://localhost:3917/proxy claude  # Claude Code
+# Point your tools at engram:
+# Before: https://api.anthropic.com/v1/messages
+# After:  http://localhost:3917/proxy/v1/messages
 ```
 
-The proxy forwards requests transparently (no latency), then asynchronously extracts facts, decisions, and preferences into memory.
+The proxy forwards requests transparently, then asynchronously extracts facts and decisions into memory.
 
 > **Note:** The proxy only captures memories passively. For the agent to **read** memories back (resume, recall), you still need either MCP or HTTP prompt instructions above.
 
-Set `X-Engram-Extract: false` header on requests where you don't want extraction (e.g., sub-agent traffic).
+Set `X-Engram-Extract: false` header on requests where you don't want extraction.
 
 ## Step 4: Verify
-
-After setup, test the integration:
 
 ```bash
 # Check engram is running
 curl -s http://localhost:3917/health
 
 # Store a test memory
-curl -sf -X POST \
+curl -sf -X POST http://localhost:3917/memories \
   -H "Content-Type: application/json" \
-  -d '{"content": "Test memory from setup", "tags": ["test"]}' \
-  http://localhost:3917/memories
+  -d '{"content": "Test memory from setup", "tags": ["test"]}'
 
 # Recall it
-curl -sf -X POST \
+curl -sf -X POST http://localhost:3917/recall \
   -H "Content-Type: application/json" \
-  -d '{"query": "test setup"}' \
-  http://localhost:3917/recall
+  -d '{"query": "test setup"}'
 ```
 
-Then start a new session in your tool. The agent should call `resume` at startup and see the test memory.
+Start a new session in your tool. The agent should call resume at startup and see the test memory.
 
 ## Optional: Production (systemd)
 
@@ -431,3 +312,5 @@ EOF
 
 sudo systemctl enable --now engram
 ```
+
+For multi-agent setups, add `X-Namespace: agent-name` header to all requests to isolate each agent's memory.
