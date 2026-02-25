@@ -185,7 +185,7 @@ You have persistent memory via engram MCP tools.
 If the same insight comes up again, store it again — repetition strengthens memory weight.
 
 **Storage modifiers (MCP tool parameters):**
-- Workflows/procedures → `kind="procedural"` (never decay)
+- Workflows/procedures → `kind="procedural"` (never decay). **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural — leave `kind` unset.
 - Lessons → `tags=["lesson", "trigger:kebab-verb"]`
 - High-confidence knowledge (user corrections, explicit rules) → `layer=2` (direct to Working, skip Buffer)
 - Cross-project knowledge (identity, preferences) → `namespace="default"`
@@ -243,7 +243,7 @@ curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 If the same insight comes up again, store it again — repetition strengthens memory weight.
 
 **Storage modifiers (HTTP JSON body / headers):**
-- Workflows/procedures → `"kind": "procedural"` (never decay)
+- Workflows/procedures → `"kind": "procedural"` (never decay). **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural — leave `kind` unset.
 - Lessons → `"tags": ["lesson", "trigger:kebab-verb"]`
 - High-confidence knowledge (user corrections, explicit rules) → `"layer": 2` (direct to Working, skip Buffer)
 - Cross-project knowledge (identity, preferences) → `-H "X-Namespace: default"`
