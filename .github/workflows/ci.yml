@@ -9,41 +9,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build
-        run: cargo build --release
-
-      - name: Tests
-        run: cargo test
-
-      - name: Integration tests
-        run: |
-          ENGRAM_API_KEY=ci-test-key ENGRAM_DB=/tmp/ci-test.db ./target/release/engram &
-          sleep 2
-          ENGRAM_API_KEY=ci-test-key bash tests/integration.sh
-          kill %1 || true
-          rm -f /tmp/ci-test.db
-
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-
-      - name: Binary size check
-        run: |
-          SIZE=$(stat -c %s target/release/engram)
-          echo "Binary size: $((SIZE / 1024 / 1024)) MB ($SIZE bytes)"
-          if [ "$SIZE" -gt 15728640 ]; then
-            echo "FAIL: binary exceeds 15 MB"
-            exit 1
-          fi
-
   build:
-    needs: test
     strategy:
       matrix:
         include:

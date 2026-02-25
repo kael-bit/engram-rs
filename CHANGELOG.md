@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.9.0
+
+### Highlights
+
+- **ENGRAM_LLM_LEVEL=auto**: Heuristic-first consolidation — high-confidence decisions (obvious promotions, clear garbage) skip LLM calls entirely. Only uncertain cases go to LLM. `full` and `off` modes also available.
+- **Namespace isolation with cross-namespace merging**: Each project gets its own memory space. Resume/recall automatically include the `default` namespace. Consolidation merges project→default but never the reverse.
+- **Audit rework — three powers, no delete**: Audit can only schedule (promote/demote), adjust importance, and merge. Deletion is lifecycle-only (TTL, decay). Function calling replaces raw JSON output.
+- **Cosine-based dedup**: Replaced Jaccard similarity with cosine similarity for insert dedup. More accurate, especially for CJK content.
+- **Working capacity cap**: LRU eviction when Working exceeds `ENGRAM_WORKING_CAP` (default 30). Replaces time-based decay.
+- **Buffer capacity cap**: FIFO eviction when Buffer exceeds `ENGRAM_BUFFER_CAP` (default 200).
+
+### Features
+
+- Buffer stuck fix: auto-reset decay on >48h stuck memories, delete >7d abandoned
+- Stale tag cleanup: remove orphaned `gate-rejected` and `promotion` tags
+- Audit cluster-based review with cosine merge hints
+- Core overlap detection during consolidation
+- Resume compression caching in `engram_meta`
+- Directional namespace merging (project→default only)
+- Accept JSON body without Content-Type header
+- Compound indexes for namespace queries
+- Recall: `budget_tokens=0` treated as unlimited
+
+### Fixes
+
+- Decoupled `sim_floor` from `min_score` in recall — short CJK queries no longer return 0 results
+- Reconcile layer guard: lower-layer memories cannot absorb higher-layer ones
+- Resume budget calculation uses `chars().count()` instead of byte length — CJK no longer consumes 3× budget
+- Audit only counts successful deletions
+- Sandbox protects lessons/procedurals from delete, blocks same-layer demote
+- Triage prompt filters test infrastructure noise
+
+### Refactoring
+
+- Magic numbers extracted to `src/thresholds.rs`
+- Proxy split into module directory
+- All tag-based layer routing removed — every memory enters Buffer
+- Storage principle inverted: "default store, short exclusion list"
+
+### Documentation
+
+- README rewritten: demo GIF, streamlined features, docs split out
+- MCP docs moved to `docs/MCP.md` with `mcp-config.json` in repo root
+- ARCHITECTURE.md as internal-only technical reference
+- SETUP.md prompt templates aligned across MCP and HTTP
+
+### Tests
+
+- Comprehensive sandbox RuleChecker unit tests
+- Buffer dedup, audit parse, scoring boundary tests
+- Proxy watermark extraction tests
+
 ## 0.8.0
 
 ### Highlights
