@@ -71,7 +71,7 @@ impl MemoryDB {
         } // do_dedup
 
         let now = now_ms();
-        let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
+        let base_importance = input.importance.unwrap_or(0.5);
 
         // All new memories enter Buffer. Triage promotes worthy ones to Working.
         // Explicit layer only for admin/migration use.
@@ -80,6 +80,19 @@ impl MemoryDB {
         let id = Uuid::new_v4().to_string();
         let source = input.source.unwrap_or_else(|| "api".into());
         let tags = input.tags.unwrap_or_default();
+
+        // Boost importance for high-signal memories when caller didn't set it explicitly
+        let importance = if input.importance.is_some() {
+            base_importance
+        } else {
+            let kind_str = input.kind.as_deref().unwrap_or("semantic");
+            let has_lesson = tags.iter().any(|t| t == "lesson" || t.starts_with("trigger:"));
+            if kind_str == "procedural" || has_lesson {
+                0.75
+            } else {
+                base_importance
+            }
+        }.clamp(0.0, 1.0);
 
         let namespace = input.namespace.unwrap_or_else(|| "default".into());
         let kind = input.kind.unwrap_or_else(|| "semantic".into());
@@ -161,9 +174,19 @@ impl MemoryDB {
                     Err(_) => continue,
                 };
                 let id = Uuid::new_v4().to_string();
-                let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
                 let source = input.source.unwrap_or_else(|| "api".into());
                 let tags = input.tags.unwrap_or_default();
+                let importance = if input.importance.is_some() {
+                    input.importance.unwrap_or(0.5)
+                } else {
+                    let kind_str = input.kind.as_deref().unwrap_or("semantic");
+                    let has_lesson = tags.iter().any(|t| t == "lesson" || t.starts_with("trigger:"));
+                    if kind_str == "procedural" || has_lesson {
+                        0.75
+                    } else {
+                        0.5
+                    }
+                }.clamp(0.0, 1.0);
                 let namespace = input.namespace.unwrap_or_else(|| "default".into());
                 let kind = input.kind.unwrap_or_else(|| "semantic".into());
 
