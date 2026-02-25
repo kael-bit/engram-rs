@@ -164,6 +164,16 @@ Before acting on any non-trivial task, recall first. Don't assume you remember �
 Default recall is fast (~30ms cached). For short/vague queries, add expand=true (+1-2s).
 Before risky operations, check triggers for relevant lessons.
 
+Key parameters:
+- `query` (required) — search query
+- `limit` — max results (default 20)
+- `budget_tokens` — token budget for results (default 2000, 0 = unlimited)
+- `expand` — LLM query expansion for short/vague queries (+1-2s)
+- `rerank` — LLM reranking for better ordering (+2-4s)
+- `tags` — filter by tags
+- `since` / `until` — ISO 8601 time range filter
+- `min_score` — minimum relevance threshold (0.0-1.0)
+
 How: `engram_recall` with the topic as query. `engram_triggers` for pre-action checks.
 
 ### Before session ends
@@ -229,6 +239,16 @@ curl -sf -X POST http://localhost:3917/memories \
 Before acting on any non-trivial task, recall first. Don't assume you remember — check.
 Default recall is fast (~30ms cached). For short/vague queries, add expand=true (+1-2s).
 Before risky operations, check triggers for relevant lessons.
+
+Key parameters:
+- `query` (required) — search query
+- `limit` — max results (default 20)
+- `budget_tokens` — token budget for results (default 2000, 0 = unlimited)
+- `expand` — LLM query expansion for short/vague queries (+1-2s)
+- `rerank` — LLM reranking for better ordering (+2-4s)
+- `tags` — filter by tags
+- `since` / `until` — ISO 8601 time range filter
+- `min_score` — minimum relevance threshold (0.0-1.0)
 
 How:
 ```bash
