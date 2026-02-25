@@ -1,4 +1,4 @@
-mod extract;
+pub mod extract;
 pub mod parse;
 mod stats;
 pub mod window;

@@ -262,3 +262,34 @@ fn watermark_missing_messages_field_returns_none() {
     let result = extract_user_via_watermark(&state, &req, "sess-j");
     assert!(result.is_none());
 }
+
+// --- is_code_noise tests ---
+use engram::proxy::extract::is_code_noise;
+
+#[test]
+fn code_noise_rejects_impl_details() {
+    assert!(is_code_noise("Change `#[cfg(test)]` methods to `pub(crate)` for accessibility"));
+    assert!(is_code_noise("Replaced `parse_audit_ops` with `resolve_audit_ops` to handle structured `RawAud..."));
+    assert!(is_code_noise("Tests in `tests/memory_tests.rs` require a direct dependency on `rusqlite`"));
+    assert!(is_code_noise("The `vec_index` field and `VecEntry` struct must be `pub` to support external indexing"));
+}
+
+#[test]
+fn code_noise_keeps_lessons() {
+    assert!(!is_code_noise("LESSON: never force-push to main without code review"));
+    assert!(!is_code_noise("Decision: use capacity-based eviction instead of time-based decay"));
+    assert!(!is_code_noise("User prefers concise Chinese replies"));
+    assert!(!is_code_noise("不要直接修改配置文件，必须用CLI操作"));
+}
+
+#[test]
+fn code_noise_single_signal_no_value() {
+    assert!(is_code_noise("The codebase uses an r2d2 pool for database connections."));
+    assert!(is_code_noise("Audit found 116 magic numbers across 23 files, notably in api/recall_handlers.rs"));
+}
+
+#[test]
+fn code_noise_clean_content() {
+    assert!(!is_code_noise("Alice prefers direct communication without filler words"));
+    assert!(!is_code_noise("Gemini 3.1 Pro used as second-opinion reviewer for architecture"));
+}

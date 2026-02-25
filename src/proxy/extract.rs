@@ -136,6 +136,12 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
             continue;
         }
 
+        // Hard filter: reject code-operation noise that weak models keep extracting
+        if is_code_noise(&entry.content) {
+            debug!("proxy: code-noise filter skip: {}", truncate_chars(&entry.content, 60));
+            continue;
+        }
+
         if batch_contents.iter().any(|prev| {
             crate::db::jaccard_similar(prev, &entry.content, PROXY_DEDUP_THRESHOLD)
         }) {
@@ -248,4 +254,52 @@ struct ExtractionEntry {
     facts: Option<Vec<db::FactInput>>,
     #[serde(default)]
     kind: Option<String>,
+}
+
+/// Reject code-operation noise that LLMs keep extracting despite prompt instructions.
+/// Returns true if the content looks like a routine implementation detail.
+pub fn is_code_noise(content: &str) -> bool {
+    let lower = content.to_lowercase();
+
+    // Code-level implementation details
+    let noise_signals = [
+        "pub(crate)", "pub fn", "#[cfg(test)]", "#[test]",
+        "impl ", "struct ", "enum ", "trait ",
+        "cargo test", "cargo build", "cargo check",
+        "clippy", "compile", "compilation",
+        ".rs:", ".rs`", "mod.rs", "lib.rs", "main.rs",
+        "commit ", "merge conflict",
+        "test pass", "tests pass", "test fail",
+        "refactor", "visibility", "accessibility",
+        "doc-test", "inline test",
+        "replace", "rename", "moved to", "split into",
+        "magic number", "dead code", "unused import",
+        "parse_", "extract_", "resolve_",
+        "codebase", "source code", "implementation",
+        "the mutex", "the rwlock", "the pool",
+    ];
+
+    let hit_count = noise_signals.iter()
+        .filter(|s| lower.contains(*s))
+        .count();
+
+    // 2+ noise signals = almost certainly code noise
+    if hit_count >= 2 {
+        return true;
+    }
+
+    // Single signal + no lesson/decision markers = likely noise
+    if hit_count == 1 {
+        let has_value_signal = lower.contains("lesson")
+            || lower.contains("decision")
+            || lower.contains("never ")
+            || lower.contains("always ")
+            || lower.contains("don't ")
+            || lower.contains("不要")
+            || lower.contains("必须")
+            || lower.contains("禁止");
+        return !has_value_signal;
+    }
+
+    false
 }
