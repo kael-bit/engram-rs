@@ -178,6 +178,7 @@ Corrections, criticism, preferences, and rules from the user are NEVER automatic
 - Workflows/procedures → set kind="procedural" (never decay).
 - "Remember this" from user → set importance=0.9.
 - Lessons from mistakes → include tags like `["lesson", "trigger:kebab-case-verb"]` (e.g., `trigger:git-push`, `trigger:deploy`).
+- **Direct to Working (skip Buffer):** For high-confidence knowledge you're certain about — user corrections, explicit rules, confirmed preferences — set `layer=2`. Default (no layer) enters Buffer and gets promoted by triage.
 
 ### 3. Recalling Memories (Tools: `engram_recall` & `engram_triggers`)
 
@@ -258,6 +259,7 @@ Corrections, criticism, preferences, and rules from the user are NEVER automatic
 - Workflows/procedures → set kind="procedural" (never decay).
 - "Remember this" from user → set importance=0.9.
 - Lessons from mistakes → include tags like `["lesson", "trigger:kebab-case-verb"]` (e.g., `trigger:git-push`, `trigger:deploy`).
+- **Direct to Working (skip Buffer):** For high-confidence knowledge — user corrections, explicit rules, confirmed preferences — set `"layer": 2`. Default enters Buffer and gets promoted by triage.
 
 ```bash
 curl -sf -X POST http://localhost:3917/memories \
@@ -270,6 +272,10 @@ curl -sf -X POST http://localhost:3917/memories \
 # Lessons with trigger
 curl -sf -X POST http://localhost:3917/memories \
   -d '{"content": "LESSON: never force-push to main", "tags": ["lesson","trigger:git-push"]}'
+
+# High-confidence → direct to Working
+curl -sf -X POST http://localhost:3917/memories \
+  -d '{"content": "User timezone is US/Pacific", "tags": ["preference"], "layer": 2}'
 ```
 
 ### 3. Recalling Memories
