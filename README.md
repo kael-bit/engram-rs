@@ -37,7 +37,7 @@ sequenceDiagram
     E-->>A: relevant lessons
 
     Note over A,E: Milestone Recap
-    A->>E: POST /memories {what was done + decisions + next steps}
+    A->>E: POST /memories {decisions + lessons + next steps}
 
     Note over E,LLM: Background (every 30min)
     LLM->>E: consolidate

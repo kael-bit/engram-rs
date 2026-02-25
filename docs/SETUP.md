@@ -179,7 +179,7 @@ Before acting on any non-trivial task, you **MUST** check your memory. Do not as
 
 You cannot predict when a session ends. Instead, proactively store a recap immediately after completing any major task or reaching a decision point.
 
-- **Content:** What was done + Decisions made + What to do next.
+- **Content:** Decisions made + Lessons learned + What to do next. Skip operational details ("deployed X", "ran Y") — only store *why* and *what's next*.
 - **Tags:** Include `session`.
 - *Note: Without the "what to do next" part, you will wake up in the next session not knowing what to do.*
 ````
@@ -267,7 +267,7 @@ curl -sf http://localhost:3917/triggers/deploy
 
 You cannot predict when a session ends. Instead, proactively store a recap immediately after completing any major task or reaching a decision point.
 
-- **Content:** What was done + Decisions made + What to do next.
+- **Content:** Decisions made + Lessons learned + What to do next. Skip operational details ("deployed X", "ran Y") — only store *why* and *what's next*.
 - **Tags:** Include `session`.
 - *Note: Without the "what to do next" part, you will wake up in the next session not knowing what to do.*
 ````
