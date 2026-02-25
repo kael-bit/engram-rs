@@ -27,7 +27,7 @@ const RECONCILE_PROMPT: &str = "You are comparing two memory entries about poten
     unique details not in the newer one.";
 
 /// Detect same-topic memories where a newer one supersedes an older one.
-fn reconcile_pair_key(id_a: &str, id_b: &str) -> String {
+pub(super) fn reconcile_pair_key(id_a: &str, id_b: &str) -> String {
     if id_a < id_b { format!("{}:{}", id_a, id_b) } else { format!("{}:{}", id_b, id_a) }
 }
 

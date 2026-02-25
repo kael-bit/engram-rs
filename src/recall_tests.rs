@@ -882,6 +882,39 @@ fn recency_score_zero_decay_rate() {
     );
 }
 
+#[test]
+fn recency_score_24h_high_decay() {
+    let now = crate::db::now_ms();
+    let day_ago = now - 24 * 3_600_000;
+    let score = recency_score(day_ago, 5.0);
+    // hours = 24, rate = 5.0: exp(-5.0 * 24 / 168) = exp(-0.714) ≈ 0.4895
+    let expected = (-5.0_f64 * 24.0 / 168.0).exp();
+    assert!(
+        (score - expected).abs() < 0.01,
+        "24h old with decay=5.0 should be ≈{expected:.4}, got {score}"
+    );
+    assert!(score > 0.3 && score < 0.7, "should be in mid range, got {score}");
+}
+
+#[test]
+fn recency_score_huge_finite_decay() {
+    let now = crate::db::now_ms();
+    let hour_ago = now - 3_600_000;
+    // decay_rate=100 should be clamped to 10
+    let score = recency_score(hour_ago, 100.0);
+    assert!(score.is_finite(), "huge decay_rate must not produce NaN/Inf");
+    assert!(score >= 0.0 && score <= 1.0);
+}
+
+#[test]
+fn recency_score_nan_decay() {
+    let now = crate::db::now_ms();
+    let score = recency_score(now - 3_600_000, f64::NAN);
+    // NaN is not finite → should fall back to 0.1
+    assert!(score.is_finite(), "NaN decay_rate must not produce NaN");
+    assert!(score > 0.0 && score <= 1.0);
+}
+
 // --- score_memory tests ---
 
 #[test]

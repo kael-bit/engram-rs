@@ -23,6 +23,8 @@ use merge::{merge_similar, reconcile_updates};
 // Re-imported for test access via `use super::*`
 #[cfg(test)]
 use merge::find_clusters;
+#[cfg(test)]
+use merge::reconcile_pair_key;
 use summary::update_core_summary;
 use triage::{dedup_buffer, triage_buffer};
 

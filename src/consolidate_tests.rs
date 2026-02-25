@@ -480,3 +480,37 @@ fn session_notes_blocked_from_core_promotion() {
     let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _)| id.as_str()).collect();
     assert!(!ids.contains(&"session-note"), "session notes must never reach Core promotion");
 }
+
+// --- reconcile_pair_key tests ---
+
+#[test]
+fn reconcile_pair_key_is_order_independent() {
+    let k1 = reconcile_pair_key("abc-123", "xyz-789");
+    let k2 = reconcile_pair_key("xyz-789", "abc-123");
+    assert_eq!(k1, k2, "key must be the same regardless of argument order");
+}
+
+#[test]
+fn reconcile_pair_key_lexicographic() {
+    let key = reconcile_pair_key("beta", "alpha");
+    assert_eq!(key, "alpha:beta", "smaller id should come first");
+
+    let key2 = reconcile_pair_key("alpha", "beta");
+    assert_eq!(key2, "alpha:beta");
+}
+
+#[test]
+fn reconcile_pair_key_same_id() {
+    let key = reconcile_pair_key("same", "same");
+    assert_eq!(key, "same:same");
+}
+
+#[test]
+fn reconcile_pair_key_uuid_style() {
+    let a = "550e8400-e29b-41d4-a716-446655440000";
+    let b = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+    let k1 = reconcile_pair_key(a, b);
+    let k2 = reconcile_pair_key(b, a);
+    assert_eq!(k1, k2);
+    assert!(k1.starts_with("550e"), "lexicographically smaller UUID should come first");
+}
