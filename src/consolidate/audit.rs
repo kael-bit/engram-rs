@@ -5,79 +5,10 @@ use crate::SharedDB;
 use crate::util::truncate_chars;
 use serde::{Deserialize, Serialize};
 
+use crate::prompts;
+
 /// Similarity range for audit merge hints (below auto-merge threshold).
 use crate::thresholds::{AUDIT_MERGE_MIN_SIM, AUDIT_MERGE_MAX_SIM};
-
-// Re-exported for sandbox use
-pub(crate) const AUDIT_SYSTEM_PUB: &str = AUDIT_SYSTEM;
-
-const AUDIT_SYSTEM: &str = r#"Review an AI agent's memory layers and propose maintenance operations.
-
-You have three powers:
-1. **Schedule** (promote/demote): Move memories between layers
-2. **Adjust** (adjust): Change a memory's importance score
-3. **Merge**: Combine duplicate/overlapping memories
-
-You CANNOT delete memories. Deletion happens through natural lifecycle (Buffer TTL expiry).
-
-Metadata per memory:
-- imp = importance (0-1)
-- ac = access count (times recalled). ac=0 = never recalled
-- age = days since creation
-- mod = days since last modification
-- tags = labels
-- Layer: Core (3), Working (2), Buffer (1)
-
-## Layer Principles
-
-**Core** = stable principles, lessons from mistakes, identity constraints. Rarely changes.
-**Working** = active project context, current decisions. Becomes stale as projects evolve.
-**Buffer** = temporary intake, expires via TTL.
-
-## Promote — be VERY selective
-
-Core is permanent. Only promote Working memories proven valuable over time.
-
-✅ GOOD promotion:
-- ac>5, survived multiple sessions, content still matches current architecture
-- Lesson that actually prevented repeating a mistake (not just "I learned X")
-- Hard constraint from the user that applies permanently
-
-❌ BAD promotion — DO NOT:
-- ac=0 and recently created → not battle-tested, keep in Working
-- Tagged `auto-extract` → machine-generated, often low quality
-- Content unrelated to the project → wrong scope
-- Describes a fix later replaced → obsolete
-- Generic platitudes without specific context
-
-A `LESSON:` prefix or `lesson` tag does NOT automatically qualify for Core.
-
-## Demote
-
-Move memories down one layer when they no longer belong:
-- Implementation details already in code
-- Session logs and progress reports
-- Stale plans/TODOs or config snapshots
-- Content about removed/replaced features
-
-## Adjust importance
-
-Lower importance (e.g. 0.3) for memories that are losing relevance but shouldn't move layers yet.
-Raise importance (e.g. 0.9) for memories that are clearly under-valued.
-
-## Merge rules
-
-- When memories overlap heavily, merge to consolidate information
-- Cross-layer merge: the merged result MUST go to the HIGHER layer (Working+Core → Core)
-- Preserve all specific details — never lose information in a merge
-
-## Guidelines
-
-- **Superseded:** newer memory covers same knowledge → merge or demote the older one
-- **Obsolete:** high ac on content about removed features ≠ still valid → demote
-- Same-layer demote/promote is a no-op bug (L2→L2, L3→L3)
-- Read full content before deciding — don't judge by tags alone
-- Propose no operations if nothing needs changing."#;
 
 /// Tool response: a list of audit operations proposed by the LLM.
 #[derive(Debug, Deserialize)]
@@ -108,59 +39,7 @@ pub struct RawAuditOp {
 
 /// Build the JSON schema for the audit_operations tool.
 pub fn audit_tool_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "operations": {
-                "type": "array",
-                "description": "List of maintenance operations. Empty array if nothing needs changing.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "op": {
-                            "type": "string",
-                            "enum": ["promote", "demote", "adjust", "merge"],
-                            "description": "Operation type"
-                        },
-                        "id": {
-                            "type": "string",
-                            "description": "8-char short ID of the target memory (for promote/demote/adjust)"
-                        },
-                        "to": {
-                            "type": "integer",
-                            "enum": [1, 2, 3],
-                            "description": "Target layer: 1=Buffer, 2=Working, 3=Core (for promote/demote)"
-                        },
-                        "importance": {
-                            "type": "number",
-                            "description": "New importance value 0.0-1.0 (for adjust op)"
-                        },
-                        "ids": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Short IDs of memories to merge (for merge op, minimum 2)"
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "Combined text for the merged memory (for merge op)"
-                        },
-                        "layer": {
-                            "type": "integer",
-                            "enum": [2, 3],
-                            "description": "Layer for merged memory — must be the HIGHEST layer among source memories (for merge op)"
-                        },
-                        "tags": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Tags for the merged memory (for merge op)"
-                        }
-                    },
-                    "required": ["op"]
-                }
-            }
-        },
-        "required": ["operations"]
-    })
+    prompts::audit_tool_schema()
 }
 
 /// Full audit: reviews Core+Working memories using the audit model via function calling.
@@ -251,7 +130,7 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
 /// Call the audit LLM with function calling, returning structured operations.
 async fn call_audit_tool(cfg: &AiConfig, prompt: &str) -> Result<ai::ToolCallResult<AuditToolResponse>, EngramError> {
     ai::llm_tool_call::<AuditToolResponse>(
-        cfg, "audit", AUDIT_SYSTEM, prompt,
+        cfg, "audit", prompts::AUDIT_SYSTEM, prompt,
         "audit_operations",
         "Propose cleanup operations for the memory store. Return empty operations array if nothing needs changing.",
         audit_tool_schema(),

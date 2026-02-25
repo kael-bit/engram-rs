@@ -1,35 +1,12 @@
 use crate::ai::{self, AiConfig, cosine_similarity};
 use crate::db::{Layer, Memory, MemoryDB};
+use crate::prompts;
 use crate::SharedDB;
 use crate::util::truncate_chars;
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 use super::merge_tags;
-
-const TRIAGE_SYSTEM: &str = "You are triaging an AI agent's short-term memory buffer.\n\
-    Each memory below is tagged with an ID. Decide which ones contain durable knowledge \
-    worth promoting to Working memory (medium-term), and which are transient.\n\n\
-    Metadata:\n\
-    - ac = recall count (how many times actively retrieved by query)\n\
-    - rep = repetition count (how many times the same concept was mentioned again). \
-    High rep means the agent/user keeps restating this — it's deeply important to them.\n\n\
-    PROMOTE if the memory contains:\n\
-    - Design decisions, architecture choices, API contracts\n\
-    - Lessons learned, rules, principles\n\
-    - Procedures, workflows, step-by-step processes\n\
-    - Identity info, preferences, constraints\n\
-    - Project context that will be needed across sessions\n\
-    - Anything with rep >= 2 — repeated emphasis signals importance\n\n\
-    KEEP in buffer if:\n\
-    - Session summaries that just list what was done (not lessons)\n\
-    - Temporary status, in-progress notes\n\
-    - Information that's only relevant right now\n\
-    - Test infrastructure details (helper functions, visibility modifiers, mock setup)\n\
-    - Implementation minutiae without broader lessons\n\n\
-    Classify the kind for promoted memories:\n\
-    - procedural: step-by-step workflows, build/deploy/test processes\n\
-    - semantic: everything else (facts, decisions, lessons, preferences)";
 
 #[derive(Debug, Deserialize)]
 struct TriageDecision {
@@ -91,27 +68,10 @@ pub(super) async fn triage_buffer(
             ));
         }
 
-        let schema = serde_json::json!({
-            "type": "object",
-            "properties": {
-                "decisions": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": { "type": "string", "description": "Memory ID prefix (first 8 chars)" },
-                            "action": { "type": "string", "enum": ["promote", "keep"] },
-                            "kind": { "type": "string", "enum": ["semantic", "procedural"], "description": "Only for promoted memories" }
-                        },
-                        "required": ["id", "action"]
-                    }
-                }
-            },
-            "required": ["decisions"]
-        });
+        let schema = prompts::triage_schema();
 
         let result: TriageResult = match ai::llm_tool_call(
-            cfg, "gate", TRIAGE_SYSTEM, &user_msg,
+            cfg, "gate", prompts::TRIAGE_SYSTEM, &user_msg,
             "triage_decisions", "Decide which memories to promote or keep",
             schema,
         ).await {

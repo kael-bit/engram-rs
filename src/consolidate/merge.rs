@@ -1,6 +1,7 @@
 use crate::ai::{self, AiConfig, cosine_similarity};
 use crate::db::{Layer, Memory};
 use crate::error::EngramError;
+use crate::prompts;
 use crate::SharedDB;
 use crate::util::truncate_chars;
 use serde::Deserialize;
@@ -16,24 +17,6 @@ const MERGE_SIMILARITY: f64 = thresholds::MERGE_SIM;
 /// Cosine window for reconcile: related-but-not-duplicate pairs.
 const RECONCILE_MIN_SIM: f64 = thresholds::RECONCILE_MIN_SIM;
 const RECONCILE_MAX_SIM: f64 = thresholds::RECONCILE_MAX_SIM;
-
-const MERGE_SYSTEM: &str = "Merge these related memory entries into a single concise note. Rules:\n\
-    - Preserve ALL specific names, tools, libraries, versions, and technical terms.\n\
-    - If one entry updates or supersedes the other, keep the latest state.\n\
-    - Remove only truly redundant/repeated sentences.\n\
-    - Names, numbers, versions, dates, tool names > vague summaries. Never drop specific terms.\n\
-    - Keep it under 400 characters if possible.\n\
-    - Same language as originals. Output only the merged text, nothing else.";
-
-const RECONCILE_PROMPT: &str = "You are comparing two memory entries about potentially the same topic.\n\
-    The NEWER entry was created after the OLDER one.\n\n\
-    Decide:\n\
-    - update: The newer entry is an updated version of the same information. \
-    The older one is now stale/outdated and should be removed.\n\
-    - absorb: The newer entry contains all useful info from the older one plus more. \
-    The older one is redundant.\n\
-    - keep_both: They cover genuinely different aspects or the older one has \
-    unique details not in the newer one.";
 
 /// Detect same-topic memories where a newer one supersedes an older one.
 pub fn reconcile_pair_key(id_a: &str, id_b: &str) -> String {
@@ -207,7 +190,7 @@ async fn try_reconcile_pair(
     struct ReconcileDecision { decision: String }
 
     let result: ReconcileDecision = match ai::llm_tool_call(
-        cfg, "merge", RECONCILE_PROMPT, &user_msg,
+        cfg, "merge", prompts::RECONCILE_PROMPT, &user_msg,
         "reconcile_decision", "Decide how to reconcile two memories",
         schema,
     ).await {
@@ -323,7 +306,7 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
                 let _ = writeln!(input, "{}. {}", i + 1, ns_mems[idx].0.content);
             }
 
-            let merged_content = match ai::llm_chat_as(cfg, "merge", MERGE_SYSTEM, &input).await {
+            let merged_content = match ai::llm_chat_as(cfg, "merge", prompts::MERGE_SYSTEM, &input).await {
                 Ok(r) => {
                     if let Some(ref u) = r.usage {
                         let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);

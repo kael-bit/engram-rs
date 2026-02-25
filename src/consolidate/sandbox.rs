@@ -255,7 +255,7 @@ pub async fn sandbox_audit(
         let tcr = crate::ai::llm_tool_call::<super::audit::AuditToolResponse>(
             cfg,
             "audit",
-            super::audit::AUDIT_SYSTEM_PUB,
+            crate::prompts::AUDIT_SYSTEM,
             &prompt,
             "audit_operations",
             "Propose cleanup operations for the memory store. Return empty operations array if nothing needs changing.",

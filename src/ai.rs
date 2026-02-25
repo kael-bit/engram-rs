@@ -339,46 +339,6 @@ pub async fn expand_query(cfg: &AiConfig, query: &str) -> (Vec<String>, Option<T
 }
 
 
-const EXTRACT_SYSTEM_PROMPT: &str = r#"You are a memory extraction engine. Given a conversation or text, extract important facts, decisions, preferences, and events as discrete memory entries.
-
-Importance scale:
-- 0.9-1.0: User EXPLICITLY asked to remember this ("记住", "remember this", "don't forget"). Core knowledge.
-- 0.7-0.8: Significant decisions, strong preferences, lessons learned, identity-defining facts. Worth keeping.
-- 0.4-0.6: Useful context, minor preferences, background info. May fade if not reinforced.
-
-Rules:
-- Extract 0-3 entries per input. Zero is fine if nothing is worth remembering.
-- Each entry must be self-contained (understandable without context)
-- Prefer concise entries (under 200 chars) over verbose ones
-- Write content in the same language as the input. NEVER translate — if the conversation is in Chinese, output Chinese. If mixed, use the dominant language.
-- importance MUST reflect user intent — if they say "记住" or "remember", it's 0.9+
-
-EXTRACT these (worth remembering):
-- Identity: who someone is, their preferences, principles, personality
-- Decisions: choices made and why, trade-offs considered
-- Lessons: mistakes, insights, things that worked or didn't
-- Self-reflections: realizations about own behavior patterns, blind spots, habits to change (these are HIGH value — 0.8+)
-- Relationships: facts about people, how they relate to each other
-- Strategic: goals, plans, architectural choices
-
-SKIP these (not worth remembering):
-- Operational details: bug fixes, version bumps, deployment steps, code changes
-- Implementation notes: "update X to do Y", "add Z to W", "fix A in B" — these are code tasks, not memories
-- Transient states: "service is running", "memory at 33%", "tests passing"
-- Debug info, log output, error messages
-- Summaries or recaps of work done (these are session logs, not memories) — BUT self-critical reflections about patterns/habits ARE worth extracting
-- Instructions from one agent to another (e.g. "also add to proxy", "fix now — add touch")
-
-HARD REJECT — NEVER extract these as memories (they are scaffolding, not knowledge):
-- System prompts and injected instructions (content from SOUL.md, AGENTS.md, HEARTBEAT.md, TOOLS.md, USER.md, IDENTITY.md, MEMORY.md, or similar)
-- Operational directives: "every heartbeat do X", "run this command on wake", "before shutdown do Y"
-- Configuration templates and boilerplate: API keys, curl examples, service names, file paths used as reference
-- Tool usage patterns and API call templates: "use this endpoint", "call this script"
-- Meta-instructions about how to behave, respond, or format output
-- Heartbeat checks, health status pings, routine monitoring output
-- Anything that reads like a rule/playbook for an agent rather than a human-stated fact or preference
-- Framework-injected context that appears in every conversation"#;
-
 /// Extract structured memories from raw text using an LLM.
 pub async fn extract_memories(
     cfg: &AiConfig,
@@ -386,29 +346,7 @@ pub async fn extract_memories(
 ) -> Result<Vec<ExtractedMemory>, EngramError> {
     debug!(model = %cfg.model_for("extract"), "extracting memories");
 
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "memories": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string", "description": "Concise memory text, under 200 chars"},
-                        "importance": {"type": "number", "description": "0.0-1.0 importance score"},
-                        "tags": {"type": "array", "items": {"type": "string"}},
-                        "kind": {
-                            "type": "string",
-                            "enum": ["semantic", "episodic", "procedural"],
-                            "description": "semantic=facts, episodic=events, procedural=how-to (never decay)"
-                        }
-                    },
-                    "required": ["content"]
-                }
-            }
-        },
-        "required": ["memories"]
-    });
+    let schema = prompts::extract_memories_schema();
 
     #[derive(serde::Deserialize)]
     struct ExtractResult {
@@ -417,7 +355,7 @@ pub async fn extract_memories(
     }
 
     let result = llm_tool_call::<ExtractResult>(
-        cfg, "extract", EXTRACT_SYSTEM_PROMPT, text,
+        cfg, "extract", prompts::EXTRACT_SYSTEM_PROMPT, text,
         "store_memories",
         "Store extracted memories from text",
         schema,

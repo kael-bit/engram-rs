@@ -1,18 +1,9 @@
 use crate::ai::{self, AiConfig};
+use crate::prompts;
 use crate::SharedDB;
 use crate::util::truncate_chars;
 use serde::Deserialize;
 use tracing::{info, warn};
-
-#[allow(dead_code)]
-const FACT_EXTRACT_PROMPT: &str = "Extract factual triples from this memory text. \
-    A triple is (subject, predicate, object) representing a concrete, stable relationship.\n\
-    Examples: (user, prefers, dark mode), (engram, uses, SQLite), (project, language, Rust)\n\n\
-    Rules:\n\
-    - Only extract concrete, stable facts — NOT transient states or opinions\n\
-    - Subject/object should be short noun phrases (1-3 words)\n\
-    - Predicate should be a verb or relationship label\n\
-    - Skip if the text is purely procedural/operational with no factual content";
 
 #[derive(Deserialize)]
 struct FactsResult {
@@ -24,29 +15,6 @@ struct FactTriple {
     subject: String,
     predicate: String,
     object: String,
-}
-
-#[allow(dead_code)]
-fn fact_extract_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "facts": {
-                "type": "array",
-                "description": "Extracted triples. Empty array if nothing to extract.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "subject": {"type": "string", "description": "Short noun phrase (1-3 words)"},
-                        "predicate": {"type": "string", "description": "Verb or relationship label"},
-                        "object": {"type": "string", "description": "Short noun phrase (1-3 words)"}
-                    },
-                    "required": ["subject", "predicate", "object"]
-                }
-            }
-        },
-        "required": ["facts"]
-    })
 }
 
 #[allow(dead_code)]
@@ -67,9 +35,9 @@ pub(super) async fn extract_facts_batch(db: &SharedDB, cfg: &AiConfig, limit: us
     for mem in &mems {
         let content = truncate_chars(&mem.content, 500);
         let result: ai::ToolCallResult<FactsResult> = match ai::llm_tool_call(
-            cfg, "extract", FACT_EXTRACT_PROMPT, &content,
+            cfg, "extract", prompts::FACT_EXTRACT_PROMPT, &content,
             "extract_facts", "Extract factual triples from the text",
-            fact_extract_schema(),
+            prompts::fact_extract_schema(),
         ).await {
             Ok(r) => r,
             Err(e) => {

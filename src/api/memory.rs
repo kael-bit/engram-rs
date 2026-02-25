@@ -369,11 +369,7 @@ pub(super) async fn list_memories(
     Ok(Json(result))
 }
 
-const MERGE_PROMPT: &str = "\
-Merge two versions of the same memory into one. Preserve ALL specific details \
-from BOTH versions — names, numbers, commands, constraints. \
-Output ONLY the merged text, nothing else. Keep the same language as the input. \
-Be concise; don't add commentary or explanation.";
+const MERGE_PROMPT: &str = crate::prompts::INSERT_MERGE_PROMPT;
 
 async fn merge_memory_contents(
     cfg: &ai::AiConfig,

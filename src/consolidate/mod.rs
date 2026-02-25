@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use crate::ai::{self, AiConfig};
 use crate::db::{Layer, Memory, MemoryDB};
 use crate::error::EngramError;
+use crate::prompts;
 use crate::util::truncate_chars;
 use crate::SharedDB;
 use serde::{Deserialize, Serialize};
@@ -658,29 +659,6 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
     }
 }
 
-const GATE_SYSTEM: &str = "\
-Core is PERMANENT memory that survives total context loss. The litmus test: \
-if the agent wakes up with zero context, would this memory alone be useful? \
-If it only makes sense alongside the code/docs/conversation it came from, REJECT.\n\
-\n\
-APPROVE:\n\
-- \"never force-push to main\" (lesson — prevents repeating a mistake)\n\
-- \"user prefers Chinese, hates verbose explanations\" (identity/preference — shapes behavior)\n\
-- \"all public output must hide AI identity\" (constraint — hard rule that never changes)\n\
-- \"we chose SQLite over Postgres for zero-dep deployment\" (decision rationale — the WHY)\n\
-\n\
-REJECT:\n\
-- \"Recall quality: 1) bilingual expansion 2) FTS gating 3) gate evidence\" (changelog — lists WHAT was done)\n\
-- \"Fixed bug: triage didn't filter by namespace\" (operational — belongs in git history)\n\
-- \"Session: refactored auth, deployed v0.7, 143 tests pass\" (session log — ephemeral status)\n\
-- \"Improvement plan: add compression, fix lifecycle, batch ops\" (plan — not a lesson)\n\
-- \"cosine threshold 0.78, buffer TTL 24h, promote at 5 accesses\" (config values — will go stale)\n\
-- \"HNSW index replaces brute-force search\" (implementation detail — in the code already)\n\
-\n\
-The pattern: APPROVE captures WHY and NEVER and WHO. REJECT captures WHAT and WHEN and HOW MUCH.\n\
-Numbered lists of changes (1) did X 2) did Y 3) did Z) are almost always changelogs → REJECT.\n\
-If it reads like a commit message or progress report, REJECT.";
-
 /// Gate result: approved (with optional kind) or rejected.
 #[derive(Debug, Deserialize)]
 pub struct GateResult {
@@ -706,25 +684,10 @@ async fn llm_promotion_gate(cfg: &AiConfig, content: &str, access_count: i64, re
         format!("{}\n\n[Context: {}]", truncated, context_parts.join("; "))
     };
 
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "decision": {
-                "type": "string",
-                "enum": ["approve", "reject"],
-                "description": "Whether to promote to Core"
-            },
-            "kind": {
-                "type": "string",
-                "enum": ["semantic", "procedural", "episodic"],
-                "description": "Memory kind (only when approving)"
-            }
-        },
-        "required": ["decision"]
-    });
+    let schema = prompts::gate_schema();
 
     let tcr: ai::ToolCallResult<GateResult> = ai::llm_tool_call(
-        cfg, "gate", GATE_SYSTEM, &user_msg,
+        cfg, "gate", prompts::GATE_SYSTEM, &user_msg,
         "gate_decision", "Decide whether to promote this memory to Core",
         schema,
     ).await?;
