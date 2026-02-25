@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use crate::ai::{self, AiConfig};
 use crate::db::{Layer, Memory, MemoryDB};
 use crate::error::EngramError;
@@ -271,7 +272,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
     let now = crate::db::now_ms();
     let mut promoted = 0_usize;
     let mut decayed = 0_usize;
-    let mut promoted_ids = Vec::new();
+    let mut promoted_ids: HashSet<String> = HashSet::new();
     let mut dropped_ids = Vec::new();
     let mut promotion_candidates = Vec::new();
 
@@ -397,7 +398,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         let by_kind = (is_lesson || is_procedural) && age > lesson_cooldown_ms;
 
         if (by_score || by_kind) && db.promote(&mem.id, Layer::Working).is_ok() {
-            promoted_ids.push(mem.id.clone());
+            promoted_ids.insert(mem.id.clone());
             promoted += 1;
         }
     }
@@ -422,7 +423,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
                 || mem.importance >= 0.7;
             if worth_keeping {
                 if db.promote(&mem.id, Layer::Working).is_ok() {
-                    promoted_ids.push(mem.id.clone());
+                    promoted_ids.insert(mem.id.clone());
                     promoted += 1;
                 }
             } else if db.delete(&mem.id).unwrap_or(false) {
@@ -484,7 +485,7 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         merged: 0,
         importance_decayed,
         gate_rejected: 0,
-        promoted_ids,
+        promoted_ids: promoted_ids.into_iter().collect(),
         dropped_ids,
         merged_ids: vec![],
         reconciled: 0,
