@@ -204,7 +204,7 @@ server.tool(
     const qs = params.toString();
     const result = await engramFetch(`/resume${qs ? "?" + qs : ""}`);
     return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      content: [{ type: "text", text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }],
     };
   }
 );

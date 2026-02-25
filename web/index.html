@@ -481,78 +481,19 @@ function renderResume(){
         <label>Hours <input type="number" id="resHours" value="6" min="1" max="168" style="width:55px"></label>
         <label><input type="checkbox" id="resCompact"> compact</label>
         <label>Budget <input type="number" id="resBudget" value="0" min="0" style="width:70px" placeholder="0=unlimited"></label>
+        <label>Format <select id="resFormat" style="padding:4px 8px;background:#222;color:#eee;border:1px solid #444;border-radius:4px"><option value="json">JSON</option><option value="text">Raw Text</option></select></label>
         <button class="btn" onclick="doResume()">Resume</button>
-        <button class="btn" onclick="toggleRaw()" id="rawBtn" style="background:#333">Raw</button>
       </div>
     </div>
     <div id="resResult"><div class="empty">Hit Resume to see what an agent gets on wake-up</div></div>`;
 }
 
 let lastResumeData=null;
-let showRaw=false;
-
-function toggleRaw(){
-  showRaw=!showRaw;
-  const btn=document.getElementById('rawBtn');
-  if(btn) btn.style.background=showRaw?'#1a6b3a':'#333';
-  if(lastResumeData) renderResumeResult(lastResumeData.data,lastResumeData.ms);
-}
-
-function resumeToPrompt(r){
-  let lines=[];
-  lines.push('=== Session Resume ('+r.hours+'h) ===');
-  lines.push('core: '+r.core_count+', working: '+r.working_count+', buffer: '+r.buffer_count+
-    ', recent: '+r.recent_count+', sessions: '+r.session_count);
-  lines.push('');
-  function ts(m){return m.created_at?new Date(m.created_at).toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit',hour12:false}):'';}
-  function layerTag(m){return {1:'B',2:'W',3:'C'}[m.layer]||'';}
-  function tags(m){return (m.tags||[]).length?' ['+m.tags.join(',')+']':'';}
-
-  if(r.core&&r.core.length){
-    lines.push('--- Core ('+r.core.length+') ---');
-    r.core.forEach(m=>lines.push('  [imp='+((m.importance||0).toFixed(2))+tags(m)+'] '+m.content));
-    lines.push('');
-  }
-  if(r.working&&r.working.length){
-    lines.push('--- Working ('+r.working.length+') ---');
-    r.working.forEach(m=>lines.push('  ['+ts(m)+tags(m)+'] '+m.content));
-    lines.push('');
-  }
-  if(r.sessions&&r.sessions.length){
-    lines.push('--- Sessions ('+r.sessions.length+') ---');
-    r.sessions.forEach(m=>lines.push('  ['+ts(m)+'] '+m.content));
-    lines.push('');
-  }
-  if(r.recent&&r.recent.length){
-    lines.push('--- Recent ('+r.recent.length+') ---');
-    r.recent.forEach(m=>lines.push('  ['+layerTag(m)+'|'+ts(m)+tags(m)+'] '+m.content));
-    lines.push('');
-  }
-  if(r.buffer&&r.buffer.length){
-    lines.push('--- Buffer ('+r.buffer.length+') ---');
-    r.buffer.forEach(m=>lines.push('  ['+ts(m)+tags(m)+'] '+m.content));
-    lines.push('');
-  }
-  return lines.join('\n');
-}
 
 function renderResumeResult(r,ms){
   const countLine='core: '+(r.core_count||0)+', working: '+(r.working_count||0)+
     ', buffer: '+(r.buffer_count||0)+', recent: '+(r.recent_count||0)+
     ', sessions: '+(r.session_count||0);
-
-  if(showRaw){
-    const raw=resumeToPrompt(r);
-    const charCount=raw.length;
-    const tokenEst=Math.round(charCount/3.5);
-    document.getElementById('resResult').innerHTML=
-      '<div style="font-size:11px;color:#555;margin:10px 0 8px">'+ms+'ms — '+countLine+
-      ' — ~'+tokenEst+' tokens ('+charCount+' chars)</div>'+
-      '<pre style="background:#111;border:1px solid #222;border-radius:6px;padding:14px;'+
-      'font-size:12px;line-height:1.5;color:#ccc;white-space:pre-wrap;word-break:break-word;'+
-      'max-height:80vh;overflow-y:auto;font-family:monospace">'+esc(raw)+'</pre>';
-    return;
-  }
 
   function memCard(m){
     const tags=(m.tags||[]).map(t=>'<span class="tag">'+esc(t)+'</span>').join(' ');
@@ -583,11 +524,34 @@ async function doResume(){
   const hours=parseInt(document.getElementById('resHours').value)||6;
   const compact=document.getElementById('resCompact').checked;
   const budget=parseInt(document.getElementById('resBudget').value)||0;
-  let url='/resume?hours='+hours;
-  if(compact) url+='&compact=true';
-  if(budget>0) url+='&budget='+budget;
+  const fmt=document.getElementById('resFormat').value;
   document.getElementById('resResult').innerHTML='<div class="empty">Loading...</div>';
   const t0=performance.now();
+
+  if(fmt==='text'){
+    let url='/resume?hours='+hours;
+    if(compact) url+='&compact=true';
+    if(budget>0) url+='&budget='+budget;
+    try{
+      const resp=await api(url);
+      const ms=Math.round(performance.now()-t0);
+      const charCount=resp.length;
+      const tokenEst=Math.round(charCount/3.5);
+      document.getElementById('resResult').innerHTML=
+        '<div style="font-size:11px;color:#555;margin:10px 0 8px">'+ms+'ms'+
+        ' — ~'+tokenEst+' tokens ('+charCount+' chars)</div>'+
+        '<pre style="background:#111;border:1px solid #222;border-radius:6px;padding:14px;'+
+        'font-size:12px;line-height:1.5;color:#ccc;white-space:pre-wrap;word-break:break-word;'+
+        'max-height:80vh;overflow-y:auto;font-family:monospace">'+esc(resp)+'</pre>';
+    }catch(e){
+      document.getElementById('resResult').innerHTML='<div class="empty">Error: '+e+'</div>';
+    }
+    return;
+  }
+
+  let url='/resume?format=json&hours='+hours;
+  if(compact) url+='&compact=true';
+  if(budget>0) url+='&budget='+budget;
   const r=await api(url);
   const ms=Math.round(performance.now()-t0);
   lastResumeData={data:r,ms};

@@ -2,6 +2,7 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
+use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -133,6 +134,8 @@ pub(super) struct ResumeQuery {
     /// in priority order: core → working → buffer → recent → sessions.
     /// Default 8000 (~2K tokens). Set 0 for unlimited.
     budget: Option<usize>,
+    /// Output format: "text" (default) or "json".
+    format: Option<String>,
 }
 
 /// Fetch memories tagged with `trigger:{action}`. Used for pre-action
@@ -254,7 +257,7 @@ pub(super) async fn do_resume(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Query(mut q): Query<ResumeQuery>,
-) -> Result<Json<serde_json::Value>, EngramError> {
+) -> Result<Response, EngramError> {
     let hours = q.hours.unwrap_or(4.0).clamp(0.0, 87_600.0); // cap at 10 years
     if q.ns.is_none() {
         q.ns = get_namespace(&headers);
@@ -306,10 +309,11 @@ pub(super) async fn do_resume(
             let existing: std::collections::HashSet<String> = core.iter().map(|m| m.id.clone()).collect();
             core.extend(default_core.into_iter().filter(|m| !existing.contains(&m.id)));
         }
-        let core: Vec<db::Memory> = core.into_iter()
+        let mut core: Vec<db::Memory> = core.into_iter()
             .filter(|m| ws_match(m))
             .take(core_limit)
             .collect();
+        core.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
 
         // Working: exclude session-source memories (they go in sessions section)
         let mut working: Vec<db::Memory> = d
@@ -322,10 +326,11 @@ pub(super) async fn do_resume(
             let existing: std::collections::HashSet<String> = working.iter().map(|m| m.id.clone()).collect();
             working.extend(default_working.into_iter().filter(|m| !existing.contains(&m.id)));
         }
-        let working: Vec<db::Memory> = working.into_iter()
+        let mut working: Vec<db::Memory> = working.into_iter()
             .filter(|m| ws_match(m) && !is_session(m))
             .take(core_limit)
             .collect();
+        working.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut buffer: Vec<db::Memory> = d
             .list_by_layer_meta_ns(db::Layer::Buffer, 100, 0, ns_filter.as_deref())
@@ -429,11 +434,13 @@ pub(super) async fn do_resume(
                 let max_core = 20;
                 let core_threshold = crate::thresholds::RESUME_CORE_THRESHOLD;
                 let core_total = core_scored.len();
-                let core_kept: Vec<db::Memory> = core_scored.into_iter()
+                let mut core_kept: Vec<db::Memory> = core_scored.into_iter()
                     .filter(|(_, s)| *s >= core_threshold)
                     .take(max_core)
                     .map(|(m, _)| m)
                     .collect();
+                // Final sort by importance DESC (relevance filtering already selected the subset)
+                core_kept.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
                 if core_kept.len() < core_total {
                     debug!(total = core_total, kept = core_kept.len(),
                         dropped = core_total - core_kept.len(),
@@ -461,11 +468,13 @@ pub(super) async fn do_resume(
                 let max_working = 40;
                 let working_threshold = crate::thresholds::RESUME_WORKING_THRESHOLD;
                 let working_total = working_scored.len();
-                let working_kept: Vec<db::Memory> = working_scored.into_iter()
+                let mut working_kept: Vec<db::Memory> = working_scored.into_iter()
                     .filter(|(_, s)| *s >= working_threshold)
                     .take(max_working)
                     .map(|(m, _)| m)
                     .collect();
+                // Final sort by importance DESC
+                working_kept.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
                 if working_kept.len() < working_total {
                     debug!(total = working_total, kept = working_kept.len(),
                         dropped = working_total - working_kept.len(),
@@ -708,21 +717,141 @@ pub(super) async fn do_resume(
 
     let core_count = if core_summary_used || core_compressed.is_some() { core.len() } else { core_out.len() };
 
-    Ok(Json(serde_json::json!({
-        "core": core_json,
-        "working": working_json,
-        "buffer": to_json(&buffer_out),
-        "recent": to_json(&recent_out),
-        "sessions": sessions_json,
-        "hours": hours,
-        "core_count": core_count,
-        "core_total": core.len(),
-        "core_summary_used": core_summary_used,
-        "working_count": if working_compressed.is_some() { working.len() } else { working_out.len() },
-        "buffer_count": buffer_out.len(),
-        "recent_count": recent_out.len(),
-        "session_count": if sessions_compressed.is_some() { sessions.len() } else { sessions_out.len() },
-    })))
+    let want_json = q.format.as_deref() == Some("json");
+
+    if want_json {
+        Ok(Json(serde_json::json!({
+            "core": core_json,
+            "working": working_json,
+            "buffer": to_json(&buffer_out),
+            "recent": to_json(&recent_out),
+            "sessions": sessions_json,
+            "hours": hours,
+            "core_count": core_count,
+            "core_total": core.len(),
+            "core_summary_used": core_summary_used,
+            "working_count": if working_compressed.is_some() { working.len() } else { working_out.len() },
+            "buffer_count": buffer_out.len(),
+            "recent_count": recent_out.len(),
+            "session_count": if sessions_compressed.is_some() { sessions.len() } else { sessions_out.len() },
+        })).into_response())
+    } else {
+        let working_count = if working_compressed.is_some() { working.len() } else { working_out.len() };
+        let session_count = if sessions_compressed.is_some() { sessions.len() } else { sessions_out.len() };
+        let text = format_resume_text(
+            hours, core_count, core.len(), working_count,
+            buffer_out.len(), recent_out.len(), session_count,
+            &core_json, &working_json, &to_json(&buffer_out),
+            &to_json(&recent_out), &sessions_json,
+        );
+        Ok((
+            [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            text,
+        ).into_response())
+    }
+}
+
+fn format_resume_text(
+    hours: f64, core_count: usize, _core_total: usize,
+    working_count: usize, buffer_count: usize, recent_count: usize,
+    session_count: usize,
+    core_json: &serde_json::Value,
+    working_json: &serde_json::Value,
+    buffer_json: &[serde_json::Value],
+    recent_json: &[serde_json::Value],
+    sessions_json: &serde_json::Value,
+) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("=== Session Resume ({hours}h) ==="));
+    lines.push(format!("core: {core_count}, working: {working_count}, buffer: {buffer_count}, recent: {recent_count}, sessions: {session_count}"));
+    lines.push(String::new());
+
+    fn triggers_str(tags: &[serde_json::Value]) -> String {
+        let ts: Vec<&str> = tags.iter()
+            .filter_map(|t| t.as_str())
+            .filter(|t| t.starts_with("trigger:"))
+            .collect();
+        if ts.is_empty() { String::new() } else { format!(" {}", ts.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" ")) }
+    }
+
+    fn ts_str(created_at: Option<i64>) -> String {
+        match created_at {
+            Some(ms) => {
+                let secs = ms / 1000;
+                // Simple UTC date formatting without chrono
+                let days_since_epoch = secs / 86400;
+                let time_of_day = secs % 86400;
+                let hours = time_of_day / 3600;
+                let minutes = (time_of_day % 3600) / 60;
+
+                // Calculate month-day from days since epoch (1970-01-01)
+                let mut y = 1970i64;
+                let mut remaining = days_since_epoch;
+                loop {
+                    let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
+                    if remaining < days_in_year { break; }
+                    remaining -= days_in_year;
+                    y += 1;
+                }
+                let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+                let month_days: [i64; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+                let mut month = 0usize;
+                for (i, &d) in month_days.iter().enumerate() {
+                    if remaining < d { month = i; break; }
+                    remaining -= d;
+                }
+                let day = remaining + 1;
+                format!("{:02}-{:02} {:02}:{:02}", month + 1, day, hours, minutes)
+            }
+            None => String::new(),
+        }
+    }
+
+    fn emit_memories(lines: &mut Vec<String>, arr: &serde_json::Value, with_ts: bool) {
+        if let Some(mems) = arr.as_array() {
+            for m in mems {
+                let content = m.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let tags = m.get("tags").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let triggers = triggers_str(&tags);
+                if with_ts {
+                    let ts = ts_str(m.get("created_at").and_then(|v| v.as_i64()));
+                    lines.push(format!("[{ts}] {content}{triggers}"));
+                } else {
+                    lines.push(format!("{content}{triggers}"));
+                }
+            }
+        }
+    }
+
+    if core_count > 0 {
+        lines.push(format!("--- Core ({core_count}) ---"));
+        emit_memories(&mut lines, core_json, false);
+        lines.push(String::new());
+    }
+    if working_count > 0 {
+        lines.push(format!("--- Working ({working_count}) ---"));
+        emit_memories(&mut lines, working_json, false);
+        lines.push(String::new());
+    }
+    if session_count > 0 {
+        lines.push(format!("--- Sessions ({session_count}) ---"));
+        emit_memories(&mut lines, sessions_json, true);
+        lines.push(String::new());
+    }
+    if recent_count > 0 {
+        lines.push(format!("--- Recent ({recent_count}) ---"));
+        let recent_arr = serde_json::Value::Array(recent_json.to_vec());
+        emit_memories(&mut lines, &recent_arr, true);
+        lines.push(String::new());
+    }
+    if buffer_count > 0 {
+        lines.push(format!("--- Buffer ({buffer_count}) ---"));
+        let buf_arr = serde_json::Value::Array(buffer_json.to_vec());
+        emit_memories(&mut lines, &buf_arr, false);
+        lines.push(String::new());
+    }
+
+    lines.join("\n")
 }
 
 pub(super) async fn do_recall(
