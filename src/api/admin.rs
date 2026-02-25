@@ -174,6 +174,7 @@ pub(super) async fn do_extract(
         namespace: None,
         sync_embed: None,
         kind: em.kind,
+        embedding: None,
         };
 
         let db = state.db.clone();

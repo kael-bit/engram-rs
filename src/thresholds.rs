@@ -32,6 +32,16 @@ pub const CORE_OVERLAP_SIM: f64 = 0.70;
 /// Insert path: merge existing content when very similar
 pub const INSERT_MERGE_SIM: f64 = 0.80;
 
+/// Cosine similarity threshold for dedup in find_near_duplicate when
+/// embeddings are available.  Higher than INSERT_DEDUP_SIM because this
+/// is the last-resort DB-level check (API-level semantic dedup is first).
+pub const DEDUP_COSINE_SIM: f64 = 0.85;
+
+/// Jaccard pre-filter: only compute cosine for candidates above this.
+/// Low enough to let through semantically similar but textually different
+/// content, while still filtering obvious non-matches.
+pub const DEDUP_JACCARD_PREFILTER: f64 = 0.5;
+
 /// Sandbox audit: minimum safety score to auto-apply operations
 pub const SANDBOX_SAFETY_THRESHOLD: f64 = 0.70;
 

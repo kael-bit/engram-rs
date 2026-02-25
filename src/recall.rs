@@ -638,13 +638,26 @@ pub async fn quick_semantic_dup_threshold(
     content: &str,
     threshold: f64,
 ) -> Result<Option<String>, EngramError> {
+    let (dup, _emb) = quick_semantic_dup_with_embedding(ai_cfg, db, content, threshold).await?;
+    Ok(dup)
+}
+
+/// Like `quick_semantic_dup_threshold` but also returns the computed embedding
+/// so callers can reuse it (e.g. pass to `MemoryInput` for DB-level dedup).
+pub async fn quick_semantic_dup_with_embedding(
+    ai_cfg: &AiConfig,
+    db: &MemoryDB,
+    content: &str,
+    threshold: f64,
+) -> Result<(Option<String>, Vec<f32>), EngramError> {
     let er = ai::get_embeddings(ai_cfg, &[content.to_string()]).await?;
     if let Some(ref u) = er.usage {
         let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
         let _ = db.log_llm_call("dedup_embed", &ai_cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
     }
-    let emb = er.embeddings.first().ok_or_else(|| EngramError::AiBackend("no embedding returned".into()))?;
-    let candidates = db.search_semantic(emb, 10);
+    let emb = er.embeddings.into_iter().next()
+        .ok_or_else(|| EngramError::AiBackend("no embedding returned".into()))?;
+    let candidates = db.search_semantic(&emb, 10);
     if let Some((top_id, top_score)) = candidates.first() {
         tracing::debug!(
             top_id = &top_id[..8.min(top_id.len())],
@@ -656,10 +669,10 @@ pub async fn quick_semantic_dup_threshold(
     }
     for (id, score) in &candidates {
         if *score > threshold {
-            return Ok(Some(id.clone()));
+            return Ok((Some(id.clone()), emb));
         }
     }
-    Ok(None)
+    Ok((None, emb))
 }
 
 

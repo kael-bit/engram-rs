@@ -21,7 +21,7 @@ impl MemoryDB {
         let do_dedup = !input.skip_dedup.unwrap_or(false);
         if do_dedup {
         let ns = input.namespace.as_deref().unwrap_or("default");
-        if let Some(existing) = self.find_near_duplicate(&input.content, ns) {
+        if let Some(existing) = self.find_near_duplicate(&input.content, ns, input.embedding.as_deref()) {
             tracing::debug!(existing_id = %existing.id, "near-duplicate found, reinforcing");
             // Repetition = reinforcement. This is the core insight:
             // if someone keeps writing similar content, they clearly care about it.
@@ -1037,22 +1037,29 @@ impl MemoryDB {
     }
 
     /// Check if content is a near-duplicate of an existing memory.
-    /// Uses token-level Jaccard similarity (threshold ~0.8).
+    /// Uses token-level Jaccard similarity, enhanced with cosine similarity
+    /// on embeddings when available.
     /// Check if content is near-duplicate of an existing memory (default namespace).
     pub fn is_near_duplicate(&self, content: &str) -> bool {
-        self.find_near_duplicate_threshold(content, "", 0.8).is_some()
+        self.find_near_duplicate_threshold(content, "", 0.8, None).is_some()
     }
 
     /// Check with a custom Jaccard threshold (default is 0.8).
     pub fn is_near_duplicate_with(&self, content: &str, threshold: f64) -> bool {
-        self.find_near_duplicate_threshold(content, "", threshold).is_some()
+        self.find_near_duplicate_threshold(content, "", threshold, None).is_some()
     }
 
-    pub(crate) fn find_near_duplicate(&self, content: &str, ns: &str) -> Option<Memory> {
-        self.find_near_duplicate_threshold(content, ns, 0.8)
+    pub(crate) fn find_near_duplicate(&self, content: &str, ns: &str, new_emb: Option<&[f32]>) -> Option<Memory> {
+        self.find_near_duplicate_threshold(content, ns, 0.8, new_emb)
     }
 
-    fn find_near_duplicate_threshold(&self, content: &str, ns: &str, threshold: f64) -> Option<Memory> {
+    fn find_near_duplicate_threshold(
+        &self,
+        content: &str,
+        ns: &str,
+        threshold: f64,
+        new_emb: Option<&[f32]>,
+    ) -> Option<Memory> {
         // Use only the first 200 chars for the FTS query — enough for similarity matching
         let query_text = if content.len() > 200 {
             &content[..content.char_indices().take(200).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(200)]
@@ -1069,6 +1076,23 @@ impl MemoryDB {
             return None;
         }
 
+        // When we have an embedding for the new content, use a two-stage approach:
+        //   1) Jaccard pre-filter (> DEDUP_JACCARD_PREFILTER) to narrow candidates
+        //   2) Cosine similarity on embeddings (> DEDUP_COSINE_SIM) for the final check
+        // This catches semantically similar but differently-worded content that
+        // pure Jaccard would miss.
+        //
+        // When no embedding is available, fall back to Jaccard-only (original behavior).
+        let has_embeddings = new_emb.is_some();
+        let jaccard_prefilter = if has_embeddings {
+            crate::thresholds::DEDUP_JACCARD_PREFILTER
+        } else {
+            threshold
+        };
+        let cosine_threshold = crate::thresholds::DEDUP_COSINE_SIM;
+
+        // Collect candidates that pass the Jaccard pre-filter
+        let mut jaccard_candidates: Vec<(Memory, f64)> = Vec::new();
         for (id, _) in &candidates {
             if let Ok(Some(mem)) = self.get(id) {
                 if mem.namespace != ns {
@@ -1079,12 +1103,53 @@ impl MemoryDB {
                 let union = new_tokens.union(&old_tokens).count();
                 if union > 0 {
                     let jaccard = intersection as f64 / union as f64;
-                    if jaccard > threshold {
-                        return Some(mem);
+                    if jaccard > jaccard_prefilter {
+                        if !has_embeddings {
+                            // No embeddings: Jaccard-only mode, return first match
+                            return Some(mem);
+                        }
+                        jaccard_candidates.push((mem, jaccard));
                     }
                 }
             }
         }
+
+        // If we have embeddings, do cosine similarity check on pre-filtered candidates
+        if let Some(query_emb) = new_emb {
+            // Sort by Jaccard descending so we check the best textual match first
+            jaccard_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            if let Ok(vec_idx) = self.vec_index.read() {
+                for (mem, jaccard) in &jaccard_candidates {
+                    if let Some(entry) = vec_idx.get(&mem.id) {
+                        let cosine = crate::ai::cosine_similarity(query_emb, &entry.emb);
+                        tracing::debug!(
+                            id = &mem.id[..8.min(mem.id.len())],
+                            jaccard = %format!("{:.3}", jaccard),
+                            cosine = %format!("{:.3}", cosine),
+                            "dedup candidate"
+                        );
+                        if cosine > cosine_threshold {
+                            return Some(mem.clone());
+                        }
+                    } else {
+                        // Candidate has no stored embedding — fall back to Jaccard
+                        // for this candidate (use original threshold)
+                        if *jaccard > threshold {
+                            return Some(mem.clone());
+                        }
+                    }
+                }
+            } else {
+                // Vec index lock failed — fall back to Jaccard for all
+                for (mem, jaccard) in &jaccard_candidates {
+                    if *jaccard > threshold {
+                        return Some(mem.clone());
+                    }
+                }
+            }
+        }
+
         None
     }
 

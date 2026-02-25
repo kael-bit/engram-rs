@@ -31,10 +31,10 @@ pub(super) async fn create_memory(
         if let Some(ref cfg) = state.ai {
             if cfg.has_embed() {
                 tracing::debug!("semantic dedup: checking before insert");
-                match crate::recall::quick_semantic_dup_threshold(
+                match crate::recall::quick_semantic_dup_with_embedding(
                     cfg, &state.db, &input.content, crate::thresholds::INSERT_DEDUP_SIM,
                 ).await {
-                    Ok(Some(existing_id)) if !existing_id.is_empty() => {
+                    Ok((Some(existing_id), _emb)) if !existing_id.is_empty() => {
                         let db = state.db.clone();
                         let eid = existing_id.clone();
                         let _ = tokio::task::spawn_blocking(move || db.reinforce(&eid)).await;
@@ -105,6 +105,11 @@ pub(super) async fn create_memory(
                             "semantic dedup: reinforced (no new info)"
                         );
                         return Ok((StatusCode::OK, Json(existing)));
+                    }
+                    Ok((None, pre_emb)) => {
+                        // No semantic dup found — pass the pre-computed embedding
+                        // to MemoryInput so DB-level dedup can use cosine similarity
+                        input.embedding = Some(pre_emb);
                     }
                     _ => {}
                 }

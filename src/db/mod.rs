@@ -166,6 +166,12 @@ pub struct MemoryInput {
     /// Memory kind: "semantic" (default), "episodic", or "procedural".
     #[serde(default)]
     pub kind: Option<String>,
+    /// Pre-computed embedding for the content. When provided, the dedup check
+    /// uses cosine similarity against stored embeddings (with Jaccard as a
+    /// fast pre-filter). Skipped during JSON deserialization from the API —
+    /// the API handler populates this field programmatically.
+    #[serde(skip)]
+    pub embedding: Option<Vec<f32>>,
 }
 
 impl MemoryInput {
@@ -213,6 +219,11 @@ impl MemoryInput {
 
     pub fn kind(mut self, k: impl Into<String>) -> Self {
         self.kind = Some(k.into());
+        self
+    }
+
+    pub fn embedding(mut self, emb: Vec<f32>) -> Self {
+        self.embedding = Some(emb);
         self
     }
 }
