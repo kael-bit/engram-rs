@@ -151,6 +151,12 @@ Restore context first. Read the core and working sections.
 
 **Don't store**: routine output, things already in code/config files, transient status.
 
+### ⚠️ User feedback is the highest-value signal!
+Corrections, criticism, preferences, and rules from the user are **never** automatically captured.
+You must store them yourself — immediately, before replying.
+
+**Rule: When the user corrects you, criticizes, or states a new rule → store the lesson first, then reply. No store = no reply.**
+
 ### Storing memories
 - Decisions, preferences, lessons → store immediately with topic tags
 - Workflows, procedures → store with kind="procedural" (never decay)
@@ -211,6 +217,12 @@ curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 | Session recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
 
 **Don't store**: routine output, things already in code/config files, transient status.
+
+### ⚠️ User feedback is the highest-value signal!
+Corrections, criticism, preferences, and rules from the user are **never** automatically captured.
+You must store them yourself — immediately, before replying.
+
+**Rule: When the user corrects you, criticizes, or states a new rule → store the lesson first, then reply. No store = no reply.**
 
 ### Storing memories
 - Decisions, preferences, lessons → store immediately with topic tags
