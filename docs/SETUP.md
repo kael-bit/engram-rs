@@ -67,6 +67,15 @@ ENGRAM_GATE_MODEL=claude-sonnet-4-6 \
 ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings \
 ENGRAM_EMBED_KEY=sk-xxx \
 ./engram
+
+# Anthropic native API (no OpenAI-compatible proxy needed)
+ENGRAM_LLM_URL=https://api.anthropic.com/v1/messages \
+ENGRAM_LLM_KEY=sk-ant-xxx \
+ENGRAM_LLM_MODEL=claude-sonnet-4-6-20250514 \
+ENGRAM_LLM_PROVIDER=anthropic \
+ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings \
+ENGRAM_EMBED_KEY=sk-xxx \
+./engram
 ```
 
 > **Why split?** The gate decides what gets promoted to permanent Core memory — it needs to distinguish "never force-push to main" (lesson, keep forever) from "fixed the build, 198 tests pass" (changelog, don't keep). Cheap models fail at this. Text merging and query expansion don't need that judgment.

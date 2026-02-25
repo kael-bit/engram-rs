@@ -1,4 +1,5 @@
-//! Talks to OpenAI-compatible APIs for embeddings and LLM calls.
+//! Talks to OpenAI-compatible or Anthropic-native APIs for LLM calls,
+//! and OpenAI-compatible APIs for embeddings.
 //! All optional — see AiConfig::from_env().
 
 use serde::{Deserialize, Serialize};
@@ -13,8 +14,16 @@ fn ai_err(msg: impl Into<String>) -> EngramError {
 
 const AI_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Which LLM API wire format to use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LlmProvider {
+    OpenAI,
+    Anthropic,
+}
+
 #[derive(Clone)]
 pub struct AiConfig {
+    pub provider: LlmProvider,
     pub llm_url: String,
     pub llm_key: String,
     pub llm_model: String,
@@ -53,6 +62,13 @@ impl AiConfig {
         let llm_key = std::env::var("ENGRAM_LLM_KEY").unwrap_or_default();
         let llm_model =
             std::env::var("ENGRAM_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
+
+        // Determine provider from env, default to openai
+        let provider = match std::env::var("ENGRAM_LLM_PROVIDER").unwrap_or_default().to_lowercase().as_str() {
+            "anthropic" | "claude" => LlmProvider::Anthropic,
+            _ => LlmProvider::OpenAI,
+        };
+
         let embed_url = std::env::var("ENGRAM_EMBED_URL").unwrap_or_else(|_| {
             // Only rewrite if this looks like a chat completions endpoint
             if llm_url.contains("/chat/completions") {
@@ -72,6 +88,7 @@ impl AiConfig {
             .expect("failed to build HTTP client");
 
         Some(Self {
+            provider,
             llm_url,
             llm_key,
             llm_model,
@@ -98,6 +115,9 @@ impl AiConfig {
     }
 }
 
+// ---------------------------------------------------------------------------
+// OpenAI wire types
+// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 struct ChatRequest {
@@ -129,6 +149,114 @@ struct FunctionDef {
     description: String,
     parameters: serde_json::Value,
 }
+
+#[derive(Deserialize)]
+struct ChatResponse {
+    choices: Vec<ChatChoice>,
+    #[serde(default)]
+    usage: Option<Usage>,
+}
+
+#[derive(Deserialize)]
+struct ChatChoice {
+    message: ResponseMessage,
+}
+
+#[derive(Deserialize)]
+struct ResponseMessage {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[derive(Deserialize)]
+struct ToolCall {
+    function: ToolCallFunction,
+}
+
+#[derive(Deserialize)]
+struct ToolCallFunction {
+    arguments: String,
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic wire types
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct AnthropicRequest {
+    model: String,
+    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
+    messages: Vec<AnthropicMessage>,
+    temperature: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<AnthropicTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct AnthropicMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct AnthropicTool {
+    name: String,
+    description: String,
+    input_schema: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct AnthropicResponse {
+    content: Vec<AnthropicContentBlock>,
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicContentBlock {
+    #[serde(rename = "type")]
+    block_type: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    input: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicUsage {
+    #[serde(default)]
+    input_tokens: u32,
+    #[serde(default)]
+    output_tokens: u32,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u32>,
+}
+
+impl AnthropicUsage {
+    fn to_usage(&self) -> Usage {
+        let cached = self.cache_read_input_tokens.unwrap_or(0);
+        Usage {
+            prompt_tokens: self.input_tokens,
+            completion_tokens: self.output_tokens,
+            total_tokens: self.input_tokens + self.output_tokens,
+            prompt_tokens_details: if cached > 0 {
+                Some(PromptTokensDetails { cached_tokens: cached })
+            } else {
+                None
+            },
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared types
+// ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct Usage {
@@ -167,35 +295,30 @@ pub struct EmbedResult {
     pub usage: Option<Usage>,
 }
 
-#[derive(Deserialize)]
-struct ChatResponse {
-    choices: Vec<ChatChoice>,
-    #[serde(default)]
-    usage: Option<Usage>,
+// ---------------------------------------------------------------------------
+// Helper: add auth headers based on provider
+// ---------------------------------------------------------------------------
+
+fn add_auth(cfg: &AiConfig, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    let mut b = builder;
+    if !cfg.llm_key.is_empty() {
+        match cfg.provider {
+            LlmProvider::Anthropic => {
+                b = b
+                    .header("x-api-key", &cfg.llm_key)
+                    .header("anthropic-version", "2023-06-01");
+            }
+            LlmProvider::OpenAI => {
+                b = b.header("Authorization", format!("Bearer {}", cfg.llm_key));
+            }
+        }
+    }
+    b
 }
 
-#[derive(Deserialize)]
-struct ChatChoice {
-    message: ResponseMessage,
-}
-
-#[derive(Deserialize)]
-struct ResponseMessage {
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    tool_calls: Option<Vec<ToolCall>>,
-}
-
-#[derive(Deserialize)]
-struct ToolCall {
-    function: ToolCallFunction,
-}
-
-#[derive(Deserialize)]
-struct ToolCallFunction {
-    arguments: String,
-}
+// ---------------------------------------------------------------------------
+// LLM chat
+// ---------------------------------------------------------------------------
 
 /// Send a chat completion request, return the response text.
 #[allow(dead_code)]
@@ -207,8 +330,16 @@ pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String
 /// Returns LlmResult with usage stats and model info.
 pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &str) -> Result<LlmResult, EngramError> {
     let model = cfg.model_for(component).to_string();
+
+    match cfg.provider {
+        LlmProvider::Anthropic => llm_chat_anthropic(cfg, &model, system, user).await,
+        LlmProvider::OpenAI => llm_chat_openai(cfg, &model, system, user).await,
+    }
+}
+
+async fn llm_chat_openai(cfg: &AiConfig, model: &str, system: &str, user: &str) -> Result<LlmResult, EngramError> {
     let req = ChatRequest {
-        model: model.clone(),
+        model: model.to_string(),
         messages: vec![
             ChatMessage { role: "system".into(), content: system.into() },
             ChatMessage { role: "user".into(), content: user.into() },
@@ -218,10 +349,7 @@ pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &s
         tool_choice: None,
     };
 
-    let mut builder = cfg.client.post(&cfg.llm_url).json(&req);
-    if !cfg.llm_key.is_empty() {
-        builder = builder.header("Authorization", format!("Bearer {}", cfg.llm_key));
-    }
+    let builder = add_auth(cfg, cfg.client.post(&cfg.llm_url).json(&req));
 
     let start = std::time::Instant::now();
     let resp = builder
@@ -244,8 +372,52 @@ pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &s
         .first()
         .and_then(|c| c.message.content.clone())
         .unwrap_or_default();
-    Ok(LlmResult { content, usage: chat.usage, model, duration_ms })
+    Ok(LlmResult { content, usage: chat.usage, model: model.to_string(), duration_ms })
 }
+
+async fn llm_chat_anthropic(cfg: &AiConfig, model: &str, system: &str, user: &str) -> Result<LlmResult, EngramError> {
+    let req = AnthropicRequest {
+        model: model.to_string(),
+        max_tokens: 4096,
+        system: if system.is_empty() { None } else { Some(system.to_string()) },
+        messages: vec![AnthropicMessage { role: "user".into(), content: user.into() }],
+        temperature: 0.1,
+        tools: None,
+        tool_choice: None,
+    };
+
+    let builder = add_auth(cfg, cfg.client.post(&cfg.llm_url).json(&req));
+
+    let start = std::time::Instant::now();
+    let resp = builder
+        .send()
+        .await
+        .map_err(|e| ai_err(format!("Anthropic request failed: {e}")))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(ai_err(format!("Anthropic returned {status}: {body}")));
+    }
+
+    let ar: AnthropicResponse = resp
+        .json()
+        .await
+        .map_err(|e| ai_err(format!("Anthropic response parse failed: {e}")))?;
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    let content = ar.content.iter()
+        .filter(|b| b.block_type == "text")
+        .filter_map(|b| b.text.as_deref())
+        .collect::<Vec<_>>()
+        .join("");
+
+    let usage = ar.usage.as_ref().map(|u| u.to_usage());
+    Ok(LlmResult { content, usage, model: model.to_string(), duration_ms })
+}
+
+// ---------------------------------------------------------------------------
+// LLM tool call
+// ---------------------------------------------------------------------------
 
 /// Call LLM with a function/tool definition, get back structured JSON.
 /// Forces the model to call the named function, returns the parsed arguments with usage.
@@ -259,8 +431,24 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
     parameters: serde_json::Value,
 ) -> Result<ToolCallResult<T>, EngramError> {
     let model = cfg.model_for(component).to_string();
+
+    match cfg.provider {
+        LlmProvider::Anthropic => llm_tool_call_anthropic(cfg, &model, system, user, fn_name, fn_desc, parameters).await,
+        LlmProvider::OpenAI => llm_tool_call_openai(cfg, &model, system, user, fn_name, fn_desc, parameters).await,
+    }
+}
+
+async fn llm_tool_call_openai<T: serde::de::DeserializeOwned>(
+    cfg: &AiConfig,
+    model: &str,
+    system: &str,
+    user: &str,
+    fn_name: &str,
+    fn_desc: &str,
+    parameters: serde_json::Value,
+) -> Result<ToolCallResult<T>, EngramError> {
     let req = ChatRequest {
-        model: model.clone(),
+        model: model.to_string(),
         messages: vec![
             ChatMessage { role: "system".into(), content: system.into() },
             ChatMessage { role: "user".into(), content: user.into() },
@@ -277,10 +465,7 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
         tool_choice: Some(serde_json::json!({"type": "function", "function": {"name": fn_name}})),
     };
 
-    let mut builder = cfg.client.post(&cfg.llm_url).json(&req);
-    if !cfg.llm_key.is_empty() {
-        builder = builder.header("Authorization", format!("Bearer {}", cfg.llm_key));
-    }
+    let builder = add_auth(cfg, cfg.client.post(&cfg.llm_url).json(&req));
 
     let start = std::time::Instant::now();
     let resp = builder
@@ -308,8 +493,70 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
     let value: T = serde_json::from_str(&args)
         .map_err(|e| ai_err(format!("tool call arguments parse failed: {e}: {args}")))?;
 
-    Ok(ToolCallResult { value, usage: chat.usage, model, duration_ms })
+    Ok(ToolCallResult { value, usage: chat.usage, model: model.to_string(), duration_ms })
 }
+
+async fn llm_tool_call_anthropic<T: serde::de::DeserializeOwned>(
+    cfg: &AiConfig,
+    model: &str,
+    system: &str,
+    user: &str,
+    fn_name: &str,
+    fn_desc: &str,
+    parameters: serde_json::Value,
+) -> Result<ToolCallResult<T>, EngramError> {
+    let req = AnthropicRequest {
+        model: model.to_string(),
+        max_tokens: 4096,
+        system: if system.is_empty() { None } else { Some(system.to_string()) },
+        messages: vec![AnthropicMessage { role: "user".into(), content: user.into() }],
+        temperature: 0.1,
+        tools: Some(vec![AnthropicTool {
+            name: fn_name.into(),
+            description: fn_desc.into(),
+            input_schema: parameters,
+        }]),
+        tool_choice: Some(serde_json::json!({"type": "tool", "name": fn_name})),
+    };
+
+    let builder = add_auth(cfg, cfg.client.post(&cfg.llm_url).json(&req));
+
+    let start = std::time::Instant::now();
+    let resp = builder
+        .send()
+        .await
+        .map_err(|e| ai_err(format!("Anthropic tool call failed: {e}")))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(ai_err(format!("Anthropic returned {status}: {body}")));
+    }
+
+    let ar: AnthropicResponse = resp
+        .json()
+        .await
+        .map_err(|e| ai_err(format!("Anthropic tool response parse failed: {e}")))?;
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    // Find the tool_use content block
+    let input = ar.content.iter()
+        .find(|b| b.block_type == "tool_use")
+        .and_then(|b| b.input.as_ref())
+        .ok_or_else(|| ai_err("no tool_use block in Anthropic response"))?;
+
+    let args = serde_json::to_string(input)
+        .map_err(|e| ai_err(format!("failed to serialize tool input: {e}")))?;
+
+    let value: T = serde_json::from_str(&args)
+        .map_err(|e| ai_err(format!("tool call arguments parse failed: {e}: {args}")))?;
+
+    let usage = ar.usage.as_ref().map(|u| u.to_usage());
+    Ok(ToolCallResult { value, usage, model: model.to_string(), duration_ms })
+}
+
+// ---------------------------------------------------------------------------
+// Query expansion
+// ---------------------------------------------------------------------------
 
 use crate::prompts;
 
@@ -338,6 +585,9 @@ pub async fn expand_query(cfg: &AiConfig, query: &str) -> (Vec<String>, Option<T
     }
 }
 
+// ---------------------------------------------------------------------------
+// Memory extraction
+// ---------------------------------------------------------------------------
 
 /// Map importance label from LLM to numeric value.
 fn importance_from_label(label: &str) -> f64 {
@@ -425,6 +675,9 @@ pub struct ExtractedMemory {
     pub kind: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Embeddings (always OpenAI-compatible)
+// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 struct EmbedRequest {
@@ -489,6 +742,9 @@ pub async fn get_embeddings(
     Ok(EmbedResult { embeddings, usage: embed_resp.usage })
 }
 
+// ---------------------------------------------------------------------------
+// Vector utilities
+// ---------------------------------------------------------------------------
 
 /// Cosine similarity between two vectors.
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
@@ -538,5 +794,3 @@ pub fn bytes_to_embedding(b: &[u8]) -> Vec<f32> {
         })
         .collect()
 }
-
-

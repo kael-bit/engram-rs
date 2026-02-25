@@ -56,7 +56,7 @@ sequenceDiagram
 
 ## Requirements
 
-- An **OpenAI-compatible API** for embeddings (`text-embedding-3-small`) and LLM calls (consolidation, triage, audit). Set `ENGRAM_LLM_URL` and `ENGRAM_LLM_KEY`. Without this, engram still works but falls back to keyword search and heuristic-only lifecycle — you lose the smart parts.
+- An **OpenAI-compatible or Anthropic-native API** for embeddings (`text-embedding-3-small`) and LLM calls (consolidation, triage, audit). Set `ENGRAM_LLM_URL` and `ENGRAM_LLM_KEY`. For Anthropic's native `/v1/messages` format, also set `ENGRAM_LLM_PROVIDER=anthropic`. Without this, engram still works but falls back to keyword search and heuristic-only lifecycle — you lose the smart parts.
 
 ## Setup
 
