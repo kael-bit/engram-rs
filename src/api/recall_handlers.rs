@@ -509,7 +509,7 @@ pub(super) async fn do_resume(
         .sum();
 
     // Can we use LLM compression?
-    let can_compress = state.ai.as_ref().is_some_and(ai::AiConfig::has_llm);
+    let ai_cfg = state.ai.as_ref().filter(|c| c.has_llm());
 
     let (core_out, core_summary_used, core_compressed) = if core_total_cost > core_budget && core.len() >= 10 {
         // Try the cached summary first (free, no LLM call)
@@ -521,10 +521,10 @@ pub(super) async fn do_resume(
             if s.len() + core_overhead < core_budget {
                 core_budget -= s.len() + core_overhead;
                 (vec![], true, None)
-            } else if can_compress {
+            } else if let Some(ai) = ai_cfg {
                 // Summary doesn't fit either — compress via LLM
                 if let Some(compressed) = compress_section(
-                    state.ai.as_ref().unwrap(), &state.db, "core", &core, core_budget
+                    ai, &state.db, "core", &core, core_budget
                 ).await {
                     core_budget = core_budget.saturating_sub(compressed.len());
                     (vec![], false, Some(compressed))
@@ -534,9 +534,9 @@ pub(super) async fn do_resume(
             } else {
                 (fit_section(&core, &mut core_budget, compact), false, None)
             }
-        } else if can_compress {
+        } else if let Some(ai) = ai_cfg {
             if let Some(compressed) = compress_section(
-                state.ai.as_ref().unwrap(), &state.db, "core", &core, core_budget
+                ai, &state.db, "core", &core, core_budget
             ).await {
                 core_budget = core_budget.saturating_sub(compressed.len());
                 (vec![], false, Some(compressed))
@@ -556,12 +556,16 @@ pub(super) async fn do_resume(
     let session_cost: usize = sessions.iter()
         .map(|m| m.content.len() + core_overhead)
         .sum();
-    let (sessions_out, sessions_compressed) = if session_cost > session_budget && can_compress && sessions.len() >= 3 {
-        if let Some(compressed) = compress_section(
-            state.ai.as_ref().unwrap(), &state.db, "sessions", &sessions, session_budget
-        ).await {
-            session_budget = session_budget.saturating_sub(compressed.len());
-            (vec![], Some(compressed))
+    let (sessions_out, sessions_compressed) = if session_cost > session_budget && sessions.len() >= 3 {
+        if let Some(ai) = ai_cfg {
+            if let Some(compressed) = compress_section(
+                ai, &state.db, "sessions", &sessions, session_budget
+            ).await {
+                session_budget = session_budget.saturating_sub(compressed.len());
+                (vec![], Some(compressed))
+            } else {
+                (fit_section(&sessions, &mut session_budget, compact), None)
+            }
         } else {
             (fit_section(&sessions, &mut session_budget, compact), None)
         }
@@ -574,12 +578,16 @@ pub(super) async fn do_resume(
     let working_cost: usize = working.iter()
         .map(|m| m.content.len() + core_overhead)
         .sum();
-    let (working_out, working_compressed) = if working_cost > working_budget && can_compress && working.len() >= 3 {
-        if let Some(compressed) = compress_section(
-            state.ai.as_ref().unwrap(), &state.db, "working", &working, working_budget
-        ).await {
-            working_budget = working_budget.saturating_sub(compressed.len());
-            (vec![], Some(compressed))
+    let (working_out, working_compressed) = if working_cost > working_budget && working.len() >= 3 {
+        if let Some(ai) = ai_cfg {
+            if let Some(compressed) = compress_section(
+                ai, &state.db, "working", &working, working_budget
+            ).await {
+                working_budget = working_budget.saturating_sub(compressed.len());
+                (vec![], Some(compressed))
+            } else {
+                (fit_section(&working, &mut working_budget, compact), None)
+            }
         } else {
             (fit_section(&working, &mut working_budget, compact), None)
         }
