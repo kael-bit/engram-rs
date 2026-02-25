@@ -361,6 +361,7 @@ All default to `ENGRAM_LLM_MODEL` if not set. If you only set one model, everyth
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `ENGRAM_NAMESPACE` | *(none)* | Default namespace for project isolation. Resume/recall auto-include `default` namespace |
 | `ENGRAM_CONSOLIDATE_MINS` | `30` | Auto-consolidation interval (0 = off) |
 | `ENGRAM_LLM_LEVEL` | `auto` | LLM usage in consolidation: `auto` (heuristic-first, LLM on uncertainty), `full` (always LLM), `off` (zero LLM calls) |
 | `ENGRAM_AUTO_MERGE` | `false` | Enable LLM merge in auto-consolidation |

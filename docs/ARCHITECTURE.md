@@ -386,6 +386,11 @@ lessons stored in `default`) is always available alongside project-specific cont
 
 Recall follows the same rule: queries with a namespace filter also include `default` results.
 
+**Directional merge rule:** Consolidation merge and reconcile allow cross-namespace operations only
+when one side is `default`. The merged result always stays in `default` — project-level memories can
+be absorbed into `default`, but `default` memories are never pulled into a project namespace. Two
+different project namespaces never merge with each other.
+
 ### Section Priority (filled in order)
 
 1. **Core** (45% budget cap) — permanent knowledge. Context-relevance filtered:
