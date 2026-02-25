@@ -102,7 +102,8 @@ server.tool(
 server.tool(
   "engram_recall",
   "Hybrid semantic + keyword search with budget-aware retrieval. " +
-    "Supports time filtering, source/tag filtering, and LLM re-ranking.",
+    "Fast by default (~30ms cached, ~1s first query). " +
+    "Optional rerank/expand add LLM calls (+2-4s each) — only use when needed.",
   {
     query: z.string().describe("Search query"),
     budget_tokens: z.number().int().positive().optional().describe("Max token budget"),
@@ -112,8 +113,8 @@ server.tool(
     since: z.number().int().optional().describe("Only memories created after this unix ms timestamp"),
     until: z.number().int().optional().describe("Only memories created before this unix ms timestamp"),
     sort_by: z.enum(["score", "recent", "accessed"]).optional().describe("Sort order (default: score)"),
-    rerank: z.boolean().optional().describe("Re-rank results using LLM"),
-    expand: z.boolean().optional().describe("Expand query with LLM-generated synonyms for better recall"),
+    rerank: z.boolean().optional().describe("Re-rank via LLM (+2-4s). Use only when result ordering is critical"),
+    expand: z.boolean().optional().describe("LLM query expansion (+1-2s). Use for short/vague queries like single words"),
     source: z.string().optional().describe("Filter by source (e.g. session, extract, api)"),
     tags: z.array(z.string()).optional().describe("Filter by tags (must have ALL specified)"),
     namespace: z.string().optional().describe("Filter by namespace"),

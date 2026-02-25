@@ -166,6 +166,48 @@ Recall combines multiple signals:
 
 Results are deduplicated across all search modes. When both semantic and keyword search find the same memory, relevance gets a boost.
 
+```bash
+# Basic recall (fast — embedding lookup + local scoring)
+curl -X POST http://localhost:3917/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "deploy process", "limit": 5}'
+
+# With LLM reranking (slower — adds ~2-4s for an LLM call, better ordering)
+curl -X POST http://localhost:3917/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "deploy process", "limit": 5, "rerank": true}'
+
+# With query expansion (slower — adds ~1-2s, helps vague/short queries)
+curl -X POST http://localhost:3917/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "部署", "limit": 5, "expand": true}'
+```
+
+**Recall parameters:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `query` | string | required | Search query |
+| `limit` | int | `20` | Max results |
+| `budget_tokens` | int | `2000` | Token budget (0 = unlimited) |
+| `rerank` | bool | `false` | LLM reranking — better accuracy, +2-4s latency |
+| `expand` | bool | `false` | LLM query expansion — helps short/vague queries, +1-2s |
+| `min_score` | float | `0.0` | Minimum relevance threshold |
+| `dry` | bool | `false` | Don't increment access counts |
+| `tags` | string[] | — | Filter by tags |
+| `source` | string | — | Filter by source |
+| `layers` | int[] | — | Filter by layer (1=Buffer, 2=Working, 3=Core) |
+| `since` / `until` | string | — | ISO 8601 time range |
+| `sort_by` | string | `"score"` | `"score"`, `"recent"`, or `"accessed"` |
+| `namespace` | string | — | Multi-agent isolation |
+
+**Performance guidance:**
+- Default recall (no `rerank`/`expand`): **~30ms** local, **~1.2s** with first-time embedding
+- `rerank: true` adds an LLM round-trip (~2-4s) — use only when result ordering matters
+- `expand: true` adds an LLM round-trip (~1-2s) — use for short or ambiguous queries
+- Auto-expand triggers when top result relevance < 0.25 (won't activate for most queries)
+- Embedding results are cached — repeated queries hit in **<15ms**
+
 ### LLM Proxy
 
 Sit between your tools and any LLM API. Memories are extracted automatically — no code changes needed.

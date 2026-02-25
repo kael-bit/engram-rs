@@ -159,6 +159,8 @@ Call `engram_resume` with hours=6 to restore context. Read the core and working 
 ### Recalling memories
 Before acting on any non-trivial task, recall first. Don't assume you remember — check:
 - `engram_recall` with the topic as query
+- Default recall is fast (~30ms cached). Only set `rerank: true` when result ordering is critical (+2-4s)
+- Use `expand: true` for very short or vague queries like single CJK words (+1-2s)
 
 Recall when:
 - Starting work on a topic you've touched before
@@ -208,8 +210,13 @@ curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 ### Recalling memories
 Before acting on any non-trivial task, recall first. Don't assume you remember — check:
 ```bash
+# Fast recall (default, ~30ms cached / ~1s first query)
 curl -sf -X POST \
   -H "Content-Type: application/json" -d '{"query": "your question"}' http://localhost:3917/recall
+
+# For short/vague queries, add expand (adds ~1-2s LLM call)
+curl -sf -X POST \
+  -H "Content-Type: application/json" -d '{"query": "部署", "expand": true}' http://localhost:3917/recall
 ```
 Recall when:
 - Starting work on a topic you've touched before
@@ -297,9 +304,14 @@ curl -X POST http://localhost:3917/memories \
 ### Recalling memories
 Before acting on any non-trivial task, recall first. Don't assume you remember — check:
 ```bash
+# Fast recall (default — ~30ms cached)
 curl -sf -X POST http://localhost:3917/recall \
   -H 'Content-Type: application/json' \
   -d '{"query": "how do we deploy"}'
+
+# For short/vague queries, expand helps (+1-2s LLM call)
+# rerank: true improves ordering when it matters (+2-4s)
+```
 ```
 Recall when:
 - Starting work on a topic you've touched before

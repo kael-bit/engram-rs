@@ -745,7 +745,7 @@ pub(super) async fn do_recall(
     let auto_expanded;
     if explicit_expand.is_none()
         && state.ai.as_ref().is_some_and(super::super::ai::AiConfig::has_llm)
-        && result.memories.first().is_none_or(|m| m.relevance < 0.4)
+        && result.memories.first().is_none_or(|m| m.relevance < 0.25)
     {
         if let Some(ref cfg) = state.ai {
             let (eq, meta) = ai::expand_query(cfg, &query_text).await;
