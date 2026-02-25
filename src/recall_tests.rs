@@ -772,3 +772,206 @@ fn short_cjk_detection() {
     // Short ASCII only → false
     assert!(!is_short_cjk_query("hi"));
 }
+
+// --- recency_score tests ---
+
+fn make_memory(layer: Layer, importance: f64, decay_rate: f64, last_accessed: i64) -> Memory {
+    let now = crate::db::now_ms();
+    Memory {
+        id: "test-mem".into(),
+        content: "test content for scoring".into(),
+        layer,
+        importance,
+        created_at: now,
+        last_accessed,
+        access_count: 1,
+        repetition_count: 0,
+        decay_rate,
+        source: "test".into(),
+        tags: vec![],
+        namespace: "default".into(),
+        embedding: None,
+        kind: "semantic".into(),
+        modified_at: now,
+    }
+}
+
+#[test]
+fn recency_score_just_accessed() {
+    let now = crate::db::now_ms();
+    let score = recency_score(now, 0.1);
+    // exp(0) = 1.0 exactly, but tiny clock skew possible
+    assert!((score - 1.0).abs() < 0.01, "just accessed should be ≈1.0, got {score}");
+}
+
+#[test]
+fn recency_score_one_week_old() {
+    let now = crate::db::now_ms();
+    let one_week_ago = now - 168 * 3_600_000; // 168 hours in ms
+    let decay_rate = 0.1;
+    let score = recency_score(one_week_ago, decay_rate);
+    // hours = 168, rate = 0.1, formula: exp(-0.1 * 168 / 168) = exp(-0.1)
+    let expected = (-decay_rate as f64).exp(); // exp(-0.1) ≈ 0.9048
+    assert!(
+        (score - expected).abs() < 0.01,
+        "one week old with decay=0.1 should be ≈{expected}, got {score}"
+    );
+}
+
+#[test]
+fn recency_score_infinite_decay_rate() {
+    let now = crate::db::now_ms();
+    let one_hour_ago = now - 3_600_000;
+    let score = recency_score(one_hour_ago, f64::INFINITY);
+    // Infinite should be clamped to 0.1 (the fallback), score should be finite and > 0
+    assert!(score.is_finite(), "infinite decay_rate must not produce NaN/Inf");
+    assert!(score > 0.0, "score should be positive, got {score}");
+    assert!(score <= 1.0, "score should be <= 1.0, got {score}");
+}
+
+#[test]
+fn recency_score_negative_decay_rate() {
+    let now = crate::db::now_ms();
+    let old = now - 168 * 3_600_000;
+    let score = recency_score(old, -5.0);
+    // Negative should be clamped to 0.0 → exp(0) = 1.0, no decay
+    assert!(
+        (score - 1.0).abs() < 1e-9,
+        "negative decay_rate should clamp to 0 → score=1.0, got {score}"
+    );
+}
+
+#[test]
+fn recency_score_very_old_memory() {
+    let now = crate::db::now_ms();
+    let ancient = now - 10_000 * 3_600_000; // 10000 hours ago
+    let score = recency_score(ancient, 0.1);
+    // exp(-0.1 * 10000 / 168) = exp(-5.95) ≈ 0.0026 — near zero but positive
+    assert!(score >= 0.0, "very old memory score must not be negative, got {score}");
+    assert!(score < 0.01, "very old memory should score near 0, got {score}");
+    assert!(score.is_finite(), "score must be finite");
+}
+
+#[test]
+fn recency_score_future_timestamp() {
+    let now = crate::db::now_ms();
+    let future = now + 3_600_000; // 1 hour in the future
+    let score = recency_score(future, 0.1);
+    // hours = max(negative, 0) = 0 → exp(0) = 1.0
+    assert!(
+        (score - 1.0).abs() < 1e-9,
+        "future timestamp should yield score=1.0, got {score}"
+    );
+}
+
+#[test]
+fn recency_score_zero_decay_rate() {
+    let now = crate::db::now_ms();
+    // Very old memory with zero decay → exp(0) = 1.0 always
+    let ancient = now - 10_000 * 3_600_000;
+    let score = recency_score(ancient, 0.0);
+    assert!(
+        (score - 1.0).abs() < 1e-9,
+        "zero decay_rate should always yield 1.0, got {score}"
+    );
+    // Also test with recent
+    let score_recent = recency_score(now, 0.0);
+    assert!(
+        (score_recent - 1.0).abs() < 1e-9,
+        "zero decay_rate + recent should be 1.0, got {score_recent}"
+    );
+}
+
+// --- score_memory tests ---
+
+#[test]
+fn score_memory_perfect_scores() {
+    let now = crate::db::now_ms();
+    let mem = make_memory(Layer::Core, 1.0, 0.05, now);
+    let scored = score_memory(&mem, 1.0);
+    // importance=1.0, relevance=1.0, recency≈1.0, bonus=1.1
+    // raw = (0.2*1 + 0.2*1 + 0.6*1) * 1.1 = 1.1 → capped to 1.0
+    assert!(
+        (scored.score - 1.0).abs() < 1e-9,
+        "perfect inputs with Core layer should cap at 1.0, got {}", scored.score
+    );
+}
+
+#[test]
+fn score_memory_zero_everything() {
+    let now = crate::db::now_ms();
+    let very_old = now - 10_000 * 3_600_000;
+    let mem = make_memory(Layer::Buffer, 0.0, 5.0, very_old);
+    let scored = score_memory(&mem, 0.0);
+    // importance=0, relevance=0, recency≈0, bonus=0.9
+    // Should be near zero
+    assert!(scored.score >= 0.0, "score must not be negative, got {}", scored.score);
+    assert!(scored.score < 0.05, "zero inputs + old should score near 0, got {}", scored.score);
+}
+
+#[test]
+fn score_memory_layer_bonus() {
+    let now = crate::db::now_ms();
+    // Same memory, same params, different layers
+    let mem_buffer = make_memory(Layer::Buffer, 0.8, 0.1, now);
+    let mem_core = make_memory(Layer::Core, 0.8, 0.1, now);
+
+    let scored_buffer = score_memory(&mem_buffer, 0.7);
+    let scored_core = score_memory(&mem_core, 0.7);
+
+    // Buffer bonus=0.9, Core bonus=1.1 → Core should score higher
+    assert!(
+        scored_core.score > scored_buffer.score,
+        "Core (bonus=1.1) should outscore Buffer (bonus=0.9): core={} vs buffer={}",
+        scored_core.score, scored_buffer.score
+    );
+}
+
+#[test]
+fn score_memory_cap_at_one() {
+    let now = crate::db::now_ms();
+    // Max everything: importance=1.0, relevance=1.0, recency≈1.0, Core bonus=1.1
+    let mem = make_memory(Layer::Core, 1.0, 0.0, now); // decay=0 → recency=1.0
+    let scored = score_memory(&mem, 1.0);
+    // raw = (0.2 + 0.2 + 0.6) * 1.1 = 1.1 → must cap at 1.0
+    assert!(
+        scored.score <= 1.0,
+        "score must never exceed 1.0, got {}", scored.score
+    );
+    assert!(
+        (scored.score - 1.0).abs() < 1e-9,
+        "should be exactly 1.0 after capping, got {}", scored.score
+    );
+}
+
+#[test]
+fn score_memory_weight_distribution() {
+    let now = crate::db::now_ms();
+    // Test that relevance dominates: high relevance + low importance vs low relevance + high importance
+    let mem_high_rel = make_memory(Layer::Working, 0.1, 0.0, now); // importance=0.1, decay=0→recency=1.0
+    let mem_high_imp = make_memory(Layer::Working, 0.9, 0.0, now); // importance=0.9, decay=0→recency=1.0
+
+    // high relevance (0.9) + low importance (0.1): 0.6*0.9 + 0.2*0.1 + 0.2*1.0 = 0.54 + 0.02 + 0.2 = 0.76
+    let scored_high_rel = score_memory(&mem_high_rel, 0.9);
+    // low relevance (0.1) + high importance (0.9): 0.6*0.1 + 0.2*0.9 + 0.2*1.0 = 0.06 + 0.18 + 0.2 = 0.44
+    let scored_high_imp = score_memory(&mem_high_imp, 0.1);
+
+    assert!(
+        scored_high_rel.score > scored_high_imp.score,
+        "high relevance (weight=0.6) should beat high importance (weight=0.2): \
+         high_rel={} vs high_imp={}",
+        scored_high_rel.score, scored_high_imp.score
+    );
+
+    // Verify approximate values (Working layer bonus = 1.0, so no distortion)
+    let expected_high_rel = 0.76; // (0.6*0.9 + 0.2*0.1 + 0.2*1.0) * 1.0
+    let expected_high_imp = 0.44; // (0.6*0.1 + 0.2*0.9 + 0.2*1.0) * 1.0
+    assert!(
+        (scored_high_rel.score - expected_high_rel).abs() < 0.01,
+        "expected ≈{expected_high_rel}, got {}", scored_high_rel.score
+    );
+    assert!(
+        (scored_high_imp.score - expected_high_imp).abs() < 0.01,
+        "expected ≈{expected_high_imp}, got {}", scored_high_imp.score
+    );
+}
