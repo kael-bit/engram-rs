@@ -255,8 +255,10 @@ How:
 curl -sf -X POST http://localhost:3917/recall \
   -H 'Content-Type: application/json' \
   -d '{"query": "how do we deploy"}'
+```
 
-# Pre-action trigger check
+Pre-action trigger check:
+```bash
 curl -sf http://localhost:3917/triggers/deploy
 ```
 
