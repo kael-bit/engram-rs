@@ -146,22 +146,19 @@ You have persistent memory via engram MCP tools.
 
 ### 2. When & What to Store (Tool: `engram_store`)
 
-**Principle:** Store anything that isn't routine log output. If losing it after a context reset would make you act worse — store it. When in doubt, store it; the system handles dedup and decay automatically.
+**Default: store it.** If information came from the user (not from command output), store it. Engram handles dedup and decay — you won't create clutter. The cost of forgetting is always higher than the cost of storing.
 
-🚫 **DO NOT store:** routine command output, things already in code/config files, or step-by-step narration of what you just did.
+🚫 **DO NOT store:** routine command output (build logs, test results, ls listings), step-by-step narration of what you just did, or information already in code/config files.
 
-Common patterns and how to tag them:
-
-| What | Tags | Kind |
-|------|------|------|
-| Design decisions | topic tags | *(default)* |
-| Lessons from mistakes | `lesson` + `trigger:kebab-verb` | *(default)* |
-| Workflows / ordering constraints | `procedure` + topic | `procedural` |
-| User preferences / corrections | `preference` | *(default)* |
-| Ongoing rules (must stay in sync, etc.) | `procedure` + topic | `procedural` |
-| Milestone recap (decisions + next steps) | `session` | *(default)* |
-
-This list is not exhaustive — use the principle above.
+**Everything else — store immediately.** Especially:
+- Anything the user says about themselves (name, role, timezone, background)
+- Preferences, even casual ones ("I like concise answers")
+- Corrections and criticism
+- Decisions, even small ones ("let's use X")
+- Rules and constraints ("always do Y before Z")
+- Lessons from mistakes (tag: `lesson` + `trigger:kebab-verb`)
+- Workflows / ordering constraints (kind: `procedural`)
+- Milestone recaps: decisions made + what to do next (tag: `session`)
 
 🌐 **Cross-Project Knowledge**
 
@@ -224,22 +221,19 @@ curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 
 ### 2. When & What to Store
 
-**Principle:** Store anything that isn't routine log output. If losing it after a context reset would make you act worse — store it. When in doubt, store it; the system handles dedup and decay automatically.
+**Default: store it.** If information came from the user (not from command output), store it. Engram handles dedup and decay — you won't create clutter. The cost of forgetting is always higher than the cost of storing.
 
-🚫 **DO NOT store:** routine command output, things already in code/config files, or step-by-step narration of what you just did.
+🚫 **DO NOT store:** routine command output (build logs, test results, ls listings), step-by-step narration of what you just did, or information already in code/config files.
 
-Common patterns and how to tag them:
-
-| What | Tags | Kind |
-|------|------|------|
-| Design decisions | topic tags | *(default)* |
-| Lessons from mistakes | `lesson` + `trigger:kebab-verb` | *(default)* |
-| Workflows / ordering constraints | `procedure` + topic | `procedural` |
-| User preferences / corrections | `preference` | *(default)* |
-| Ongoing rules (must stay in sync, etc.) | `procedure` + topic | `procedural` |
-| Milestone recap (decisions + next steps) | `session` | *(default)* |
-
-This list is not exhaustive — use the principle above.
+**Everything else — store immediately.** Especially:
+- Anything the user says about themselves (name, role, timezone, background)
+- Preferences, even casual ones ("I like concise answers")
+- Corrections and criticism
+- Decisions, even small ones ("let's use X")
+- Rules and constraints ("always do Y before Z")
+- Lessons from mistakes (tag: `lesson` + `trigger:kebab-verb`)
+- Workflows / ordering constraints (kind: `procedural`)
+- Milestone recaps: decisions made + what to do next (tag: `session`)
 
 🌐 **Cross-Project Knowledge**
 
