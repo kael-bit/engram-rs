@@ -1,4 +1,4 @@
-use super::*;
+use super::parse::{extract_assistant_msg, extract_message_content};
 
 #[test]
 fn extract_content_plain_string() {
@@ -39,7 +39,6 @@ fn extract_content_empty_blocks() {
             {"type": "image_url", "image_url": {"url": "data:..."}}
         ]
     });
-    // No text blocks → None
     assert!(extract_message_content(&msg).is_none());
 }
 
