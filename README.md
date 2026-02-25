@@ -27,11 +27,11 @@ Single binary, ~9 MB, ~80 MB RSS in production. No Docker, no Python, no externa
 sequenceDiagram
     participant A as Agent
     participant E as engram
-    participant LLM as Background
+    participant LLM as LLM
 
     Note over A,E: Session Start
-    A->>E: GET /resume?hours=6
-    E-->>A: core + working + next_actions
+    A->>E: GET /resume
+    E-->>A: core + sessions + working + recent + buffer
 
     Note over A,E: During Work
     A->>E: POST /memories {decision}
@@ -44,9 +44,10 @@ sequenceDiagram
     A->>E: POST /memories {decisions + lessons + next steps}
 
     Note over E,LLM: Background (every 30min)
-    LLM->>E: consolidate
+    E->>E: decay, dedup, promote
+    E->>LLM: triage / gate / merge
+    LLM-->>E: approve, reject, merge
     E->>E: Buffer → Working → Core
-    E->>E: decay, dedup, merge
 ```
 
 ## Setup
