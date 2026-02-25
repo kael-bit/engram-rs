@@ -15,6 +15,7 @@ fn reinforcement_score(mem: &Memory) -> f64 {
 }
 
 mod audit;
+mod cluster;
 mod distill;
 mod facts;
 mod merge;
@@ -344,6 +345,43 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
     cleanup_stale_tags(db);
     fix_stuck_buffer(db);
 
+    let now = crate::db::now_ms();
+
+    // --- Working layer quality rules (before main consolidation) ---
+
+    // Rule 1: Demote auto-extracted Working memories to Buffer.
+    // Proxy extraction is shut down; these are legacy noise.
+    let mut auto_extract_demoted = 0usize;
+    for m in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_default() {
+        if m.tags.iter().any(|t| t == "auto-extract") {
+            if db.demote(&m.id, Layer::Buffer).is_ok() {
+                auto_extract_demoted += 1;
+                info!(id = %crate::util::short_id(&m.id), "demoted auto-extract from Working to Buffer");
+            }
+        }
+    }
+
+    // Rule 2: Delete gate-rejected Working memories older than 7 days (by modified_at).
+    // The Core promotion gate already judged these unworthy; they shouldn't linger.
+    let mut gate_rejected_cleaned = 0usize;
+    {
+        let seven_days_ms = 7 * 24 * 3600 * 1000_i64;
+        for m in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_default() {
+            if m.tags.iter().any(|t| t == "gate-rejected")
+                && (now - m.modified_at) > seven_days_ms
+            {
+                if db.delete(&m.id).unwrap_or(false) {
+                    gate_rejected_cleaned += 1;
+                    info!(id = %crate::util::short_id(&m.id), "deleted stale gate-rejected Working memory");
+                }
+            }
+        }
+    }
+
+    if auto_extract_demoted > 0 || gate_rejected_cleaned > 0 {
+        info!(auto_extract_demoted, gate_rejected_cleaned, "Working quality cleanup");
+    }
+
     let promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
     let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
     let decay_threshold = req.and_then(|r| r.decay_drop_threshold).unwrap_or(0.01);
@@ -352,7 +390,6 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
     let working_age = req.and_then(|r| r.working_age_promote_secs).unwrap_or(7 * 86400)
         .saturating_mul(1000);
 
-    let now = crate::db::now_ms();
     let mut promoted = 0_usize;
     let mut decayed = 0_usize;
     let mut promoted_ids: HashSet<String> = HashSet::new();
@@ -603,8 +640,8 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
 
     ConsolidateResponse {
         promoted,
-        decayed,
-        demoted,
+        decayed: decayed + gate_rejected_cleaned,
+        demoted: demoted + auto_extract_demoted,
         merged: 0,
         importance_decayed,
         gate_rejected: 0,

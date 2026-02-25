@@ -13,40 +13,54 @@ pub(crate) const AUDIT_SYSTEM_PUB: &str = AUDIT_SYSTEM;
 
 const AUDIT_SYSTEM: &str = r#"Review an AI agent's memory layers and propose cleanup operations.
 
-Core = permanent, survives total context loss. Working = active context. Buffer = temporary.
-Metadata: imp=importance, ac=access count, age=days old, mod=days since last edit, kind, tags.
+Memories are presented in **semantic clusters** grouped by combined similarity (cosine + tag overlap).
+Memories in the same cluster are semantically related — check for redundancy within clusters.
+
+Metadata per memory:
+- imp = importance (0-1)
+- ac = access count (how many times recalled). ac=0 means never recalled — consider if it's still valuable
+- last_accessed = days since last recall
+- age = days since creation
+- kind = memory type (semantic, procedural, episodic)
+- tags = associated labels
+
+Similarity scores between cluster members show how related two memories are:
+- >0.80 = near-duplicate content, strongly consider merging
+- 0.60-0.80 = related topic, check if they can be consolidated
+- <0.60 = loosely related, probably separate concepts
+
+Full content is shown — judge quality based on actual content, not just tags or metadata.
+
+## Layer Principles
+
+**Core** = stable principles, lessons from mistakes, identity constraints. Rarely changes.
+If content references specific code/config versions, it's probably Working, not Core.
+
+**Working** = active project context, current decisions. Becomes stale as projects evolve.
+
+**Buffer** = temporary intake, expires naturally.
 
 ## What BELONGS in Core
-- Lessons that prevent repeating mistakes: "never force-push to main"
-- Identity/preferences: "user prefers Chinese, hates verbose replies"
-- Hard constraints: "all public output must hide AI identity"
-- Decision rationale (the WHY): "we chose SQLite for zero-dep deployment"
+- Lessons that prevent repeating mistakes
+- Identity/preferences that shape behavior
+- Hard constraints and rules
+- Decision rationale (the WHY behind choices)
 
-## What does NOT belong in Core (demote or delete)
-- Changelogs listing WHAT was done: "Recall改进: 1) expansion 2) FTS gating" → DEMOTE
-- Implementation notes already in code: "HNSW replaces brute-force search" → DEMOTE
-- Fixed bugs: "BUG: triage didn't filter namespace" → DELETE if fixed
-- Config snapshots that go stale: "cosine 0.78, TTL 24h, threshold 5" → DEMOTE
-- Session logs: "Session: deployed v0.7, 143 tests pass" → DELETE
-- Plans/TODOs: "TODO: add compression, fix lifecycle" → DELETE
+## What does NOT belong in Core
+- Changelogs listing WHAT was done → demote or delete
+- Implementation details already in code → demote
+- Session logs and progress reports → delete
+- Plans/TODOs that are stale → delete
+- Config snapshots that go stale → demote
 
-## Rules
-- mod < 1d → don't touch (too recent)
-- Never demote to buffer (layer 1)
-- Never delete identity or lesson-tagged memories
-- NEVER propose demoting a memory to the same layer it is already on. Check the [Layer: ...] tag. L2→L2 or L3→L3 is a no-op bug.
-- When multiple memories cover the same topic, prefer MERGE over DELETE
-- Propose at most 30% deletes. Focus on merges and promotions first.
+## Judgment Guidelines
 
-## Decision test
-For each memory: "If the agent loses all context and only has this memory, is it useful?"
-- YES: lesson, constraint, identity, decision rationale → keep in Core
-- NO: changelog, implementation detail, resolved bug, session log → demote or delete
-
-Changelogs disguised as decisions are the #1 false positive. If it lists numbered changes
-(1) did X 2) did Y), it's a changelog no matter how technical it sounds.
-
-Be aggressive cleaning Working garbage. Propose no operations if nothing needs changing."#;
+- **Superseded memories:** if a newer memory in the same cluster covers the same knowledge, the older one should be removed or merged.
+- **ac=0 + old age** = possibly forgotten. Judge if still relevant based on content, not just metrics.
+- NEVER propose demoting a memory to the same layer it is already on. Check the layer metadata. L2→L2 or L3→L3 is a no-op bug.
+- When memories in a cluster overlap heavily, prefer MERGE over DELETE to preserve information.
+- Full content is shown — read it carefully before deciding.
+- Propose no operations if nothing needs changing."#;
 
 /// Tool response: a list of audit operations proposed by the LLM.
 #[derive(Debug, Deserialize)]

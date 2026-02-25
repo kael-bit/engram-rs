@@ -3,17 +3,19 @@
 //!
 //! Flow:
 //! 1. Snapshot current Core+Working into memory
-//! 2. Run audit LLM call (same prompt as real audit)
-//! 3. Parse ops but do NOT apply
-//! 4. Score each op against heuristic rules + optional LLM judge
-//! 5. Return a verdict with per-op grades and an overall quality score
+//! 2. Cluster memories by semantic similarity
+//! 3. Batch clusters into groups that fit prompt limits
+//! 4. Run audit LLM call per batch with full content + similarity context
+//! 5. Parse ops but do NOT apply (unless auto_apply=true)
+//! 6. Score each op against simplified mechanical rules
+//! 7. Return a verdict with per-op grades and an overall quality score
 
 use crate::ai::AiConfig;
 use crate::consolidate::audit::AuditOp;
+use crate::consolidate::cluster::{batch_clusters, cluster_memories, MemoryCluster};
 use crate::db::{Layer, Memory};
 use crate::error::EngramError;
 use crate::SharedDB;
-use crate::util::truncate_chars;
 use serde::Serialize;
 use std::collections::HashMap;
 use tracing::info;
@@ -47,14 +49,26 @@ pub struct SandboxResult {
     pub applied: usize,       // ops actually executed (0 in dry-run)
     pub skipped: usize,       // Bad ops skipped during auto-apply
     pub summary: String,
+    pub cluster_count: usize, // number of semantic clusters
+    pub batch_count: usize,   // number of LLM batches
 }
 
 const SAFETY_THRESHOLD: f64 = crate::thresholds::SANDBOX_SAFETY_THRESHOLD;
 
-/// Heuristic rules that catch obviously bad audit decisions.
+/// Cosine+tag combined similarity threshold for clustering.
+/// Higher than pure cosine 0.50 because tag_jaccard inflates scores.
+const CLUSTER_THRESHOLD: f64 = 0.55;
+
+/// Maximum characters per batch prompt.
+const BATCH_MAX_CHARS: usize = 8_000;
+
+/// Simplified mechanical rules that catch obviously bad audit decisions.
+/// Only 3 categories of errors:
+/// 1. Target not found
+/// 2. Same-layer / upward demote (no-op)
+/// 3. Merge losing information
 pub struct RuleChecker<'a> {
     memories: HashMap<String, &'a Memory>,
-    now_ms: i64,
 }
 
 impl<'a> RuleChecker<'a> {
@@ -67,328 +81,256 @@ impl<'a> RuleChecker<'a> {
                 memories.insert(crate::util::short_id(&m.id).to_string(), m);
             }
         }
-        Self {
-            memories,
-            now_ms: crate::db::now_ms(),
-        }
+        Self { memories }
     }
 
     pub fn check(&self, op: &AuditOp) -> OpGrade {
         match op {
-            AuditOp::Delete { id } => self.check_delete(id, op),
-            AuditOp::Demote { id, to } => self.check_demote(id, *to, op),
-            AuditOp::Promote { id, to } => self.check_promote(id, *to, op),
-            AuditOp::Merge { ids, content, .. } => self.check_merge(ids, content, op),
-        }
-    }
-
-    pub fn check_delete(&self, id: &str, op: &AuditOp) -> OpGrade {
-        let Some(mem) = self.memories.get(id) else {
-            return OpGrade { op: op.clone(), grade: Grade::Bad, reason: "target not found".into() };
-        };
-
-        // Rule: never delete identity memories
-        if mem.tags.iter().any(|t| t == "identity" || t == "bootstrap") {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: format!("deleting identity memory (tags: {:?})", mem.tags),
-            };
-        }
-
-        // Rule: never delete lesson/audit/procedural memories (unless exact duplicates — handled by merge)
-        if mem.tags.iter().any(|t| t == "lesson" || t == "audit" || t == "sandbox")
-            || mem.kind == "procedural"
-        {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: "protected tag: deletion of lesson/audit memories requires manual review".into(),
-            };
-        }
-
-        // Rule: never delete recently modified memories (24h)
-        // Uses modified_at — immune to resume touch inflation on last_accessed.
-        let mod_age_h = if mem.modified_at > 0 {
-            (self.now_ms - mem.modified_at) as f64 / 3_600_000.0
-        } else {
-            (self.now_ms - mem.created_at) as f64 / 3_600_000.0
-        };
-        if mod_age_h < crate::thresholds::SANDBOX_RECENT_MOD_HOURS {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: format!("deleting memory modified {:.1}h ago (< 24h)", mod_age_h),
-            };
-        }
-
-        // Rule: deleting high-access memories is suspicious
-        if mem.access_count > 20 {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Marginal,
-                reason: format!("deleting memory with {} accesses — likely valuable", mem.access_count),
-            };
-        }
-
-        // Rule: deleting Core memory is always risky
-        if mem.layer == Layer::Core {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Marginal,
-                reason: "deleting Core memory — verify it's truly obsolete".into(),
-            };
-        }
-
-        OpGrade { op: op.clone(), grade: Grade::Good, reason: "looks safe to delete".into() }
-    }
-
-    pub fn check_demote(&self, id: &str, to: u8, op: &AuditOp) -> OpGrade {
-        let Some(mem) = self.memories.get(id) else {
-            return OpGrade { op: op.clone(), grade: Grade::Bad, reason: "target not found".into() };
-        };
-
-        // Rule: same-layer or upward demote is a no-op
-        if mem.layer as u8 <= to {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: format!("same-layer or upward demote is a no-op (L{} → L{})", mem.layer as u8, to),
-            };
-        }
-
-        // Rule: demoting identity/constraint is almost always wrong
-        if mem.tags.iter().any(|t| t == "identity" || t == "constraint") {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: "demoting identity/constraint memory".into(),
-            };
-        }
-
-        // Rule: lessons and constraints must stay in Core — they ARE Core
-        if mem.layer == Layer::Core && mem.tags.iter().any(|t| t == "lesson") {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: format!("demoting Core lesson (ac={}) — lessons belong in Core", mem.access_count),
-            };
-        }
-
-        // Rule: memories describing design mistakes / failures belong in Core
-        if mem.layer == Layer::Core {
-            let content_lower = mem.content.to_lowercase();
-            let is_lesson_content = content_lower.contains("设计错误")
-                || content_lower.contains("教训")
-                || content_lower.contains("lesson")
-                || content_lower.contains("原则")
-                || content_lower.contains("principle")
-                || content_lower.contains("严重失误")
-                || content_lower.contains("must")
-                || content_lower.contains("必须");
-            if is_lesson_content {
-                return OpGrade {
-                    op: op.clone(), grade: Grade::Bad,
-                    reason: "demoting Core memory containing lesson/principle language".into(),
-                };
+            AuditOp::Delete { id } => {
+                if !self.memories.contains_key(id) {
+                    return bad(op, "target not found");
+                }
+                good(op, "ok")
+            }
+            AuditOp::Demote { id, to } => {
+                if let Some(mem) = self.memories.get(id) {
+                    if (mem.layer as u8) <= *to {
+                        return bad(
+                            op,
+                            &format!(
+                                "same-layer or upward demote is a no-op (L{} → L{})",
+                                mem.layer as u8, to
+                            ),
+                        );
+                    }
+                } else {
+                    return bad(op, "target not found");
+                }
+                good(op, "ok")
+            }
+            AuditOp::Promote { id, to: _ } => {
+                if !self.memories.contains_key(id) {
+                    return bad(op, "target not found");
+                }
+                good(op, "ok")
+            }
+            AuditOp::Merge { ids, content, .. } => {
+                let found = ids
+                    .iter()
+                    .filter(|id| self.memories.contains_key(id.as_str()))
+                    .count();
+                if found < ids.len() {
+                    return bad(
+                        op,
+                        &format!("only {}/{} merge source IDs found", found, ids.len()),
+                    );
+                }
+                let min_len = ids
+                    .iter()
+                    .filter_map(|id| self.memories.get(id.as_str()))
+                    .map(|m| m.content.chars().count())
+                    .min()
+                    .unwrap_or(0);
+                if content.chars().count() < min_len / 2 {
+                    return bad(
+                        op,
+                        "merge output much shorter than inputs — losing information",
+                    );
+                }
+                good(op, "ok")
             }
         }
-
-        // Rule: demoting high-ac Core memory
-        if mem.layer == Layer::Core && mem.access_count > 50 {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: format!("demoting Core memory with ac={} — heavily used", mem.access_count),
-            };
-        }
-
-        // Rule: demoting to buffer (1) is aggressive
-        if to == 1 {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Marginal,
-                reason: "demoting straight to Buffer — will expire soon".into(),
-            };
-        }
-
-        OpGrade { op: op.clone(), grade: Grade::Good, reason: "reasonable demotion".into() }
-    }
-
-    pub fn check_promote(&self, id: &str, to: u8, op: &AuditOp) -> OpGrade {
-        let Some(mem) = self.memories.get(id) else {
-            return OpGrade { op: op.clone(), grade: Grade::Bad, reason: "target not found".into() };
-        };
-
-        // Rule: promoting session/distilled to Core is wrong
-        if to == 3 && mem.tags.iter().any(|t| t == "session" || t == "distilled" || t == "auto-distilled") {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: "promoting session/distilled memory to Core".into(),
-            };
-        }
-
-        // Rule: promoting to Core with ac=0 is suspicious UNLESS recently created OR has lesson/constraint content
-        if to == 3 && mem.access_count == 0 {
-            let age_h = (self.now_ms - mem.created_at) as f64 / 3_600_000.0;
-            let is_lesson_content = mem.tags.iter().any(|t| t == "lesson" || t == "constraint")
-                || mem.content.to_lowercase().contains("lesson")
-                || mem.content.to_lowercase().contains("教训")
-                || mem.content.to_lowercase().contains("原则")
-                || mem.content.to_lowercase().contains("严禁");
-            if !(age_h < crate::thresholds::SANDBOX_NEW_AGE_HOURS || is_lesson_content) {
-                return OpGrade {
-                    op: op.clone(), grade: Grade::Marginal,
-                    reason: "promoting to Core with zero accesses — unproven value".into(),
-                };
-            }
-        }
-
-        // Rule: promoting gate-rejected-final should not happen
-        if to == 3 && mem.tags.iter().any(|t| t == "gate-rejected-final") {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: "promoting gate-rejected-final to Core — gate decided 3x already".into(),
-            };
-        }
-
-        OpGrade { op: op.clone(), grade: Grade::Good, reason: "reasonable promotion".into() }
-    }
-
-    pub fn check_merge(&self, ids: &[String], content: &str, op: &AuditOp) -> OpGrade {
-        // Rule: merged content must not be shorter than the shortest input
-        let min_len = ids.iter()
-            .filter_map(|id| self.memories.get(id.as_str()))
-            .map(|m| m.content.chars().count())
-            .min()
-            .unwrap_or(0);
-
-        if content.chars().count() < min_len / 2 {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: format!("merge output ({} chars) much shorter than inputs — likely losing information",
-                    content.chars().count()),
-            };
-        }
-
-        // Rule: merging identity with non-identity is wrong
-        let has_identity = ids.iter().any(|id|
-            self.memories.get(id.as_str())
-                .map(|m| m.tags.iter().any(|t| t == "identity"))
-                .unwrap_or(false)
-        );
-        let has_non_identity = ids.iter().any(|id|
-            self.memories.get(id.as_str())
-                .map(|m| !m.tags.iter().any(|t| t == "identity"))
-                .unwrap_or(false)
-        );
-        if has_identity && has_non_identity {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: "merging identity with non-identity memory".into(),
-            };
-        }
-
-        // Rule: merging across layers (Core + Working) is risky
-        let layers: Vec<Layer> = ids.iter()
-            .filter_map(|id| self.memories.get(id.as_str()).map(|m| m.layer))
-            .collect();
-        if layers.contains(&Layer::Core) && layers.contains(&Layer::Working) {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Marginal,
-                reason: "merging across Core and Working layers".into(),
-            };
-        }
-
-        // Rule: can't find all source memories
-        let found = ids.iter().filter(|id| self.memories.contains_key(id.as_str())).count();
-        if found < ids.len() {
-            return OpGrade {
-                op: op.clone(), grade: Grade::Bad,
-                reason: format!("only {}/{} merge source IDs found", found, ids.len()),
-            };
-        }
-
-        OpGrade { op: op.clone(), grade: Grade::Good, reason: "reasonable merge".into() }
     }
 }
 
-/// Run audit in sandbox mode: snapshot → audit → grade → optionally apply.
-/// When `auto_apply` is true and score >= threshold, executes Good+Marginal ops,
+fn good(op: &AuditOp, reason: &str) -> OpGrade {
+    OpGrade {
+        op: op.clone(),
+        grade: Grade::Good,
+        reason: reason.to_string(),
+    }
+}
+
+fn bad(op: &AuditOp, reason: &str) -> OpGrade {
+    OpGrade {
+        op: op.clone(),
+        grade: Grade::Bad,
+        reason: reason.to_string(),
+    }
+}
+
+/// Run audit in sandbox mode: snapshot → cluster → batch → audit → grade → optionally apply.
+///
+/// When `auto_apply` is true and score >= threshold, executes Good ops,
 /// skips Bad ops. When false, nothing is modified (dry-run).
-pub async fn sandbox_audit(cfg: &AiConfig, db: &SharedDB, auto_apply: bool) -> Result<SandboxResult, EngramError> {
+pub async fn sandbox_audit(
+    cfg: &AiConfig,
+    db: &SharedDB,
+    auto_apply: bool,
+) -> Result<SandboxResult, EngramError> {
     let db2 = db.clone();
     let (core, working) = tokio::task::spawn_blocking(move || {
-        let c = db2.list_by_layer_meta(Layer::Core, 500, 0).unwrap_or_default();
-        let w = db2.list_by_layer_meta(Layer::Working, 500, 0).unwrap_or_default();
+        let c = db2
+            .list_by_layer_meta(Layer::Core, 500, 0)
+            .unwrap_or_default();
+        let w = db2
+            .list_by_layer_meta(Layer::Working, 500, 0)
+            .unwrap_or_default();
         (c, w)
-    }).await.map_err(|e| EngramError::Internal(format!("spawn: {e}")))?;
+    })
+    .await
+    .map_err(|e| EngramError::Internal(format!("spawn: {e}")))?;
 
     let total = core.len() + working.len();
-    info!(core = core.len(), working = working.len(), "audit sandbox: snapshotted memories");
+    info!(
+        core = core.len(),
+        working = working.len(),
+        "audit sandbox: snapshotted memories"
+    );
 
-    // Build the same prompt the real audit uses
-    let prompt = format_sandbox_prompt(&core, &working);
+    // Get embeddings for clustering
+    let all_ids: Vec<String> = core
+        .iter()
+        .chain(working.iter())
+        .map(|m| m.id.clone())
+        .collect();
+    let db3 = db.clone();
+    let embeddings = tokio::task::spawn_blocking(move || db3.get_embeddings_by_ids(&all_ids))
+        .await
+        .map_err(|e| EngramError::Internal(format!("spawn: {e}")))?;
 
-    // Call LLM with function calling (same model as gate — the audit model)
-    let tcr = crate::ai::llm_tool_call::<super::audit::AuditToolResponse>(
-        cfg, "audit", super::audit::AUDIT_SYSTEM_PUB, &prompt,
-        "audit_operations",
-        "Propose cleanup operations for the memory store. Return empty operations array if nothing needs changing.",
-        super::audit::audit_tool_schema(),
-    ).await?;
-    if let Some(ref u) = tcr.usage {
-        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-        let _ = db.log_llm_call("sandbox_audit", &tcr.model, u.prompt_tokens, u.completion_tokens, cached, tcr.duration_ms);
+    // Cluster memories by semantic similarity
+    let all_memories: Vec<Memory> = core
+        .iter()
+        .chain(working.iter())
+        .cloned()
+        .collect();
+    let clusters = cluster_memories(&all_memories, &embeddings, CLUSTER_THRESHOLD);
+    let cluster_count = clusters.len();
+
+    info!(
+        clusters = cluster_count,
+        memories = total,
+        "audit sandbox: clustered memories"
+    );
+
+    // Batch clusters into groups that fit prompt limits
+    let batch_indices = batch_clusters(&clusters, BATCH_MAX_CHARS);
+    let batch_count = batch_indices.len();
+
+    info!(
+        batches = batch_count,
+        "audit sandbox: batched clusters"
+    );
+
+    // Audit each batch
+    let mut all_ops: Vec<AuditOp> = Vec::new();
+    for (batch_num, indices) in batch_indices.iter().enumerate() {
+        let batch_clusters: Vec<&MemoryCluster> =
+            indices.iter().map(|&i| &clusters[i]).collect();
+        let prompt = format_clustered_prompt(&batch_clusters, batch_num + 1, batch_count);
+
+        let tcr = crate::ai::llm_tool_call::<super::audit::AuditToolResponse>(
+            cfg,
+            "audit",
+            super::audit::AUDIT_SYSTEM_PUB,
+            &prompt,
+            "audit_operations",
+            "Propose cleanup operations for the memory store. Return empty operations array if nothing needs changing.",
+            super::audit::audit_tool_schema(),
+        )
+        .await?;
+
+        if let Some(ref u) = tcr.usage {
+            let cached = u
+                .prompt_tokens_details
+                .as_ref()
+                .map_or(0, |d| d.cached_tokens);
+            let _ = db.log_llm_call(
+                "sandbox_audit",
+                &tcr.model,
+                u.prompt_tokens,
+                u.completion_tokens,
+                cached,
+                tcr.duration_ms,
+            );
+        }
+
+        let ops = super::audit::resolve_audit_ops(tcr.value.operations, &core, &working);
+        info!(
+            batch = batch_num + 1,
+            ops = ops.len(),
+            "audit sandbox: batch ops"
+        );
+        all_ops.extend(ops);
     }
 
-    // Resolve raw tool call ops without applying
-    let ops = super::audit::resolve_audit_ops(tcr.value.operations, &core, &working);
+    info!(
+        ops = all_ops.len(),
+        "audit sandbox: total LLM proposed operations"
+    );
 
-    info!(ops = ops.len(), "audit sandbox: LLM proposed operations");
-
-    // Grade each op
+    // Grade each op with simplified mechanical checker
     let checker = RuleChecker::new(&core, &working);
-    let grades: Vec<OpGrade> = ops.iter().map(|op| checker.check(op)).collect();
+    let grades: Vec<OpGrade> = all_ops.iter().map(|op| checker.check(op)).collect();
 
     // Compute score
-    let (good, marginal, bad) = grades.iter().fold((0, 0, 0), |(g, m, b), og| {
-        match og.grade {
+    let (good_count, _marginal_count, bad_count) =
+        grades.iter().fold((0, 0, 0), |(g, m, b), og| match og.grade {
             Grade::Good => (g + 1, m, b),
             Grade::Marginal => (g, m + 1, b),
             Grade::Bad => (g, m, b + 1),
-        }
-    });
+        });
 
     let score = if grades.is_empty() {
         1.0 // no ops = nothing to mess up
     } else {
         let total_ops = grades.len() as f64;
-        (good as f64 + marginal as f64 * 0.5) / total_ops
+        good_count as f64 / total_ops
     };
 
     let safe = score >= SAFETY_THRESHOLD;
 
-    // Auto-apply: execute Good+Marginal ops, skip Bad
+    // Auto-apply: execute Good ops only, skip Bad
     let (mut applied, mut skipped) = (0usize, 0usize);
     if safe && auto_apply {
-        let safe_ops: Vec<AuditOp> = grades.iter()
-            .filter(|g| g.grade != Grade::Bad)
+        let safe_ops: Vec<AuditOp> = grades
+            .iter()
+            .filter(|g| g.grade == Grade::Good)
             .map(|g| g.op.clone())
             .collect();
-        let bad_count = grades.iter().filter(|g| g.grade == Grade::Bad).count();
-        skipped = bad_count;
+        let bad_ops = grades.iter().filter(|g| g.grade == Grade::Bad).count();
+        skipped = bad_ops;
 
         if !safe_ops.is_empty() {
-            let db3 = db.clone();
+            let db4 = db.clone();
             let op_count = safe_ops.len();
             let actual = tokio::task::spawn_blocking(move || {
                 let mut r = super::audit::AuditResult::default();
-                super::audit::apply_audit_ops_pub(&db3, safe_ops, &mut r);
+                super::audit::apply_audit_ops_pub(&db4, safe_ops, &mut r);
                 r
-            }).await.map_err(|e| EngramError::Internal(format!("spawn: {e}")))?;
+            })
+            .await
+            .map_err(|e| EngramError::Internal(format!("spawn: {e}")))?;
             applied = actual.promoted + actual.demoted + actual.deleted + actual.merged;
             info!(applied, skipped, op_count, "audit sandbox: auto-applied ops");
         }
     }
 
     let summary = format!(
-        "Reviewed {} memories ({} Core + {} Working). \
-         Audit proposed {} ops: {} good, {} marginal, {} bad. \
+        "Reviewed {} memories ({} Core + {} Working) in {} clusters ({} batches). \
+         Audit proposed {} ops: {} good, {} bad. \
          Score: {:.0}% (threshold: {:.0}%). {}",
-        total, core.len(), working.len(),
-        grades.len(), good, marginal, bad,
-        score * 100.0, SAFETY_THRESHOLD * 100.0,
+        total,
+        core.len(),
+        working.len(),
+        cluster_count,
+        batch_count,
+        grades.len(),
+        good_count,
+        bad_count,
+        score * 100.0,
+        SAFETY_THRESHOLD * 100.0,
         if !safe {
             "NOT safe — no changes applied.".to_string()
         } else if auto_apply {
@@ -407,40 +349,74 @@ pub async fn sandbox_audit(cfg: &AiConfig, db: &SharedDB, auto_apply: bool) -> R
         applied,
         skipped,
         summary,
+        cluster_count,
+        batch_count,
     })
 }
 
-fn format_sandbox_prompt(core: &[Memory], working: &[Memory]) -> String {
+/// Format a batch of clusters into the audit prompt.
+/// Shows full content, layer, metadata, and pairwise similarity scores.
+fn format_clustered_prompt(
+    clusters: &[&MemoryCluster],
+    batch_num: usize,
+    total_batches: usize,
+) -> String {
     let now = crate::db::now_ms();
-    let mut prompt = String::with_capacity(16_000);
-    prompt.push_str("## Core Layer\n");
-    for m in core {
-        let tags = m.tags.join(",");
-        let age_d = (now - m.created_at) as f64 / 86_400_000.0;
-        let mod_d = if m.modified_at > 0 {
-            (now - m.modified_at) as f64 / 86_400_000.0
-        } else {
-            age_d
-        };
-        let preview = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] [Layer: Core (3)] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, kind={}, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.importance,
-            m.access_count, age_d, mod_d, m.kind, tags, preview));
+    let mut prompt = String::with_capacity(10_000);
+
+    if total_batches > 1 {
+        prompt.push_str(&format!(
+            "# Batch {}/{}\n\n",
+            batch_num, total_batches
+        ));
     }
-    prompt.push_str(&format!("\n## Working Layer ({} memories)\n", working.len()));
-    for m in working {
-        let tags = m.tags.join(",");
-        let age_d = (now - m.created_at) as f64 / 86_400_000.0;
-        let mod_d = if m.modified_at > 0 {
-            (now - m.modified_at) as f64 / 86_400_000.0
-        } else {
-            age_d
-        };
-        let preview = truncate_chars(&m.content, 200);
-        prompt.push_str(&format!("- [{}] [Layer: Working (2)] (imp={:.1}, ac={}, age={:.1}d, mod={:.1}d, kind={}, tags=[{}]) {}\n",
-            crate::util::short_id(&m.id), m.importance,
-            m.access_count, age_d, mod_d, m.kind, tags, preview));
+
+    for (i, cluster) in clusters.iter().enumerate() {
+        prompt.push_str(&format!(
+            "## Cluster {}: {} ({} memor{})\n\n",
+            i + 1,
+            cluster.label,
+            cluster.memories.len(),
+            if cluster.memories.len() == 1 { "y" } else { "ies" }
+        ));
+
+        for m in &cluster.memories {
+            let tags = m.tags.join(", ");
+            let age_d = (now - m.created_at) as f64 / 86_400_000.0;
+            let last_accessed_days = (now - m.last_accessed) as f64 / 86_400_000.0;
+            let layer_name = match m.layer {
+                Layer::Core => "Core",
+                Layer::Working => "Working",
+                Layer::Buffer => "Buffer",
+            };
+            // FULL content, no truncation
+            prompt.push_str(&format!(
+                "[{}] {} | imp={:.1} | ac={} | last_accessed={:.1}d ago | age={:.1}d | kind={} | tags=[{}]\n{}\n\n",
+                crate::util::short_id(&m.id),
+                layer_name,
+                m.importance,
+                m.access_count,
+                last_accessed_days,
+                age_d,
+                m.kind,
+                tags,
+                m.content
+            ));
+        }
+
+        // Show similarity pairs within cluster
+        if !cluster.similarities.is_empty() {
+            prompt.push_str("Similarities:\n");
+            for (id1, id2, sim) in &cluster.similarities {
+                prompt.push_str(&format!(
+                    "  {}↔{} = {:.2}\n",
+                    crate::util::short_id(id1),
+                    crate::util::short_id(id2),
+                    sim
+                ));
+            }
+        }
+        prompt.push('\n');
     }
     prompt
 }
-

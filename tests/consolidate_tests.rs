@@ -155,13 +155,13 @@ fn age_promote_old_working() {
 fn drop_expired_low_importance_buffer() {
     let db = test_db();
     let now = engram::db::now_ms();
-    let two_days_ago = now - 2 * 86_400_000;
-    // old buffer, never accessed → should be dropped after 24h TTL
-    let expendable = mem_with_ts("bye", Layer::Buffer, 0.2, 0, two_days_ago, two_days_ago);
+    let three_days_ago = now - 3 * 86_400_000;
+    // old buffer, never accessed → should be dropped after TTL + hard_cap
+    let expendable = mem_with_ts("bye", Layer::Buffer, 0.2, 0, three_days_ago, three_days_ago);
     // old buffer, accessed enough (≥ rescue threshold of 2) → rescued to working
-    let valuable = mem_with_ts("save-me", Layer::Buffer, 0.5, 3, two_days_ago, two_days_ago);
+    let valuable = mem_with_ts("save-me", Layer::Buffer, 0.5, 3, three_days_ago, three_days_ago);
     // old buffer, accessed once → below rescue threshold, dropped
-    let barely = mem_with_ts("not-enough", Layer::Buffer, 0.5, 1, two_days_ago, two_days_ago);
+    let barely = mem_with_ts("not-enough", Layer::Buffer, 0.5, 1, three_days_ago, three_days_ago);
     db.import(&[expendable, valuable, barely]).unwrap();
 
     let _result = consolidate_sync(&db, None);
@@ -205,11 +205,11 @@ fn buffer_promoted_by_access() {
 #[test]
 fn buffer_ttl_accessed_enough_promotes() {
     let db = test_db();
-    let two_days_ago = engram::db::now_ms() - 2 * 86_400_000;
+    let three_days_ago = engram::db::now_ms() - 3 * 86_400_000;
     // Old buffer with 3 accesses (≥ rescue threshold of 2) — should rescue to Working
-    let accessed = mem_with_ts("rescued", Layer::Buffer, 0.1, 3, two_days_ago, two_days_ago);
+    let accessed = mem_with_ts("rescued", Layer::Buffer, 0.1, 3, three_days_ago, three_days_ago);
     // Old buffer with 1 access — below rescue threshold, should be dropped
-    let barely = mem_with_ts("barely", Layer::Buffer, 0.1, 1, two_days_ago, two_days_ago);
+    let barely = mem_with_ts("barely", Layer::Buffer, 0.1, 1, three_days_ago, three_days_ago);
     db.import(&[accessed, barely]).unwrap();
 
     let r = consolidate_sync(&db, None);
@@ -222,9 +222,9 @@ fn buffer_ttl_accessed_enough_promotes() {
 #[test]
 fn buffer_ttl_never_accessed_drops() {
     let db = test_db();
-    let two_days_ago = engram::db::now_ms() - 2 * 86_400_000;
-    // Old buffer with 0 accesses — should be dropped after TTL (24h)
-    let unused = mem_with_ts("forgotten", Layer::Buffer, 0.1, 0, two_days_ago, two_days_ago);
+    let three_days_ago = engram::db::now_ms() - 3 * 86_400_000;
+    // Old buffer with 0 accesses — should be dropped after TTL + hard_cap (48h)
+    let unused = mem_with_ts("forgotten", Layer::Buffer, 0.1, 0, three_days_ago, three_days_ago);
     db.import(&[unused]).unwrap();
 
     let r = consolidate_sync(&db, None);
@@ -330,12 +330,12 @@ fn gate_rejected_retries_after_cooldown() {
 #[test]
 fn high_importance_buffer_rescued_at_ttl() {
     let db = test_db();
-    let expired = engram::db::now_ms() - 25 * 3600 * 1000; // 25h ago, past TTL
+    let expired = engram::db::now_ms() - 49 * 3600 * 1000; // 49h ago, past hard_cap (48h)
 
     // sc=0 but high importance — should be rescued to Working
     let important = mem_with_ts("design-decision", Layer::Buffer, 0.8, 0, expired, expired);
 
-    // sc=0, low importance — should be dropped
+    // sc=0, low importance — should be dropped (past hard_cap even if never triaged)
     let junk = mem_with_ts("random-chat", Layer::Buffer, 0.3, 0, expired, expired);
 
     db.import(&[important, junk]).unwrap();
