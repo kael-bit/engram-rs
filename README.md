@@ -11,10 +11,10 @@ engram is different. It uses a three-layer model inspired by [how human memory a
 | Layer | Role | Behavior |
 |-------|------|----------|
 | **Buffer** | Short-term context | Decays in ~24h unless reinforced |
-| **Working** | Active knowledge | Promoted from buffer by usage + LLM triage |
+| **Working** | Active knowledge | High-value signals (lessons, procedures, importance ≥ 0.9) route here directly; others promoted from Buffer by usage + LLM triage |
 | **Core** | Identity & principles | Earned through repeated access, LLM quality gate |
 
-You just store memories. The system figures out what's important and promotes it. Unused memories fade naturally. Lessons and procedures persist indefinitely.
+You just store memories. The system figures out what's important and promotes it. Unused memories fade naturally. Lessons and procedures persist indefinitely. Storing the same insight again doesn't create duplicates — it reinforces the existing memory's weight.
 
 Single binary, ~9 MB, no Docker, no Python, no external database.
 ## How It Works
@@ -36,8 +36,8 @@ sequenceDiagram
     A->>E: GET /triggers/deploy
     E-->>A: relevant lessons
 
-    Note over A,E: Session End
-    A->>E: POST /memories {summary + next steps}
+    Note over A,E: Milestone Recap
+    A->>E: POST /memories {what was done + decisions + next steps}
 
     Note over E,LLM: Background (every 30min)
     LLM->>E: consolidate
