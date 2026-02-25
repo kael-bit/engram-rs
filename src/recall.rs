@@ -464,13 +464,14 @@ pub fn recall(
     let paginated = eligible.into_iter().skip(offset);
 
     // Budget-aware selection
+    let budget = if budget == 0 { usize::MAX } else { budget };
     let mut selected = Vec::new();
     let mut total_tokens = 0;
     let mut breakdown = HashMap::new();
 
     for sm in paginated {
         let tokens = estimate_tokens(&sm.memory.content);
-        if total_tokens + tokens > budget && (budget == 0 || !selected.is_empty()) {
+        if total_tokens + tokens > budget && !selected.is_empty() {
             break;
         }
         if selected.len() >= limit {

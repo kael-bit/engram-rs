@@ -116,7 +116,7 @@ fn budget_limits_output() {
 }
 
 #[test]
-fn budget_zero_returns_empty() {
+fn budget_zero_means_unlimited() {
     let db = test_db_with_data();
     let req = RecallRequest {
         query: "rust".into(),
@@ -133,7 +133,7 @@ fn budget_zero_returns_empty() {
         ..Default::default()
     };
     let result = recall(&db, &req, None, None);
-    assert!(result.memories.is_empty());
+    assert!(!result.memories.is_empty(), "budget=0 should be treated as unlimited");
 }
 
 #[test]
