@@ -134,9 +134,10 @@ Then add the prompt template below to your project instructions (`CLAUDE.md`, `A
 You have persistent memory via engram MCP tools.
 
 ### Every session start or after context compaction
-Call `engram_resume` with hours=6 to restore context. Read the core and working sections.
+Restore context first. Read the core and working sections.
+- Call `engram_resume` with hours=6, compact=true
 
-**After compaction** (you see a `<summary>` block or "Compacted" system message): call `engram_resume` immediately, before responding. Compaction summaries are lossy.
+**After compaction** (you see a `<summary>` block or "Compacted" system message): resume immediately, before responding to any user message. Compaction summaries are lossy.
 
 ### When to store what
 
@@ -148,22 +149,26 @@ Call `engram_resume` with hours=6 to restore context. Read the core and working 
 | User preferences | `preference` | *(default)* | "User prefers concise Chinese replies" |
 | Session recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
 
-**Don't store**: routine output ("tests passed"), things in code files, transient status.
+**Don't store**: routine output, things already in code/config files, transient status.
 
-### During conversation
-- Decisions, preferences, lessons → `engram_store` immediately
-- Workflows, procedures → `engram_store` with kind="procedural" (never decay)
-- "Remember this" from the user → `engram_store` with importance=0.9
-- Before risky operations → `engram_triggers` with the action name
+### Storing memories
+- Decisions, preferences, lessons → store immediately with topic tags
+- Workflows, procedures → store with kind="procedural" (never decay)
+- "Remember this" from the user → store with importance=0.9
+- Lessons from mistakes → store with tags=["lesson", "trigger:action-name"]
+
+How: `engram_store`
 
 ### Recalling memories
-Before acting on any non-trivial task, recall first:
-- `engram_recall` with the topic as query
-- Default recall is fast (~30ms cached). Only set `rerank: true` when ordering is critical (+2-4s)
-- Use `expand: true` for short/vague queries like single words (+1-2s)
+Before acting on any non-trivial task, recall first. Don't assume you remember — check.
+Default recall is fast (~30ms cached). For short/vague queries, add expand=true (+1-2s).
+Before risky operations, check triggers for relevant lessons.
+
+How: `engram_recall` with the topic as query. `engram_triggers` for pre-action checks.
 
 ### Before session ends
-Store a summary: what you did + what was decided + what to do next. Tag as "session".
+Store what you did + what was decided + what to do next. Tag as "session".
+Without the "next" part, you'll wake up not knowing what to do.
 ````
 
 ---
@@ -177,12 +182,13 @@ No build step. Add the prompt template below to your project instructions (`CLAU
 
 You have persistent memory via engram at http://localhost:3917
 
-### Every session start or after context compaction (DO THIS FIRST)
+### Every session start or after context compaction
+Restore context first. Read the core and working sections.
 ```bash
 curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 ```
 
-**After compaction** (you see a `<summary>` block or "Compacted" system message): call resume immediately, before responding. Compaction summaries are lossy.
+**After compaction** (you see a `<summary>` block or "Compacted" system message): resume immediately, before responding to any user message. Compaction summaries are lossy.
 
 ### When to store what
 
@@ -194,42 +200,49 @@ curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 | User preferences | `preference` | *(default)* | "User prefers concise Chinese replies" |
 | Session recap | `session` | *(default)* | "Did X, decided Y. Next: Z" |
 
-**Don't store**: routine output, things in code files, transient status.
+**Don't store**: routine output, things already in code/config files, transient status.
 
 ### Storing memories
+- Decisions, preferences, lessons → store immediately with topic tags
+- Workflows, procedures → store with kind="procedural" (never decay)
+- "Remember this" from the user → store with importance=0.9
+- Lessons from mistakes → store with tags=["lesson", "trigger:action-name"]
+
+How:
 ```bash
-# Fact or decision
 curl -sf -X POST http://localhost:3917/memories \
   -H 'Content-Type: application/json' \
   -d '{"content": "...", "tags": ["topic"]}'
 
-# Lesson (with trigger for pre-action recall)
+# Lessons with trigger
 curl -sf -X POST http://localhost:3917/memories \
   -H 'Content-Type: application/json' \
   -d '{"content": "LESSON: never force-push to main", "tags": ["lesson","trigger:git-push"]}'
 
-# Procedure (never expires)
+# Procedures (never decay)
 curl -sf -X POST http://localhost:3917/memories \
   -H 'Content-Type: application/json' \
   -d '{"content": "deploy: test → build → stop → cp → start", "tags": ["deploy"], "kind": "procedural"}'
 ```
 
 ### Recalling memories
-Before acting on any non-trivial task, recall first:
+Before acting on any non-trivial task, recall first. Don't assume you remember — check.
+Default recall is fast (~30ms cached). For short/vague queries, add expand=true (+1-2s).
+Before risky operations, check triggers for relevant lessons.
+
+How:
 ```bash
 curl -sf -X POST http://localhost:3917/recall \
   -H 'Content-Type: application/json' \
   -d '{"query": "how do we deploy"}'
-```
-Default recall is fast (~30ms cached). For short/vague queries, add `"expand": true` (+1-2s).
 
-### Before risky operations
-```bash
+# Pre-action trigger check
 curl -sf http://localhost:3917/triggers/deploy
 ```
 
 ### Before session ends
-Store what you did + what to do next. Tag as "session".
+Store what you did + what was decided + what to do next. Tag as "session".
+Without the "next" part, you'll wake up not knowing what to do.
 ````
 
 ---
