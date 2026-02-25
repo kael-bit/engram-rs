@@ -48,6 +48,10 @@ sequenceDiagram
     E->>LLM: triage / gate / merge
     LLM-->>E: approve, reject, merge
     E->>E: Buffer → Working → Core
+
+    Note over E,LLM: Audit (every 24h)
+    E->>LLM: review Core + Working
+    LLM-->>E: promote, demote, adjust, merge
 ```
 
 ## Setup
