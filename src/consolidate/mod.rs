@@ -533,6 +533,31 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         }
     }
 
+    // Working layer decay — demote stale Working memories back to Buffer.
+    // Without this, Working grows unbounded as proxy extraction and promotion
+    // keep adding memories that nobody ever reads. Buffer TTL then cleans them.
+    // Exempt: lessons, procedural, recently promoted, high-access memories.
+    let working_stale_ms = 3 * 86_400 * 1000_i64; // 3 days
+    let working_min_access = 3;
+    for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list working for stale check failed"); vec![] }) {
+        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" { continue; }
+        if mem.tags.iter().any(|t| t == "lesson") { continue; }
+        let age = now - mem.created_at;
+        let since_access = now - mem.last_accessed;
+        if age > working_stale_ms
+            && since_access > working_stale_ms
+            && (mem.access_count as i32) < working_min_access
+        {
+            if db.demote(&mem.id, Layer::Buffer).is_ok() {
+                info!(id = %mem.id, content = %truncate_chars(&mem.content, 50),
+                    age_days = age / 86_400_000,
+                    access_count = mem.access_count,
+                    "stale Working memory demoted to Buffer");
+                decayed += 1;
+            }
+        }
+    }
+
     // Drop decayed Buffer/Working entries — but skip anything we just promoted,
     // procedural memories, or lessons (they don't decay).
     for mem in db.get_decayed(decay_threshold).unwrap_or_else(|e| { warn!(error = %e, "get_decayed failed"); vec![] }) {
