@@ -15,18 +15,15 @@ mod sandbox;
 mod summary;
 mod triage;
 
-pub use audit::{audit_memories, AuditOp, AuditResult};
-pub use sandbox::{sandbox_audit, SandboxResult, Grade, OpGrade};
+pub use audit::{audit_memories, AuditOp, AuditResult, RawAuditOp, AuditToolResponse, audit_tool_schema, resolve_audit_ops};
+pub use sandbox::{sandbox_audit, SandboxResult, Grade, OpGrade, RuleChecker};
+pub use merge::{find_clusters, reconcile_pair_key};
+pub use triage::dedup_buffer;
 
 use distill::distill_sessions;
 use merge::{merge_similar, reconcile_updates};
-// Re-imported for test access via `use super::*`
-#[cfg(test)]
-use merge::find_clusters;
-#[cfg(test)]
-use merge::reconcile_pair_key;
 use summary::update_core_summary;
-use triage::{dedup_buffer, triage_buffer};
+use triage::triage_buffer;
 
 #[derive(Debug, Deserialize)]
 pub struct ConsolidateRequest {
@@ -75,7 +72,7 @@ pub struct ConsolidateResponse {
     pub facts_extracted: usize,
     /// IDs that passed access/age thresholds but await LLM gate review.
     #[serde(skip)]
-    pub(crate) promotion_candidates: Vec<(String, String, i64, i64)>, // (id, content, access_count, repetition_count)
+    pub promotion_candidates: Vec<(String, String, i64, i64)>, // (id, content, access_count, repetition_count)
     /// Number of session notes distilled into project context.
     #[serde(skip_serializing_if = "is_zero")]
     pub distilled: usize,
@@ -265,7 +262,7 @@ pub async fn consolidate(
 /// Strip stale process tags that should not persist:
 /// - `gate-rejected` on Working memories where `last_accessed` is > 24 h ago
 /// - `promotion` on anything already in Working or Core
-pub(crate) fn cleanup_stale_tags(db: &MemoryDB) {
+pub fn cleanup_stale_tags(db: &MemoryDB) {
     let now = crate::db::now_ms();
     let stale_cutoff = 24 * 3600 * 1000_i64;
     let mut cleaned = 0_usize;
@@ -302,7 +299,7 @@ pub(crate) fn cleanup_stale_tags(db: &MemoryDB) {
 }
 
 /// Fix buffer memories stuck by ultra-low decay rates or abandoned with no access.
-pub(crate) fn fix_stuck_buffer(db: &MemoryDB) {
+pub fn fix_stuck_buffer(db: &MemoryDB) {
     let now = crate::db::now_ms();
     let two_days_ms = 48 * 3600 * 1000_i64;
     let seven_days_ms = 7 * 24 * 3600 * 1000_i64;
@@ -336,7 +333,7 @@ pub(crate) fn fix_stuck_buffer(db: &MemoryDB) {
     }
 }
 
-pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> ConsolidateResponse {
+pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> ConsolidateResponse {
     cleanup_stale_tags(db);
     fix_stuck_buffer(db);
 
@@ -533,27 +530,39 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
         }
     }
 
-    // Working layer decay — demote stale Working memories back to Buffer.
-    // Without this, Working grows unbounded as proxy extraction and promotion
-    // keep adding memories that nobody ever reads. Buffer TTL then cleans them.
-    // Exempt: lessons, procedural, recently promoted, high-access memories.
-    let working_stale_ms = 3 * 86_400 * 1000_i64; // 3 days
-    let working_min_access = 3;
-    for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list working for stale check failed"); vec![] }) {
-        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" { continue; }
-        if mem.tags.iter().any(|t| t == "lesson") { continue; }
-        let age = now - mem.created_at;
-        let since_access = now - mem.last_accessed;
-        if age > working_stale_ms
-            && since_access > working_stale_ms
-            && (mem.access_count as i32) < working_min_access
-        {
-            if db.demote(&mem.id, Layer::Buffer).is_ok() {
-                info!(id = %mem.id, content = %truncate_chars(&mem.content, 50),
-                    age_days = age / 86_400_000,
-                    access_count = mem.access_count,
-                    "stale Working memory demoted to Buffer");
-                decayed += 1;
+    // Working layer capacity cap — evict least-useful memories when over limit.
+    // Time-based decay doesn't work at vibecoding speed (3 days of decay threshold
+    // when the entire project was built in 3 days). Instead, cap Working at a fixed
+    // size and evict by utility: lowest access_count first, then oldest.
+    // Lessons and procedural memories are exempt from eviction.
+    let working_cap: usize = std::env::var("ENGRAM_WORKING_CAP")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(30);
+    let mut working_mems: Vec<Memory> = db.list_by_layer_meta(Layer::Working, 10000, 0)
+        .unwrap_or_else(|e| { warn!(error = %e, "list working for cap check failed"); vec![] });
+
+    // Partition: exempt (lesson/procedural) vs evictable
+    let (exempt, mut evictable): (Vec<_>, Vec<_>) = working_mems.drain(..).partition(|m| {
+        m.kind == "procedural"
+            || m.tags.iter().any(|t| t == "lesson")
+            || promoted_ids.contains(&m.id)
+    });
+
+    if exempt.len() + evictable.len() > working_cap && evictable.len() > 0 {
+        let target = working_cap.saturating_sub(exempt.len());
+        if evictable.len() > target {
+            // Sort: lowest access_count first, then oldest first
+            evictable.sort_by(|a, b| {
+                a.access_count.cmp(&b.access_count)
+                    .then(a.last_accessed.cmp(&b.last_accessed))
+            });
+            let to_demote = evictable.len() - target;
+            for mem in &evictable[..to_demote] {
+                if db.demote(&mem.id, Layer::Buffer).is_ok() {
+                    info!(id = %mem.id, content = %truncate_chars(&mem.content, 50),
+                        access_count = mem.access_count,
+                        "Working over cap — demoted to Buffer");
+                    decayed += 1;
+                }
             }
         }
     }
@@ -627,10 +636,10 @@ If it reads like a commit message or progress report, REJECT.";
 
 /// Gate result: approved (with optional kind) or rejected.
 #[derive(Debug, Deserialize)]
-struct GateResult {
-    decision: String,
+pub struct GateResult {
+    pub decision: String,
     #[serde(default)]
-    kind: Option<String>,
+    pub kind: Option<String>,
 }
 
 async fn llm_promotion_gate(cfg: &AiConfig, content: &str, access_count: i64, rep_count: i64) -> Result<(bool, Option<String>, Option<ai::Usage>, String, u64), EngramError> {
@@ -678,12 +687,12 @@ async fn llm_promotion_gate(cfg: &AiConfig, content: &str, access_count: i64, re
     Ok((approved, kind, tcr.usage, tcr.model, tcr.duration_ms))
 }
 
-pub(super) fn layer_label(l: Layer) -> &'static str {
+pub fn layer_label(l: Layer) -> &'static str {
     match l { Layer::Core => "core", Layer::Working => "working", _ => "buffer" }
 }
 
 /// Merge tags from multiple sources, deduplicating and capping at `cap`.
-pub(super) fn merge_tags(base: &[String], others: &[&[String]], cap: usize) -> Vec<String> {
+pub fn merge_tags(base: &[String], others: &[&[String]], cap: usize) -> Vec<String> {
     let mut merged: Vec<String> = base.to_vec();
     for tags in others {
         for t in *tags {
@@ -696,7 +705,7 @@ pub(super) fn merge_tags(base: &[String], others: &[&[String]], cap: usize) -> V
     merged
 }
 
-pub(super) fn format_ts(ms: i64) -> String {
+pub fn format_ts(ms: i64) -> String {
     // Simple relative time format — no chrono dependency needed
     let age_secs = (crate::db::now_ms() - ms) / 1000;
     if age_secs < 3600 {

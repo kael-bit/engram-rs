@@ -19,7 +19,7 @@ const WEIGHT_RECENCY: f64 = 0.2;
 /// `text-embedding-3-small` produces uniformly high cosine scores for short
 /// Chinese queries (< 10 chars), making discrimination poor.  For these cases
 /// FTS keyword matching is a stronger signal than cosine.
-fn is_short_cjk_query(query: &str) -> bool {
+pub fn is_short_cjk_query(query: &str) -> bool {
     let char_count = query.chars().count();
     char_count > 0 && char_count < 10 && query.chars().any(is_cjk)
 }
@@ -106,7 +106,7 @@ pub fn estimate_tokens(text: &str) -> usize {
 }
 
 /// Calculate recency score using exponential decay.
-fn recency_score(last_accessed: i64, decay_rate: f64) -> f64 {
+pub fn recency_score(last_accessed: i64, decay_rate: f64) -> f64 {
     let now = crate::db::now_ms();
     let hours = ((now - last_accessed) as f64 / 3_600_000.0).max(0.0);
     let rate = if decay_rate.is_finite() { decay_rate.clamp(0.0, 10.0) } else { 0.1 };
@@ -114,7 +114,7 @@ fn recency_score(last_accessed: i64, decay_rate: f64) -> f64 {
 }
 
 #[cfg(test)]
-fn score_combined(importance: f64, relevance: f64, last_accessed: i64) -> f64 {
+pub fn score_combined(importance: f64, relevance: f64, last_accessed: i64) -> f64 {
     let now = crate::db::now_ms();
     let age_hours = ((now - last_accessed) as f64 / 3_600_000.0).max(0.0);
     // simplified recency for rescore — uses default decay
@@ -122,7 +122,7 @@ fn score_combined(importance: f64, relevance: f64, last_accessed: i64) -> f64 {
     WEIGHT_IMPORTANCE * importance + WEIGHT_RECENCY * recency + WEIGHT_RELEVANCE * relevance
 }
 
-fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {
+pub fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {
     let recency = recency_score(mem.last_accessed, mem.decay_rate);
     let bonus = mem.layer.score_bonus();
     let mut score =

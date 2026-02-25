@@ -2,7 +2,7 @@ use crate::util::truncate_chars;
 
 /// Extract text content from a single message object.
 /// Handles both plain string and array-of-blocks formats.
-pub(crate) fn extract_message_content(msg: &serde_json::Value) -> Option<String> {
+pub fn extract_message_content(msg: &serde_json::Value) -> Option<String> {
     let content = msg.get("content")?;
 
     // Plain string
@@ -32,7 +32,7 @@ pub(crate) fn extract_message_content(msg: &serde_json::Value) -> Option<String>
 }
 
 /// Grab the assistant response text from various API formats.
-pub(crate) fn extract_assistant_msg(raw: &[u8]) -> String {
+pub fn extract_assistant_msg(raw: &[u8]) -> String {
     let text = String::from_utf8_lossy(raw);
 
     // Try SSE: scan all lines for data: prefixes (don't rely on first line).

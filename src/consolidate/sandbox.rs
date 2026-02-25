@@ -52,13 +52,13 @@ pub struct SandboxResult {
 const SAFETY_THRESHOLD: f64 = 0.7;
 
 /// Heuristic rules that catch obviously bad audit decisions.
-struct RuleChecker<'a> {
+pub struct RuleChecker<'a> {
     memories: HashMap<String, &'a Memory>,
     now_ms: i64,
 }
 
 impl<'a> RuleChecker<'a> {
-    fn new(core: &'a [Memory], working: &'a [Memory]) -> Self {
+    pub fn new(core: &'a [Memory], working: &'a [Memory]) -> Self {
         let mut memories = HashMap::new();
         for m in core.iter().chain(working.iter()) {
             memories.insert(m.id.clone(), m);
@@ -73,7 +73,7 @@ impl<'a> RuleChecker<'a> {
         }
     }
 
-    fn check(&self, op: &AuditOp) -> OpGrade {
+    pub fn check(&self, op: &AuditOp) -> OpGrade {
         match op {
             AuditOp::Delete { id } => self.check_delete(id, op),
             AuditOp::Demote { id, to } => self.check_demote(id, *to, op),
@@ -82,7 +82,7 @@ impl<'a> RuleChecker<'a> {
         }
     }
 
-    fn check_delete(&self, id: &str, op: &AuditOp) -> OpGrade {
+    pub fn check_delete(&self, id: &str, op: &AuditOp) -> OpGrade {
         let Some(mem) = self.memories.get(id) else {
             return OpGrade { op: op.clone(), grade: Grade::Bad, reason: "target not found".into() };
         };
@@ -138,7 +138,7 @@ impl<'a> RuleChecker<'a> {
         OpGrade { op: op.clone(), grade: Grade::Good, reason: "looks safe to delete".into() }
     }
 
-    fn check_demote(&self, id: &str, to: u8, op: &AuditOp) -> OpGrade {
+    pub fn check_demote(&self, id: &str, to: u8, op: &AuditOp) -> OpGrade {
         let Some(mem) = self.memories.get(id) else {
             return OpGrade { op: op.clone(), grade: Grade::Bad, reason: "target not found".into() };
         };
@@ -205,7 +205,7 @@ impl<'a> RuleChecker<'a> {
         OpGrade { op: op.clone(), grade: Grade::Good, reason: "reasonable demotion".into() }
     }
 
-    fn check_promote(&self, id: &str, to: u8, op: &AuditOp) -> OpGrade {
+    pub fn check_promote(&self, id: &str, to: u8, op: &AuditOp) -> OpGrade {
         let Some(mem) = self.memories.get(id) else {
             return OpGrade { op: op.clone(), grade: Grade::Bad, reason: "target not found".into() };
         };
@@ -245,7 +245,7 @@ impl<'a> RuleChecker<'a> {
         OpGrade { op: op.clone(), grade: Grade::Good, reason: "reasonable promotion".into() }
     }
 
-    fn check_merge(&self, ids: &[String], content: &str, op: &AuditOp) -> OpGrade {
+    pub fn check_merge(&self, ids: &[String], content: &str, op: &AuditOp) -> OpGrade {
         // Rule: merged content must not be shorter than the shortest input
         let min_len = ids.iter()
             .filter_map(|id| self.memories.get(id.as_str()))

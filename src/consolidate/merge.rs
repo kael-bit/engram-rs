@@ -27,7 +27,7 @@ const RECONCILE_PROMPT: &str = "You are comparing two memory entries about poten
     unique details not in the newer one.";
 
 /// Detect same-topic memories where a newer one supersedes an older one.
-pub(super) fn reconcile_pair_key(id_a: &str, id_b: &str) -> String {
+pub fn reconcile_pair_key(id_a: &str, id_b: &str) -> String {
     if id_a < id_b { format!("{}:{}", id_a, id_b) } else { format!("{}:{}", id_b, id_a) }
 }
 
@@ -474,7 +474,7 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
     (merged_total, merged_ids)
 }
 
-pub(super) fn find_clusters(mems: &[&(Memory, Vec<f32>)], threshold: f64) -> Vec<Vec<usize>> {
+pub fn find_clusters(mems: &[&(Memory, Vec<f32>)], threshold: f64) -> Vec<Vec<usize>> {
     let n = mems.len();
     let mut used = vec![false; n];
     let mut clusters = Vec::new();

@@ -8,7 +8,7 @@ mod vec;
 
 use std::sync::{OnceLock, RwLock};
 
-pub(crate) fn jieba() -> &'static jieba_rs::Jieba {
+pub fn jieba() -> &'static jieba_rs::Jieba {
     static INSTANCE: OnceLock<jieba_rs::Jieba> = OnceLock::new();
     INSTANCE.get_or_init(jieba_rs::Jieba::new)
 }
@@ -28,7 +28,7 @@ impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for BusyTi
     }
 }
 
-type PooledConn = r2d2::PooledConnection<SqliteConnectionManager>;
+pub type PooledConn = r2d2::PooledConnection<SqliteConnectionManager>;
 
 use crate::error::EngramError;
 
@@ -574,7 +574,7 @@ pub struct MemoryDB {
 
 
 impl MemoryDB {
-    fn conn(&self) -> Result<PooledConn, EngramError> {
+    pub fn conn(&self) -> Result<PooledConn, EngramError> {
         self.pool.get().map_err(|e| EngramError::Internal(format!("pool: {e}")))
     }
 
@@ -795,7 +795,7 @@ impl MemoryDB {
 
 }
 
-fn tokenize_for_dedup(text: &str) -> std::collections::HashSet<String> {
+pub fn tokenize_for_dedup(text: &str) -> std::collections::HashSet<String> {
     let has_chinese = text.chars().any(is_cjk_ideograph);
     if has_chinese {
         jieba().cut_for_search(text, false)

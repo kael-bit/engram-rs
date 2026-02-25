@@ -163,7 +163,7 @@ pub(super) async fn triage_buffer(
 
 /// Merge near-duplicate buffer memories based on cosine similarity.
 /// No LLM calls — keeps the newest entry, sums access counts, merges tags.
-pub(super) fn dedup_buffer(db: &MemoryDB) -> usize {
+pub fn dedup_buffer(db: &MemoryDB) -> usize {
     let all = db.get_all_with_embeddings().unwrap_or_else(|e| { warn!(error = %e, "get_all_with_embeddings failed"); vec![] });
     let buffers: Vec<_> = all.iter()
         .filter(|(m, e)| !e.is_empty() && m.layer == Layer::Buffer)

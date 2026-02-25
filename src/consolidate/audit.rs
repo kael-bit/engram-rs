@@ -47,14 +47,14 @@ Be aggressive cleaning Working garbage. Propose no operations if nothing needs c
 
 /// Tool response: a list of audit operations proposed by the LLM.
 #[derive(Debug, Deserialize)]
-pub(crate) struct AuditToolResponse {
+pub struct AuditToolResponse {
     pub operations: Vec<RawAuditOp>,
 }
 
 /// Raw audit operation as returned by the LLM tool call.
 /// Fields are optional because different op types use different fields.
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawAuditOp {
+pub struct RawAuditOp {
     pub op: String,
     #[serde(default)]
     pub id: Option<String>,
@@ -71,7 +71,7 @@ pub(crate) struct RawAuditOp {
 }
 
 /// Build the JSON schema for the audit_operations tool.
-pub(crate) fn audit_tool_schema() -> serde_json::Value {
+pub fn audit_tool_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
         "properties": {
@@ -355,7 +355,7 @@ pub struct AuditResult {
 
 /// Resolve raw LLM tool call operations into validated AuditOps.
 /// Short IDs (8-char) are resolved to full UUIDs. Invalid ops are skipped.
-pub(crate) fn resolve_audit_ops(
+pub fn resolve_audit_ops(
     raw_ops: Vec<RawAuditOp>,
     core: &[Memory],
     working: &[Memory],
@@ -417,7 +417,7 @@ pub(crate) fn resolve_audit_ops(
     ops
 }
 
-pub(crate) fn apply_audit_ops_pub(db: &crate::SharedDB, ops: Vec<AuditOp>, result: &mut AuditResult) {
+pub fn apply_audit_ops_pub(db: &crate::SharedDB, ops: Vec<AuditOp>, result: &mut AuditResult) {
     apply_audit_ops(db, ops, result);
 }
 

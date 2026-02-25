@@ -246,7 +246,7 @@ impl MemoryDB {
 
 /// Common CJK stop words that match nearly everything and add noise to FTS queries.
 /// Kept minimal — only the most ubiquitous function words.
-fn is_stopword(word: &str) -> bool {
+pub fn is_stopword(word: &str) -> bool {
     matches!(word,
         "的" | "了" | "是" | "在" | "有" | "和" | "就" | "都" | "而" | "及" |
         "与" | "这" | "那" | "你" | "我" | "他" | "她" | "它" | "们" | "着" |

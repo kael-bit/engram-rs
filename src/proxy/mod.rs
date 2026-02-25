@@ -1,7 +1,7 @@
 mod extract;
-mod parse;
+pub mod parse;
 mod stats;
-mod window;
+pub mod window;
 
 pub use stats::{init_proxy_counters, proxy_stats};
 pub use window::flush_window;
