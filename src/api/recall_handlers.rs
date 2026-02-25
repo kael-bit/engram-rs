@@ -586,47 +586,14 @@ pub(super) async fn do_resume(
 
     // Sessions come before Working — continuity matters more
     let mut session_budget = budget_left.saturating_sub(recent_reserve);
-    let session_cost: usize = sessions.iter()
-        .map(|m| m.content.len() + core_overhead)
-        .sum();
-    let (sessions_out, sessions_compressed) = if session_cost > session_budget && sessions.len() >= 3 {
-        if let Some(ai) = ai_cfg {
-            if let Some(compressed) = compress_section(
-                ai, &state.db, "sessions", &sessions, session_budget
-            ).await {
-                session_budget = session_budget.saturating_sub(compressed.len());
-                (vec![], Some(compressed))
-            } else {
-                (fit_section(&sessions, &mut session_budget, compact), None)
-            }
-        } else {
-            (fit_section(&sessions, &mut session_budget, compact), None)
-        }
-    } else {
-        (fit_section(&sessions, &mut session_budget, compact), None)
-    };
+    let sessions_out = fit_section(&sessions, &mut session_budget, compact);
+    let sessions_compressed: Option<String> = None;
     budget_left = budget_left.saturating_sub(budget_left.saturating_sub(recent_reserve) - session_budget);
 
-    let mut working_budget = budget_left.saturating_sub(recent_reserve);
-    let working_cost: usize = working.iter()
-        .map(|m| m.content.len() + core_overhead)
-        .sum();
-    let (working_out, working_compressed) = if working_cost > working_budget && working.len() >= 3 {
-        if let Some(ai) = ai_cfg {
-            if let Some(compressed) = compress_section(
-                ai, &state.db, "working", &working, working_budget
-            ).await {
-                working_budget = working_budget.saturating_sub(compressed.len());
-                (vec![], Some(compressed))
-            } else {
-                (fit_section(&working, &mut working_budget, compact), None)
-            }
-        } else {
-            (fit_section(&working, &mut working_budget, compact), None)
-        }
-    } else {
-        (fit_section(&working, &mut working_budget, compact), None)
-    };
+    let working_floor = if budget_val == 0 { usize::MAX } else { budget_val * 30 / 100 };
+    let mut working_budget = budget_left.saturating_sub(recent_reserve).max(working_floor);
+    let working_out = fit_section(&working, &mut working_budget, compact);
+    let working_compressed: Option<String> = None;
     budget_left = budget_left.saturating_sub(budget_left.saturating_sub(recent_reserve) - working_budget);
 
     // Recent context gets whatever is left (at least the reserved 20%)
