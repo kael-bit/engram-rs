@@ -40,11 +40,25 @@ If content references specific code/config versions, it's probably Working, not 
 
 **Buffer** = temporary intake, expires naturally.
 
-## What BELONGS in Core
-- Lessons that prevent repeating mistakes
-- Identity/preferences that shape behavior
-- Hard constraints and rules
-- Decision rationale (the WHY behind choices)
+## Core Promotion — be VERY selective
+
+Core is permanent. Only promote Working memories that are proven valuable over time.
+
+✅ GOOD promotion (Working → Core):
+- ac>5, survived multiple sessions, content still matches current architecture
+- Lesson that actually prevented repeating a mistake (not just "I learned X")
+- Hard constraint from the user that applies permanently (e.g. "never do X")
+
+❌ BAD promotion — DO NOT promote:
+- ac=0 and created recently (hours/days ago) → not battle-tested yet, keep in Working
+- Tagged `auto-extract` → machine-generated, often low quality
+- Content about tools/workflows unrelated to the project being managed → wrong scope
+- Content describes a fix that was later replaced by a different approach → obsolete
+- Generic platitudes ("always do X", "perform Y at SQL layer") without specific context
+
+A `LESSON:` prefix or `lesson` tag does NOT automatically qualify for Core.
+Many lessons are situational and become irrelevant as architecture changes.
+Read the actual content and ask: "Is this still true? Has this been tested?"
 
 ## What does NOT belong in Core
 - Changelogs listing WHAT was done → demote or delete
@@ -52,10 +66,12 @@ If content references specific code/config versions, it's probably Working, not 
 - Session logs and progress reports → delete
 - Plans/TODOs that are stale → delete
 - Config snapshots that go stale → demote
+- Memories about systems/features that were removed or replaced → delete
 
 ## Judgment Guidelines
 
 - **Superseded memories:** if a newer memory in the same cluster covers the same knowledge, the older one should be removed or merged.
+- **Obsolete memories:** if content describes a mechanism that no longer exists (e.g. old audit format, removed feature), delete it regardless of access count. High ac on obsolete content just means it WAS popular, not that it's still valid.
 - **ac=0 + old age** = possibly forgotten. Judge if still relevant based on content, not just metrics.
 - NEVER propose demoting a memory to the same layer it is already on. Check the layer metadata. L2→L2 or L3→L3 is a no-op bug.
 - When memories in a cluster overlap heavily, prefer MERGE over DELETE to preserve information.
