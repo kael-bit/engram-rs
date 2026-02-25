@@ -285,6 +285,45 @@ pub(crate) fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) 
             }
     }
 
+    // Core overlap detection: find semantically similar Core memories.
+    // O(n²) pairwise scan — fine for <50 Core memories.
+    {
+        let core_mems: Vec<Memory> = db.list_by_layer_meta(Layer::Core, 10000, 0)
+            .unwrap_or_default();
+        let one_hour_ago = now - 3_600_000;
+        let core_ids: Vec<String> = core_mems.iter()
+            .filter(|m| m.created_at < one_hour_ago)
+            .map(|m| m.id.clone())
+            .collect();
+        let embeddings = db.get_embeddings_by_ids(&core_ids);
+
+        let mut candidates: Vec<(String, String, f64)> = Vec::new();
+        for i in 0..embeddings.len() {
+            for j in (i + 1)..embeddings.len() {
+                let sim = crate::ai::cosine_similarity(&embeddings[i].1, &embeddings[j].1);
+                if sim > 0.70 {
+                    let (id_a, id_b) = if embeddings[i].0 < embeddings[j].0 {
+                        (&embeddings[i].0, &embeddings[j].0)
+                    } else {
+                        (&embeddings[j].0, &embeddings[i].0)
+                    };
+                    let key = format!("overlap:{}:{}", id_a, id_b);
+                    if db.get_meta(&key).is_some() {
+                        continue;
+                    }
+                    db.set_meta(&key, &format!("{:.3}", sim)).ok();
+                    candidates.push((id_a.clone(), id_b.clone(), sim));
+                }
+            }
+        }
+        if !candidates.is_empty() {
+            for (a, b, sim) in &candidates {
+                debug!(id_a = %a, id_b = %b, sim = format!("{:.3}", sim), "core overlap candidate");
+            }
+        }
+        info!(pairs = candidates.len(), "core overlap scan complete");
+    }
+
     // Working -> Core: collect candidates for LLM gate review.
     // Reinforcement score = access_count + repetition_count * 2.5
     // Repetition weighs 2.5x because restating > incidental recall hit.
