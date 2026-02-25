@@ -278,7 +278,10 @@ pub fn recall(
             } else {
                 "semantic+fts".to_string()
             };
-            let sim_floor = req.min_score.unwrap_or(DEFAULT_SIM_FLOOR);
+            // sim_floor is a hard minimum for raw cosine — kept very low so
+            // short CJK queries (which produce uniformly low cosine) aren't
+            // dropped prematurely. min_score filters final scored results later.
+            let sim_floor = DEFAULT_SIM_FLOOR;
             for (id, sim) in &semantic_results {
                 if *sim < sim_floor {
                     continue;
