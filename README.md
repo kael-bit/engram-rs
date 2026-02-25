@@ -49,7 +49,7 @@ sequenceDiagram
     LLM-->>E: approve, reject, merge
     E->>E: Buffer → Working → Core
 
-    Note over E,LLM: Audit (every 24h)
+    Note over E,LLM: Audit (every 12h)
     E->>LLM: review Core + Working
     LLM-->>E: promote, demote, adjust, merge
 ```
@@ -102,7 +102,7 @@ Pre-action safety recall. Tag memories with `trigger:deploy` or `trigger:git-pus
 Runs autonomously — no cron or external scheduler needed:
 
 - **Auto-consolidation** every 30 minutes: promotes active memories, decays neglected ones, deduplicates and merges related content
-- **Auto-audit** every 24 hours: LLM reviews memory quality, merges duplicates, demotes stale entries
+- **Auto-audit** every 12 hours: LLM reviews memory quality, merges duplicates, demotes stale entries
 
 ## MCP & API
 

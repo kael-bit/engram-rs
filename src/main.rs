@@ -129,11 +129,11 @@ async fn main() {
         info!(every_mins = consolidate_mins, auto_merge = auto_merge, "background consolidation enabled");
     }
 
-    // Background audit — runs every ENGRAM_AUDIT_HOURS (default 24, 0 = disabled)
+    // Background audit — runs every ENGRAM_AUDIT_HOURS (default 12, 0 = disabled)
     let audit_hours: u64 = std::env::var("ENGRAM_AUDIT_HOURS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(24);
+        .unwrap_or(12);
     if audit_hours > 0 {
         if let Some(ref ai) = state.ai {
             let audit_db = state.db.clone();
