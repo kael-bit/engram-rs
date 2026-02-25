@@ -320,15 +320,20 @@ pub async fn sandbox_audit(cfg: &AiConfig, db: &SharedDB, auto_apply: bool) -> R
     // Build the same prompt the real audit uses
     let prompt = format_sandbox_prompt(&core, &working);
 
-    // Call LLM (same model as gate — the audit model)
-    let result = crate::ai::llm_chat_as(cfg, "audit", super::audit::AUDIT_SYSTEM_PUB, &prompt).await?;
-    if let Some(ref u) = result.usage {
+    // Call LLM with function calling (same model as gate — the audit model)
+    let tcr = crate::ai::llm_tool_call::<super::audit::AuditToolResponse>(
+        cfg, "audit", super::audit::AUDIT_SYSTEM_PUB, &prompt,
+        "audit_operations",
+        "Propose cleanup operations for the memory store. Return empty operations array if nothing needs changing.",
+        super::audit::audit_tool_schema(),
+    ).await?;
+    if let Some(ref u) = tcr.usage {
         let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-        let _ = db.log_llm_call("sandbox_audit", &result.model, u.prompt_tokens, u.completion_tokens, cached, result.duration_ms);
+        let _ = db.log_llm_call("sandbox_audit", &tcr.model, u.prompt_tokens, u.completion_tokens, cached, tcr.duration_ms);
     }
 
-    // Parse ops without applying
-    let ops = super::audit::parse_audit_ops_pub(&result.content, &core, &working);
+    // Resolve raw tool call ops without applying
+    let ops = super::audit::resolve_audit_ops(tcr.value.operations, &core, &working);
 
     info!(ops = ops.len(), "audit sandbox: LLM proposed operations");
 

@@ -3,56 +3,127 @@ use crate::db::{Memory, MemoryDB};
 use crate::error::EngramError;
 use crate::SharedDB;
 use crate::util::truncate_chars;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // Re-exported for sandbox use
 pub(crate) const AUDIT_SYSTEM_PUB: &str = AUDIT_SYSTEM;
 
-const AUDIT_SYSTEM: &str = r#"Review an AI agent's memory layers. Output a JSON array of operations to clean up.
+const AUDIT_SYSTEM: &str = r#"Review an AI agent's memory layers and propose cleanup operations.
 
 Core = permanent, survives total context loss. Working = active context. Buffer = temporary.
-Metadata: ac=access count, age=days old, mod=days since last edit, kind, tags.
+Metadata: imp=importance, ac=access count, age=days old, mod=days since last edit, kind, tags.
 
-## Operations
-- {"op":"delete","id":"<8-char>"}
-- {"op":"demote","id":"<8-char>","to":2}
-- {"op":"merge","ids":["a","b"],"content":"combined text","layer":2,"tags":["t"]}
-- {"op":"promote","id":"<8-char>","to":3}
-
-## Rules
-- mod < 1d → don't touch
-- Never demote to buffer (to:1)
-- Never delete identity or lesson-tagged memories
-- NEVER propose demoting a memory to the same layer it is already on. Check the [Layer: ...] tag before proposing any demote. L2→L2 or L3→L3 is a no-op bug.
-- When you see multiple memories covering the same topic or event, prefer MERGE over DELETE
-- Look for memories with overlapping content — propose merging the less detailed into the more comprehensive one
-- Propose at most 30% deletes. Focus on merges and promotions first. Deletions should be reserved for truly obsolete or garbage content.
-
-## What BELONGS in Core (examples)
-- "never force-push to main" — lesson, prevents mistakes
-- "user prefers Chinese, hates verbose replies" — identity/preference
-- "all public output must hide AI identity" — hard constraint
-- "we chose SQLite for zero-dep deployment" — decision rationale (the WHY)
+## What BELONGS in Core
+- Lessons that prevent repeating mistakes: "never force-push to main"
+- Identity/preferences: "user prefers Chinese, hates verbose replies"
+- Hard constraints: "all public output must hide AI identity"
+- Decision rationale (the WHY): "we chose SQLite for zero-dep deployment"
 
 ## What does NOT belong in Core (demote or delete)
-- Changelogs: "Recall改进: 1) expansion 2) FTS gating 3) evidence" → DEMOTE (lists what was DONE)
-- Implementation notes: "HNSW replaces brute-force search" → DEMOTE (already in the code)
-- Bug reports: "BUG: triage didn't filter namespace" → DELETE if fixed
-- Config snapshots: "cosine 0.78, TTL 24h, threshold 5" → DEMOTE (goes stale)
+- Changelogs listing WHAT was done: "Recall改进: 1) expansion 2) FTS gating" → DEMOTE
+- Implementation notes already in code: "HNSW replaces brute-force search" → DEMOTE
+- Fixed bugs: "BUG: triage didn't filter namespace" → DELETE if fixed
+- Config snapshots that go stale: "cosine 0.78, TTL 24h, threshold 5" → DEMOTE
 - Session logs: "Session: deployed v0.7, 143 tests pass" → DELETE
-- Plans: "TODO: add compression, fix lifecycle" → DELETE (plans, not lessons)
+- Plans/TODOs: "TODO: add compression, fix lifecycle" → DELETE
+
+## Rules
+- mod < 1d → don't touch (too recent)
+- Never demote to buffer (layer 1)
+- Never delete identity or lesson-tagged memories
+- NEVER propose demoting a memory to the same layer it is already on. Check the [Layer: ...] tag. L2→L2 or L3→L3 is a no-op bug.
+- When multiple memories cover the same topic, prefer MERGE over DELETE
+- Propose at most 30% deletes. Focus on merges and promotions first.
 
 ## Decision test
-For each memory ask: "If the agent loses all context and only has this memory, is it useful?"
+For each memory: "If the agent loses all context and only has this memory, is it useful?"
 - YES: lesson, constraint, identity, decision rationale → keep in Core
 - NO: changelog, implementation detail, resolved bug, session log → demote or delete
 
 Changelogs disguised as decisions are the #1 false positive. If it lists numbered changes
 (1) did X 2) did Y), it's a changelog no matter how technical it sounds.
 
-Be aggressive cleaning Working garbage. Output [] if nothing to do."#;
+Be aggressive cleaning Working garbage. Propose no operations if nothing needs changing."#;
 
-/// Full audit: reviews Core+Working memories using the gate model.
+/// Tool response: a list of audit operations proposed by the LLM.
+#[derive(Debug, Deserialize)]
+pub(crate) struct AuditToolResponse {
+    pub operations: Vec<RawAuditOp>,
+}
+
+/// Raw audit operation as returned by the LLM tool call.
+/// Fields are optional because different op types use different fields.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawAuditOp {
+    pub op: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub to: Option<u8>,
+    #[serde(default)]
+    pub ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub layer: Option<u8>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
+/// Build the JSON schema for the audit_operations tool.
+pub(crate) fn audit_tool_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "operations": {
+                "type": "array",
+                "description": "List of cleanup operations. Empty array if nothing needs changing.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "op": {
+                            "type": "string",
+                            "enum": ["delete", "demote", "merge", "promote"],
+                            "description": "Operation type"
+                        },
+                        "id": {
+                            "type": "string",
+                            "description": "8-char short ID of the target memory (for delete/demote/promote)"
+                        },
+                        "to": {
+                            "type": "integer",
+                            "enum": [2, 3],
+                            "description": "Target layer: 2=Working, 3=Core (for demote/promote)"
+                        },
+                        "ids": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Short IDs of memories to merge (for merge op, minimum 2)"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Combined text for the merged memory (for merge op)"
+                        },
+                        "layer": {
+                            "type": "integer",
+                            "enum": [2, 3],
+                            "description": "Layer for the merged memory (for merge op)"
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Tags for the merged memory (for merge op)"
+                        }
+                    },
+                    "required": ["op"]
+                }
+            }
+        },
+        "required": ["operations"]
+    })
+}
+
+/// Full audit: reviews Core+Working memories using the audit model via function calling.
 /// Chunks automatically if total prompt would exceed ~100K chars.
 pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult, EngramError> {
     let db2 = db.clone();
@@ -80,12 +151,12 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
     if all.len() <= max_per_batch {
         // single batch
         let prompt = format_audit_prompt(&core, &working, &merge_hints);
-        let result = ai::llm_chat_as(cfg, "audit", AUDIT_SYSTEM, &prompt).await?;
-        if let Some(ref u) = result.usage {
+        let tcr = call_audit_tool(cfg, &prompt).await?;
+        if let Some(ref u) = tcr.usage {
             let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-            let _ = db.log_llm_call("audit", &result.model, u.prompt_tokens, u.completion_tokens, cached, result.duration_ms);
+            let _ = db.log_llm_call("audit", &tcr.model, u.prompt_tokens, u.completion_tokens, cached, tcr.duration_ms);
         }
-        let ops = parse_audit_ops(&result.content, &core, &working);
+        let ops = resolve_audit_ops(tcr.value.operations, &core, &working);
         let db3 = db.clone();
         let applied = tokio::task::spawn_blocking(move || {
             let mut r = AuditResult::default();
@@ -110,14 +181,14 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
                     crate::util::short_id(&m.id), m.importance, m.access_count, tags, preview));
             }
 
-            let result = ai::llm_chat_as(cfg, "audit", AUDIT_SYSTEM, &prompt).await?;
-            if let Some(ref u) = result.usage {
+            let tcr = call_audit_tool(cfg, &prompt).await?;
+            if let Some(ref u) = tcr.usage {
                 let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                let _ = db.log_llm_call("audit", &result.model, u.prompt_tokens, u.completion_tokens, cached, result.duration_ms);
+                let _ = db.log_llm_call("audit", &tcr.model, u.prompt_tokens, u.completion_tokens, cached, tcr.duration_ms);
             }
             // for chunked mode, resolve against core + this chunk only
             let chunk_vec: Vec<Memory> = chunk.to_vec();
-            let ops = parse_audit_ops(&result.content, &core, &chunk_vec);
+            let ops = resolve_audit_ops(tcr.value.operations, &core, &chunk_vec);
             let db4 = db.clone();
             let applied = tokio::task::spawn_blocking(move || {
                 let mut r = AuditResult::default();
@@ -133,6 +204,16 @@ pub async fn audit_memories(cfg: &AiConfig, db: &SharedDB) -> Result<AuditResult
     }
 
     Ok(combined)
+}
+
+/// Call the audit LLM with function calling, returning structured operations.
+async fn call_audit_tool(cfg: &AiConfig, prompt: &str) -> Result<ai::ToolCallResult<AuditToolResponse>, EngramError> {
+    ai::llm_tool_call::<AuditToolResponse>(
+        cfg, "audit", AUDIT_SYSTEM, prompt,
+        "audit_operations",
+        "Propose cleanup operations for the memory store. Return empty operations array if nothing needs changing.",
+        audit_tool_schema(),
+    ).await
 }
 
 fn format_audit_prompt(core: &[Memory], working: &[Memory], merge_hints: &[(String, String, f64)]) -> String {
@@ -272,34 +353,13 @@ pub struct AuditResult {
     pub ops: Vec<AuditOp>,
 }
 
-// Re-exported for sandbox use
-pub(crate) fn parse_audit_ops_pub(
-    response: &str,
+/// Resolve raw LLM tool call operations into validated AuditOps.
+/// Short IDs (8-char) are resolved to full UUIDs. Invalid ops are skipped.
+pub(crate) fn resolve_audit_ops(
+    raw_ops: Vec<RawAuditOp>,
     core: &[Memory],
     working: &[Memory],
 ) -> Vec<AuditOp> {
-    parse_audit_ops(response, core, working)
-}
-
-pub(crate) fn apply_audit_ops_pub(db: &crate::SharedDB, ops: Vec<AuditOp>, result: &mut AuditResult) {
-    apply_audit_ops(db, ops, result);
-}
-
-fn parse_audit_ops(
-    response: &str,
-    core: &[Memory],
-    working: &[Memory],
-) -> Vec<AuditOp> {
-    let json_str = response
-        .find('[')
-        .and_then(|start| response.rfind(']').map(|end| &response[start..=end]))
-        .unwrap_or("[]");
-
-    let arr: Vec<serde_json::Value> = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => return vec![],
-    };
-
     let mut id_map = std::collections::HashMap::new();
     for m in core.iter().chain(working.iter()) {
         if m.id.len() >= 8 {
@@ -316,41 +376,37 @@ fn parse_audit_ops(
     };
 
     let mut ops = Vec::new();
-    for item in &arr {
-        let op_type = item.get("op").and_then(|v| v.as_str()).unwrap_or("");
-        match op_type {
+    for item in raw_ops {
+        match item.op.as_str() {
             "promote" => {
                 if let (Some(id), Some(to)) = (
-                    item.get("id").and_then(|v| v.as_str()).and_then(&resolve),
-                    item.get("to").and_then(serde_json::Value::as_u64).map(|n| n as u8),
+                    item.id.as_deref().and_then(&resolve),
+                    item.to,
                 ) {
                     if (1..=3).contains(&to) { ops.push(AuditOp::Promote { id, to }); }
                 }
             }
             "demote" => {
                 if let (Some(id), Some(to)) = (
-                    item.get("id").and_then(|v| v.as_str()).and_then(&resolve),
-                    item.get("to").and_then(serde_json::Value::as_u64).map(|n| n as u8),
+                    item.id.as_deref().and_then(&resolve),
+                    item.to,
                 ) {
                     if (1..=3).contains(&to) { ops.push(AuditOp::Demote { id, to }); }
                 }
             }
             "delete" => {
-                if let Some(id) = item.get("id").and_then(|v| v.as_str()).and_then(&resolve) {
+                if let Some(id) = item.id.as_deref().and_then(&resolve) {
                     ops.push(AuditOp::Delete { id });
                 }
             }
             "merge" => {
-                let ids: Vec<String> = item.get("ids")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().and_then(&resolve)).collect())
-                    .unwrap_or_default();
-                let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let layer = item.get("layer").and_then(serde_json::Value::as_u64).unwrap_or(2) as u8;
-                let tags: Vec<String> = item.get("tags")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                    .unwrap_or_default();
+                let ids: Vec<String> = item.ids.unwrap_or_default()
+                    .iter()
+                    .filter_map(|s| resolve(s))
+                    .collect();
+                let content = item.content.unwrap_or_default();
+                let layer = item.layer.unwrap_or(2);
+                let tags = item.tags.unwrap_or_default();
                 if ids.len() >= 2 && !content.is_empty() {
                     ops.push(AuditOp::Merge { ids, content, layer, tags });
                 }
@@ -359,6 +415,10 @@ fn parse_audit_ops(
         }
     }
     ops
+}
+
+pub(crate) fn apply_audit_ops_pub(db: &crate::SharedDB, ops: Vec<AuditOp>, result: &mut AuditResult) {
+    apply_audit_ops(db, ops, result);
 }
 
 #[cfg(test)]
@@ -387,7 +447,20 @@ mod tests {
         }
     }
 
-    // ── 1. Valid JSON with all 4 op types ───────────────────────────────
+    /// Helper: create a RawAuditOp for testing resolve_audit_ops.
+    fn raw_op(op: &str) -> RawAuditOp {
+        RawAuditOp {
+            op: op.to_string(),
+            id: None,
+            to: None,
+            ids: None,
+            content: None,
+            layer: None,
+            tags: None,
+        }
+    }
+
+    // ── 1. Valid ops with all 4 op types ───────────────────────────────
 
     #[test]
     fn all_four_op_types() {
@@ -401,14 +474,21 @@ mod tests {
             mem("eeeeeeee-1111-2222-3333-444444444444", Layer::Working),
         ];
 
-        let response = r#"[
-            {"op":"promote","id":"cccccccc","to":3},
-            {"op":"demote","id":"aaaaaaaa","to":2},
-            {"op":"delete","id":"dddddddd"},
-            {"op":"merge","ids":["bbbbbbbb","eeeeeeee"],"content":"merged content","layer":3,"tags":["t1","t2"]}
-        ]"#;
+        let raw_ops = vec![
+            RawAuditOp { op: "promote".into(), id: Some("cccccccc".into()), to: Some(3), ..raw_op("promote") },
+            RawAuditOp { op: "demote".into(), id: Some("aaaaaaaa".into()), to: Some(2), ..raw_op("demote") },
+            RawAuditOp { op: "delete".into(), id: Some("dddddddd".into()), ..raw_op("delete") },
+            RawAuditOp {
+                op: "merge".into(),
+                ids: Some(vec!["bbbbbbbb".into(), "eeeeeeee".into()]),
+                content: Some("merged content".into()),
+                layer: Some(3),
+                tags: Some(vec!["t1".into(), "t2".into()]),
+                ..raw_op("merge")
+            },
+        ];
 
-        let ops = parse_audit_ops(response, &core, &working);
+        let ops = resolve_audit_ops(raw_ops, &core, &working);
         assert_eq!(ops.len(), 4);
 
         match &ops[0] {
@@ -451,8 +531,11 @@ mod tests {
         let core = vec![mem("abcd1234-aaaa-bbbb-cccc-dddddddddddd", Layer::Core)];
         let working = vec![mem("ef567890-aaaa-bbbb-cccc-dddddddddddd", Layer::Working)];
 
-        let response = r#"[{"op":"delete","id":"abcd1234"},{"op":"promote","id":"ef567890","to":3}]"#;
-        let ops = parse_audit_ops(response, &core, &working);
+        let raw_ops = vec![
+            RawAuditOp { op: "delete".into(), id: Some("abcd1234".into()), ..raw_op("delete") },
+            RawAuditOp { op: "promote".into(), id: Some("ef567890".into()), to: Some(3), ..raw_op("promote") },
+        ];
+        let ops = resolve_audit_ops(raw_ops, &core, &working);
 
         assert_eq!(ops.len(), 2);
         match &ops[0] {
@@ -473,9 +556,10 @@ mod tests {
     #[test]
     fn full_uuids_passed_through() {
         let full_id = "12345678-abcd-ef01-2345-6789abcdef01";
-        // No memories in the list — full UUID should still work
-        let response = format!(r#"[{{"op":"delete","id":"{full_id}"}}]"#);
-        let ops = parse_audit_ops(&response, &[], &[]);
+        let raw_ops = vec![
+            RawAuditOp { op: "delete".into(), id: Some(full_id.into()), ..raw_op("delete") },
+        ];
+        let ops = resolve_audit_ops(raw_ops, &[], &[]);
 
         assert_eq!(ops.len(), 1);
         match &ops[0] {
@@ -488,39 +572,78 @@ mod tests {
 
     #[test]
     fn empty_ops_array() {
-        let ops = parse_audit_ops("[]", &[], &[]);
+        let ops = resolve_audit_ops(vec![], &[], &[]);
         assert!(ops.is_empty());
     }
 
-    // ── 5. Malformed JSON → empty result ───────────────────────────────
+    // ── 5. Tool response deserialization ───────────────────────────────
 
     #[test]
-    fn malformed_json_returns_empty() {
-        let ops = parse_audit_ops("this is not json at all", &[], &[]);
-        assert!(ops.is_empty());
+    fn tool_response_deserializes_from_json() {
+        let json = r#"{"operations":[
+            {"op":"delete","id":"aaaaaaaa"},
+            {"op":"promote","id":"bbbbbbbb","to":3}
+        ]}"#;
+        let resp: AuditToolResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.operations.len(), 2);
+        assert_eq!(resp.operations[0].op, "delete");
+        assert_eq!(resp.operations[0].id.as_deref(), Some("aaaaaaaa"));
+        assert_eq!(resp.operations[1].op, "promote");
+        assert_eq!(resp.operations[1].to, Some(3));
     }
 
     #[test]
-    fn malformed_json_partial_bracket() {
-        let ops = parse_audit_ops("[{broken", &[], &[]);
-        assert!(ops.is_empty());
+    fn tool_response_empty_operations() {
+        let json = r#"{"operations":[]}"#;
+        let resp: AuditToolResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.operations.is_empty());
+    }
+
+    #[test]
+    fn tool_response_merge_op_deserializes() {
+        let json = r#"{"operations":[
+            {"op":"merge","ids":["aaa","bbb"],"content":"merged","layer":2,"tags":["x","y"]}
+        ]}"#;
+        let resp: AuditToolResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.operations.len(), 1);
+        assert_eq!(resp.operations[0].op, "merge");
+        assert_eq!(resp.operations[0].ids.as_ref().unwrap(), &["aaa", "bbb"]);
+        assert_eq!(resp.operations[0].content.as_deref(), Some("merged"));
+        assert_eq!(resp.operations[0].layer, Some(2));
+        assert_eq!(resp.operations[0].tags.as_ref().unwrap(), &["x", "y"]);
     }
 
     // ── 6. Missing required fields → op skipped ────────────────────────
 
     #[test]
     fn merge_without_source_ids_skipped() {
-        // merge requires ids (>=2), content non-empty
-        let response = r#"[{"op":"merge","content":"combined","layer":2,"tags":["x"]}]"#;
-        let ops = parse_audit_ops(response, &[], &[]);
+        let raw_ops = vec![
+            RawAuditOp {
+                op: "merge".into(),
+                content: Some("combined".into()),
+                layer: Some(2),
+                tags: Some(vec!["x".into()]),
+                ..raw_op("merge")
+            },
+        ];
+        let ops = resolve_audit_ops(raw_ops, &[], &[]);
         assert!(ops.is_empty(), "merge without ids should be skipped");
     }
 
     #[test]
     fn merge_with_single_id_skipped() {
         let core = vec![mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core)];
-        let response = r#"[{"op":"merge","ids":["aaaaaaaa"],"content":"combined","layer":2,"tags":[]}]"#;
-        let ops = parse_audit_ops(response, &core, &[]);
+        let raw_ops = vec![
+            RawAuditOp {
+                op: "merge".into(),
+                ids: Some(vec!["aaaaaaaa".into()]),
+                content: Some("combined".into()),
+                layer: Some(2),
+                tags: Some(vec![]),
+                ..raw_op("merge")
+            },
+        ];
+        let ops = resolve_audit_ops(raw_ops, &core, &[]);
         assert!(ops.is_empty(), "merge with only 1 id should be skipped");
     }
 
@@ -530,24 +653,36 @@ mod tests {
             mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core),
             mem("bbbbbbbb-1111-2222-3333-444444444444", Layer::Core),
         ];
-        let response = r#"[{"op":"merge","ids":["aaaaaaaa","bbbbbbbb"],"content":"","layer":2,"tags":[]}]"#;
-        let ops = parse_audit_ops(response, &core, &[]);
+        let raw_ops = vec![
+            RawAuditOp {
+                op: "merge".into(),
+                ids: Some(vec!["aaaaaaaa".into(), "bbbbbbbb".into()]),
+                content: Some("".into()),
+                layer: Some(2),
+                tags: Some(vec![]),
+                ..raw_op("merge")
+            },
+        ];
+        let ops = resolve_audit_ops(raw_ops, &core, &[]);
         assert!(ops.is_empty(), "merge with empty content should be skipped");
     }
 
     #[test]
     fn promote_without_to_skipped() {
         let core = vec![mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core)];
-        let response = r#"[{"op":"promote","id":"aaaaaaaa"}]"#;
-        let ops = parse_audit_ops(response, &core, &[]);
+        let raw_ops = vec![
+            RawAuditOp { op: "promote".into(), id: Some("aaaaaaaa".into()), ..raw_op("promote") },
+        ];
+        let ops = resolve_audit_ops(raw_ops, &core, &[]);
         assert!(ops.is_empty(), "promote without 'to' should be skipped");
     }
 
     #[test]
     fn delete_with_unresolvable_short_id_skipped() {
-        // Short id not in any memory list
-        let response = r#"[{"op":"delete","id":"zzzzzzzz"}]"#;
-        let ops = parse_audit_ops(response, &[], &[]);
+        let raw_ops = vec![
+            RawAuditOp { op: "delete".into(), id: Some("zzzzzzzz".into()), ..raw_op("delete") },
+        ];
+        let ops = resolve_audit_ops(raw_ops, &[], &[]);
         assert!(ops.is_empty(), "unresolvable short id should be skipped");
     }
 
@@ -555,8 +690,10 @@ mod tests {
 
     #[test]
     fn unknown_op_type_skipped() {
-        let response = r#"[{"op":"explode","id":"aaaaaaaa"}]"#;
-        let ops = parse_audit_ops(response, &[], &[]);
+        let raw_ops = vec![
+            RawAuditOp { op: "explode".into(), id: Some("aaaaaaaa".into()), ..raw_op("explode") },
+        ];
+        let ops = resolve_audit_ops(raw_ops, &[], &[]);
         assert!(ops.is_empty());
     }
 
@@ -571,15 +708,15 @@ mod tests {
             mem("bbbbbbbb-1111-2222-3333-444444444444", Layer::Working),
         ];
 
-        let response = r#"[
-            {"op":"delete","id":"aaaaaaaa"},
-            {"op":"unknown_type","id":"bbbbbbbb"},
-            {"op":"promote","id":"bbbbbbbb","to":3},
-            {"op":"promote","id":"nonexist"},
-            {"op":"demote","id":"aaaaaaaa","to":2}
-        ]"#;
+        let raw_ops = vec![
+            RawAuditOp { op: "delete".into(), id: Some("aaaaaaaa".into()), ..raw_op("delete") },
+            RawAuditOp { op: "unknown_type".into(), id: Some("bbbbbbbb".into()), ..raw_op("unknown_type") },
+            RawAuditOp { op: "promote".into(), id: Some("bbbbbbbb".into()), to: Some(3), ..raw_op("promote") },
+            RawAuditOp { op: "promote".into(), id: Some("nonexist".into()), ..raw_op("promote") },
+            RawAuditOp { op: "demote".into(), id: Some("aaaaaaaa".into()), to: Some(2), ..raw_op("demote") },
+        ];
 
-        let ops = parse_audit_ops(response, &core, &working);
+        let ops = resolve_audit_ops(raw_ops, &core, &working);
         // Valid: delete aaaaaaaa, promote bbbbbbbb to 3, demote aaaaaaaa to 2
         // Invalid: unknown_type (skipped), promote nonexist (no 'to' + unresolvable)
         assert_eq!(ops.len(), 3);
@@ -588,32 +725,54 @@ mod tests {
         assert!(matches!(&ops[2], AuditOp::Demote { to: 2, .. }));
     }
 
-    // ── Extra: JSON embedded in prose (LLM often wraps in markdown) ────
-
-    #[test]
-    fn json_embedded_in_prose() {
-        let core = vec![mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core)];
-        let response = r#"Here are my suggestions:
-```json
-[{"op":"delete","id":"aaaaaaaa"}]
-```
-Let me know if you agree."#;
-
-        let ops = parse_audit_ops(response, &core, &[]);
-        assert_eq!(ops.len(), 1);
-        assert!(matches!(&ops[0], AuditOp::Delete { .. }));
-    }
-
-    // ── Extra: `to` out of range (0 or 4) → skipped ───────────────────
+    // ── 9. `to` out of range (0 or 4) → skipped ───────────────────────
 
     #[test]
     fn to_out_of_range_skipped() {
         let core = vec![mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core)];
-        let response = r#"[
-            {"op":"promote","id":"aaaaaaaa","to":0},
-            {"op":"demote","id":"aaaaaaaa","to":4}
-        ]"#;
-        let ops = parse_audit_ops(response, &core, &[]);
+        let raw_ops = vec![
+            RawAuditOp { op: "promote".into(), id: Some("aaaaaaaa".into()), to: Some(0), ..raw_op("promote") },
+            RawAuditOp { op: "demote".into(), id: Some("aaaaaaaa".into()), to: Some(4), ..raw_op("demote") },
+        ];
+        let ops = resolve_audit_ops(raw_ops, &core, &[]);
         assert!(ops.is_empty(), "to=0 and to=4 should both be skipped");
+    }
+
+    // ── 10. Schema structure validation ────────────────────────────────
+
+    #[test]
+    fn audit_tool_schema_is_valid_json() {
+        let schema = audit_tool_schema();
+        assert!(schema.is_object());
+        assert!(schema.get("properties").is_some());
+        let ops = schema["properties"]["operations"].clone();
+        assert_eq!(ops["type"], "array");
+        let items = ops["items"].clone();
+        assert!(items["properties"]["op"]["enum"].is_array());
+    }
+
+    // ── 11. Merge default layer ────────────────────────────────────────
+
+    #[test]
+    fn merge_defaults_to_layer_2() {
+        let core = vec![
+            mem("aaaaaaaa-1111-2222-3333-444444444444", Layer::Core),
+            mem("bbbbbbbb-1111-2222-3333-444444444444", Layer::Core),
+        ];
+        let raw_ops = vec![
+            RawAuditOp {
+                op: "merge".into(),
+                ids: Some(vec!["aaaaaaaa".into(), "bbbbbbbb".into()]),
+                content: Some("merged".into()),
+                // layer omitted — should default to 2
+                ..raw_op("merge")
+            },
+        ];
+        let ops = resolve_audit_ops(raw_ops, &core, &[]);
+        assert_eq!(ops.len(), 1);
+        match &ops[0] {
+            AuditOp::Merge { layer, .. } => assert_eq!(*layer, 2),
+            other => panic!("expected Merge, got {:?}", other),
+        }
     }
 }
