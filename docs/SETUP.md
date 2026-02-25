@@ -146,39 +146,19 @@ You have persistent memory via engram MCP tools.
 
 ### 2. When & What to Store (Tool: `engram_store`)
 
-**Default: store it.** If information came from the user (not from command output), store it. Engram handles dedup and decay — you won't create clutter. The cost of forgetting is always higher than the cost of storing.
+**Default: store it.** If information came from the user, store it. Engram handles dedup and decay. The cost of forgetting is always higher than the cost of storing.
 
-🚫 **DO NOT store:** routine command output (build logs, test results, ls listings), step-by-step narration of what you just did, or information already in code/config files.
+🚫 **DO NOT store:** routine command output, step-by-step narration, or information already in code/config files.
 
-**Everything else — store immediately.** Especially:
-- Anything the user says about themselves (name, role, timezone, background)
-- Preferences, even casual ones ("I like concise answers")
-- Corrections and criticism
-- Decisions, even small ones ("let's use X")
-- Rules and constraints ("always do Y before Z")
-- Lessons from mistakes (tag: `lesson` + `trigger:kebab-verb`)
-- Workflows / ordering constraints (kind: `procedural`)
-- Milestone recaps: decisions made + what to do next (tag: `session`)
+**CRITICAL:** When the user corrects you or states a rule → store FIRST, then reply.
 
-🌐 **Cross-Project Knowledge**
-
-Memories default to your project namespace. For knowledge that applies across ALL projects (user identity, preferences, universal lessons), store to namespace `"default"` explicitly: `engram_store(content="...", namespace="default")`.
-
-🔄 **Memory Reinforcement (Repetition is Good!)**
-
-The engram system uses repetition to strengthen memory weights. If an important rule, user preference, or lesson comes up again — store it again. Do not skip storing a critical insight just because you think "I already saved this before." Engram handles dedup and reinforcement automatically.
-
-⚠️ **HIGHEST PRIORITY: User Feedback**
-
-Corrections, criticism, preferences, and rules from the user are NEVER automatically captured. You must store them yourself immediately.
-
-**CRITICAL RULE:** When the user corrects you, criticizes, or states a new rule → call `engram_store` FIRST, then reply. No store = no reply.
+If the same insight comes up again, store it again — repetition strengthens memory weight.
 
 **Storage modifiers:**
-- Workflows/procedures → set kind="procedural" (never decay).
-- "Remember this" from user → set importance=0.9.
-- Lessons from mistakes → include tags like `["lesson", "trigger:kebab-case-verb"]` (e.g., `trigger:git-push`, `trigger:deploy`).
-- **Direct to Working (skip Buffer):** For high-confidence knowledge you're certain about — user corrections, explicit rules, confirmed preferences — set `layer=2`. Default (no layer) enters Buffer and gets promoted by triage.
+- Workflows/procedures → `kind="procedural"` (never decay)
+- Lessons → `tags: ["lesson", "trigger:kebab-verb"]`
+- High-confidence knowledge (user corrections, explicit rules) → `layer=2` (direct to Working, skip Buffer)
+- Cross-project knowledge (identity, preferences) → `namespace="default"`
 
 ### 3. Recalling Memories (Tools: `engram_recall` & `engram_triggers`)
 
@@ -222,44 +202,19 @@ curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 
 ### 2. When & What to Store
 
-**Default: store it.** If information came from the user (not from command output), store it. Engram handles dedup and decay — you won't create clutter. The cost of forgetting is always higher than the cost of storing.
+**Default: store it.** If information came from the user, store it. Engram handles dedup and decay. The cost of forgetting is always higher than the cost of storing.
 
-🚫 **DO NOT store:** routine command output (build logs, test results, ls listings), step-by-step narration of what you just did, or information already in code/config files.
+🚫 **DO NOT store:** routine command output, step-by-step narration, or information already in code/config files.
 
-**Everything else — store immediately.** Especially:
-- Anything the user says about themselves (name, role, timezone, background)
-- Preferences, even casual ones ("I like concise answers")
-- Corrections and criticism
-- Decisions, even small ones ("let's use X")
-- Rules and constraints ("always do Y before Z")
-- Lessons from mistakes (tag: `lesson` + `trigger:kebab-verb`)
-- Workflows / ordering constraints (kind: `procedural`)
-- Milestone recaps: decisions made + what to do next (tag: `session`)
+**CRITICAL:** When the user corrects you or states a rule → store FIRST, then reply.
 
-🌐 **Cross-Project Knowledge**
-
-Memories default to your project namespace. For knowledge that applies across ALL projects (user identity, preferences, universal lessons), store to namespace `"default"` explicitly:
-
-```bash
-curl -sf -X POST http://localhost:3917/memories -H "X-Namespace: default" \\
-  -d '{"content": "User prefers concise replies in Chinese"}'
-```
-
-🔄 **Memory Reinforcement (Repetition is Good!)**
-
-The engram system uses repetition to strengthen memory weights. If an important rule, user preference, or lesson comes up again — store it again. Do not skip storing a critical insight just because you think "I already saved this before." Engram handles dedup and reinforcement automatically.
-
-⚠️ **HIGHEST PRIORITY: User Feedback**
-
-Corrections, criticism, preferences, and rules from the user are NEVER automatically captured. You must store them yourself immediately.
-
-**CRITICAL RULE:** When the user corrects you, criticizes, or states a new rule → store the lesson FIRST, then reply. No store = no reply.
+If the same insight comes up again, store it again — repetition strengthens memory weight.
 
 **Storage modifiers:**
-- Workflows/procedures → set kind="procedural" (never decay).
-- "Remember this" from user → set importance=0.9.
-- Lessons from mistakes → include tags like `["lesson", "trigger:kebab-case-verb"]` (e.g., `trigger:git-push`, `trigger:deploy`).
-- **Direct to Working (skip Buffer):** For high-confidence knowledge — user corrections, explicit rules, confirmed preferences — set `"layer": 2`. Default enters Buffer and gets promoted by triage.
+- Workflows/procedures → `kind="procedural"` (never decay)
+- Lessons → `tags: ["lesson", "trigger:kebab-verb"]`
+- High-confidence knowledge (user corrections, explicit rules) → `"layer": 2` (direct to Working, skip Buffer)
+- Cross-project knowledge (identity, preferences) → `X-Namespace: default` header
 
 ```bash
 curl -sf -X POST http://localhost:3917/memories \
