@@ -146,7 +146,7 @@ curl -X POST http://localhost:3917/facts \
 curl 'http://localhost:3917/facts/history?subject=alice&predicate=role'
 ```
 
-Facts are also extracted automatically when using `/extract` or the LLM proxy.
+Facts are also extracted automatically when using `/extract`.
 
 ### Hybrid Search
 
@@ -202,27 +202,6 @@ curl -X POST http://localhost:3917/recall \
 - Auto-expand triggers when top result relevance < 0.25 (won't activate for most queries)
 - Embedding results are cached — repeated queries hit in **<15ms**
 
-### LLM Proxy
-
-Sit between your tools and any LLM API. Memories are extracted automatically — no code changes needed.
-
-```bash
-ENGRAM_PROXY_UPSTREAM=https://api.openai.com \
-./target/release/engram
-
-# Point your tools at engram:
-# Before: https://api.openai.com/v1/chat/completions
-# After:  http://localhost:3917/proxy/v1/chat/completions
-```
-
-How it works:
-1. Forwards requests and headers to upstream verbatim
-2. Streams the response back with zero added latency
-3. After the exchange completes, asynchronously extracts key facts/decisions/preferences
-4. Stores extracted memories in the buffer layer (source: `proxy`, tagged `auto-extract`)
-
-The proxy is selective — routine task details are skipped. Only user preferences, concrete decisions, lessons learned, and identity-defining facts are extracted.
-
 ### Session Recovery
 
 One call to restore agent context on wake-up or after context compaction:
@@ -272,9 +251,7 @@ curl http://localhost:3917/triggers/git-push
 engram runs autonomously — no cron or external scheduler needed:
 
 - **Auto-consolidation** every 30 minutes: promotes active memories, decays neglected ones, reconciles buffer updates against Working/Core
-- **Proxy debounce flush**: extracts memories from buffered conversations after 30 seconds of silence (not a fixed timer — waits for natural conversation pauses)
 - **Auto-audit** every 24 hours: LLM reviews all Working/Core memories for quality, merges duplicates, demotes stale entries
-- **Graceful shutdown**: flushes all pending proxy windows before exit
 
 ## API Reference
 
@@ -311,9 +288,6 @@ engram runs autonomously — no cron or external scheduler needed:
 | `GET` | `/facts/conflicts` | Check conflicts (`?subject=X&predicate=Y`) |
 | `GET` | `/facts/history` | Fact history (`?subject=X&predicate=Y`) |
 | `DELETE` | `/facts/:id` | Delete fact |
-| `ANY` | `/proxy/*` | Transparent LLM proxy |
-| `POST` | `/proxy/flush` | Flush buffered proxy conversations for extraction |
-| `GET` | `/proxy/window` | View proxy sliding window for current session |
 | `GET` | `/ui` | Web dashboard |
 
 ## MCP Tools
@@ -367,12 +341,11 @@ Engram uses LLMs for several tasks with different requirements. You can assign a
 |------|-----------|-------|-------------|
 | **Judgment** — Core promotion gate | `ENGRAM_GATE_MODEL` | Distinguishing lessons from changelogs, deciding what's permanent | Claude Sonnet, GPT-4o |
 | **Judgment** — Memory audit | `ENGRAM_AUDIT_MODEL` | Reviewing memory quality, merge/demote/delete decisions | *(falls back to GATE_MODEL)* |
-| **Light judgment** — Proxy extraction | `ENGRAM_PROXY_MODEL` | Spotting decisions/constraints in conversation, skipping noise | Gemini Flash, Claude Haiku |
 | **Text processing** — Merge, rerank, query expansion, triage | `ENGRAM_MERGE_MODEL`, `ENGRAM_RERANK_MODEL`, `ENGRAM_EXPAND_MODEL`, `ENGRAM_EXTRACT_MODEL` | Text transformation, no judgment calls | GPT-4o-mini, GPT-5-mini |
 
 All default to `ENGRAM_LLM_MODEL` if not set. If you only set one model, everything works — but separating roles lets you save cost without sacrificing quality where it matters.
 
-### Consolidation & Proxy
+### Consolidation
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -382,9 +355,6 @@ All default to `ENGRAM_LLM_MODEL` if not set. If you only set one model, everyth
 | `ENGRAM_AUDIT_HOURS` | `24` | Background audit interval (0 = off) |
 | `ENGRAM_WORKING_CAP` | `30` | Max Working memories (excess evicted by utility) |
 | `ENGRAM_BUFFER_CAP` | `200` | Max Buffer memories (overflow evicted FIFO) |
-| `ENGRAM_PROXY_UPSTREAM` | — | Upstream LLM URL (enables proxy) |
-| `ENGRAM_PROXY_KEY` | — | Fallback API key for proxy |
-| `ENGRAM_STRIP_MARKERS` | *(generic)* | Comma-separated boilerplate markers to strip from proxy context |
 
 ## License
 

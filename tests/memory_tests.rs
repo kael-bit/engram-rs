@@ -743,26 +743,34 @@ fn dedup_reinforces_existing_memory() {
 }
 
 #[test]
-fn all_inserts_start_in_buffer() {
+fn importance_based_layer_routing() {
     let db = test_db();
 
     // Low importance → Buffer
     let buf = db.insert(MemoryInput::new("some random fact").importance(0.4)).unwrap();
     assert_eq!(buf.layer, Layer::Buffer);
 
-    // Medium importance → still Buffer (promotion is earned, not declared)
+    // Medium importance → still Buffer
     let work = db.insert(MemoryInput::new("important decision about architecture").importance(0.7)).unwrap();
     assert_eq!(work.layer, Layer::Buffer);
 
-    // High importance → still Buffer
-    let core = db.insert(MemoryInput::new("user explicitly said remember this").importance(0.9)).unwrap();
-    assert_eq!(core.layer, Layer::Buffer);
-    // but importance is preserved for scoring
-    assert!(core.importance >= 0.9);
+    // High importance (≥0.9) → Working (skip Buffer)
+    let high = db.insert(MemoryInput::new("user explicitly said remember this").importance(0.9)).unwrap();
+    assert_eq!(high.layer, Layer::Working);
+    // importance is preserved for scoring
+    assert!(high.importance >= 0.9);
 
-    // Default (no importance) → Buffer
+    // Default (no importance, 0.5) → Buffer
     let def = db.insert(MemoryInput::new("default importance test")).unwrap();
     assert_eq!(def.layer, Layer::Buffer);
+
+    // Value tags → Working regardless of importance
+    let lesson = db.insert(MemoryInput {
+        content: "LESSON: never force-push to main".into(),
+        tags: Some(vec!["lesson".into()]),
+        ..Default::default()
+    }).unwrap();
+    assert_eq!(lesson.layer, Layer::Working);
 
     // Explicit layer override still works (for admin/migration)
     let explicit = db.insert(MemoryInput { content: "admin override".into(), layer: Some(3), ..Default::default() }).unwrap();
@@ -786,7 +794,7 @@ fn resolve_prefix_works() {
 }
 
 #[test]
-fn batch_insert_all_start_in_buffer() {
+fn batch_insert_importance_routing() {
     let db = test_db();
     let inputs = vec![
         MemoryInput { importance: Some(0.95), ..MemoryInput::new("explicit remember") },
@@ -796,9 +804,9 @@ fn batch_insert_all_start_in_buffer() {
     ];
     let results = db.insert_batch(inputs).unwrap();
     assert_eq!(results.len(), 4);
-    assert_eq!(results[0].layer, Layer::Buffer);     // importance doesn't skip layers
-    assert_eq!(results[1].layer, Layer::Buffer);
-    assert_eq!(results[2].layer, Layer::Buffer);
+    assert_eq!(results[0].layer, Layer::Working);    // importance ≥ 0.9 → Working
+    assert_eq!(results[1].layer, Layer::Buffer);     // importance < 0.9, no value tags → Buffer
+    assert_eq!(results[2].layer, Layer::Buffer);     // low importance → Buffer
     assert_eq!(results[3].layer, Layer::Working);    // explicit layer=2 still works
 }
 

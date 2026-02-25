@@ -42,12 +42,11 @@ cargo build --release
 ./engram
 ```
 
-With LLM features, engram needs three classes of models:
+With LLM features, engram needs two classes of models:
 
 | Role | What it does | Env var | Budget pick | Quality pick |
 |------|-------------|---------|-------------|-------------|
 | **Judgment** | Decides what memories are permanent (gate), reviews memory quality (audit) | `ENGRAM_GATE_MODEL`, `ENGRAM_AUDIT_MODEL` | Claude Haiku | Claude Sonnet |
-| **Light judgment** | Extracts memories from conversations (proxy) | `ENGRAM_PROXY_MODEL` | GPT-4o-mini | Gemini Flash |
 | **Text processing** | Merges text, expands queries, reranks (merge, rerank, expand) | `ENGRAM_LLM_MODEL` | GPT-4o-mini | GPT-4o-mini |
 
 You can use one model for everything, or split by role to save cost:
@@ -65,7 +64,6 @@ ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions \
 ENGRAM_LLM_KEY=sk-xxx \
 ENGRAM_LLM_MODEL=gpt-4o-mini \
 ENGRAM_GATE_MODEL=claude-sonnet-4-6 \
-ENGRAM_PROXY_MODEL=gemini-3-flash \
 ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings \
 ENGRAM_EMBED_KEY=sk-xxx \
 ./engram
@@ -277,26 +275,6 @@ Without the "next" part, you'll wake up not knowing what to do.
 
 ---
 
-## Extra: LLM Proxy (automatic capture)
-
-On top of either setup, you can route API calls through engram's proxy to automatically extract memories from every conversation — no prompt changes needed.
-
-```bash
-# Start engram with proxy pointing at your real API
-ENGRAM_PROXY_UPSTREAM=https://api.anthropic.com \
-./engram
-
-# Point your tools at engram:
-# Before: https://api.anthropic.com/v1/messages
-# After:  http://localhost:3917/proxy/v1/messages
-```
-
-The proxy forwards requests transparently, then asynchronously extracts facts and decisions into memory.
-
-> **Note:** The proxy only captures memories passively. For the agent to **read** memories back (resume, recall), you still need either MCP or HTTP prompt instructions above.
-
-Set `X-Engram-Extract: false` header on requests where you don't want extraction.
-
 ## Step 4: Verify
 
 ```bash
@@ -338,13 +316,6 @@ Environment=ENGRAM_LLM_MODEL=gpt-4o-mini
 
 # Judgment — Core promotion gate + audit (needs strong model)
 Environment=ENGRAM_GATE_MODEL=claude-sonnet-4-6
-
-# LLM Proxy (optional — sits between your tools and their LLM API)
-# UPSTREAM = the API your tools normally call (what the proxy forwards to)
-# PROXY_MODEL = model engram uses internally to extract memories from conversations
-# Environment=ENGRAM_PROXY_UPSTREAM=https://api.openai.com/v1
-# Environment=ENGRAM_PROXY_KEY=sk-xxx
-# Environment=ENGRAM_PROXY_MODEL=gpt-4o-mini
 
 Restart=always
 RestartSec=1

@@ -73,11 +73,25 @@ impl MemoryDB {
         let now = now_ms();
         let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
 
-        // All memories start in Buffer. Layer promotion is earned through
-        // access frequency, not declared at insert time. Caller can still
-        // set an explicit layer for admin/migration use, but importance
-        // alone doesn't bypass the promotion path.
-        let layer_val = input.layer.unwrap_or(1);
+        // Layer routing (three-tier judgment):
+        //   1. Agent sets importance + tags (first judgment)
+        //   2. Math layer: high-value signals skip Buffer → Working
+        //   3. Gate handles Working → Core promotion during consolidation
+        //
+        // If caller explicitly sets layer, respect it (admin/migration).
+        // Otherwise, route based on importance + tags.
+        let layer_val = input.layer.unwrap_or_else(|| {
+            let imp = input.importance.unwrap_or(0.0);
+            let tags = input.tags.as_deref().unwrap_or(&[]);
+            let has_value_tag = tags.iter().any(|t| {
+                t == "lesson" || t == "procedural" || t == "preference" || t == "constraint"
+            });
+            if imp >= 0.9 || has_value_tag {
+                2 // Working — skip Buffer, let Gate handle Core promotion
+            } else {
+                1 // Buffer
+            }
+        });
         let layer: Layer = layer_val.try_into()?;
         let id = Uuid::new_v4().to_string();
         let source = input.source.unwrap_or_else(|| "api".into());
@@ -154,7 +168,18 @@ impl MemoryDB {
                     continue;
                 }
                 let now = now_ms();
-                let layer_val = input.layer.unwrap_or(1);
+                let layer_val = input.layer.unwrap_or_else(|| {
+                    let imp = input.importance.unwrap_or(0.0);
+                    let tags = input.tags.as_deref().unwrap_or(&[]);
+                    let has_value_tag = tags.iter().any(|t| {
+                        t == "lesson" || t == "procedural" || t == "preference" || t == "constraint"
+                    });
+                    if imp >= 0.9 || has_value_tag {
+                        2
+                    } else {
+                        1
+                    }
+                });
                 let layer: Layer = match layer_val.try_into() {
                     Ok(l) => l,
                     Err(_) => continue,
