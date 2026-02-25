@@ -155,7 +155,14 @@ async fn try_reconcile_pair(
 
     let one_hour_ms: i64 = 3600 * 1000;
     if (newer.created_at - older.created_at) < one_hour_ms { return None; }
-    if older.namespace != newer.namespace { return None; }
+    if older.namespace != newer.namespace {
+        // Allow project→default merging: if one is "default", the merge result
+        // stays in "default". Never pull default memories into a project namespace.
+        let has_default = older.namespace == "default" || newer.namespace == "default";
+        if !has_default {
+            return None; // two different project namespaces, skip
+        }
+    }
 
     // Skip pairs we already judged as keep_both
     let pair_key = reconcile_pair_key(&older.id, &newer.id);
@@ -220,6 +227,11 @@ async fn try_reconcile_pair(
     let imp = newer.importance.max(older.importance);
     let access = newer.access_count + older.access_count;
 
+    // Namespace merge direction: default is sticky. If the older (deleted) memory
+    // is in "default" but newer (surviving) is in a project namespace, we must
+    // move the survivor to "default" — never pull default into project scope.
+    let needs_ns_fix = older.namespace == "default" && newer.namespace != "default";
+
     let newer_id = newer.id.clone();
     let older_id = older.id.clone();
     let db2 = db.clone();
@@ -229,6 +241,9 @@ async fn try_reconcile_pair(
         }
         db2.update_fields(&newer_id, None, None, Some(imp), Some(&new_tags))?;
         db2.set_access_count(&newer_id, access)?;
+        if needs_ns_fix {
+            db2.set_namespace(&newer_id, "default")?;
+        }
         db2.delete(&older_id)?;
         Ok::<_, EngramError>(())
     }).await;
@@ -275,11 +290,26 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
             continue;
         }
 
-        // group by namespace so we never merge across agents
+        // Group by namespace. "default" memories join every project group
+        // so cross-namespace dedup can happen (result stays in "default").
         let mut by_ns: std::collections::HashMap<&str, Vec<usize>> =
             std::collections::HashMap::new();
+        let mut default_indices: Vec<usize> = Vec::new();
         for (i, (m, _)) in layer_mems.iter().enumerate() {
+            if m.namespace == "default" {
+                default_indices.push(i);
+            }
             by_ns.entry(&m.namespace).or_default().push(i);
+        }
+        // Inject default memories into every project group for cross-ns dedup
+        for (ns, indices) in by_ns.iter_mut() {
+            if *ns != "default" && !default_indices.is_empty() {
+                for &di in &default_indices {
+                    if !indices.contains(&di) {
+                        indices.push(di);
+                    }
+                }
+            }
         }
 
         for ns_indices in by_ns.values() {
@@ -376,16 +406,27 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
             let all_tags = merge_tags(&[], &tag_slices, 20);
             // update the winner
             let best_id = ns_mems[best_idx].0.id.clone();
+
+            // If any cluster member is in "default" namespace, the merged result
+            // must stay in "default" (project→default is allowed, not reverse).
+            let cluster_has_default = cluster.iter()
+                .any(|&i| ns_mems[i].0.namespace == "default");
+            let winner_needs_ns_fix = cluster_has_default
+                && ns_mems[best_idx].0.namespace != "default";
+
             {
                 let db2 = db.clone();
                 let id = best_id.clone();
                 let content = merged_content.clone();
                 let tags = all_tags;
                 let imp = max_importance;
+                let needs_ns = winner_needs_ns_fix;
                 let result = tokio::task::spawn_blocking(move || {
                     db2.update_fields(&id, Some(&content), None, Some(imp), Some(&tags))?;
-                    // Carry over accumulated access history from all merged memories
                     db2.set_access_count(&id, total_access)?;
+                    if needs_ns {
+                        db2.set_namespace(&id, "default")?;
+                    }
                     Ok::<_, EngramError>(())
                 })
                 .await;

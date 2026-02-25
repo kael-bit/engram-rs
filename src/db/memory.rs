@@ -760,6 +760,14 @@ impl MemoryDB {
         self.get(id)
     }
 
+    pub fn set_namespace(&self, id: &str, namespace: &str) -> Result<(), EngramError> {
+        self.conn()?.execute(
+            "UPDATE memories SET namespace = ?1, modified_at = ?2 WHERE id = ?3",
+            params![namespace, now_ms(), id],
+        )?;
+        Ok(())
+    }
+
     pub fn stats(&self) -> Stats {
         self.stats_impl(None)
     }
