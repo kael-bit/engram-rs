@@ -11,7 +11,7 @@ Copy `mcp-config.json` from the repo root into your editor's MCP config:
   "mcpServers": {
     "engram": {
       "command": "npx",
-      "args": ["-y", "engram-mcp"],
+      "args": ["-y", "engram-rs-mcp"],
       "env": {
         "ENGRAM_URL": "http://localhost:3917",
         "ENGRAM_API_KEY": "",
@@ -63,7 +63,7 @@ ENGRAM_URL=http://localhost:3917 node dist/index.js
 ### Claude Code
 
 ```bash
-claude mcp add -s user engram -- npx -y engram-mcp
+claude mcp add -s user engram -- npx -y engram-rs-mcp
 ```
 
 Set env vars in `~/.claude/settings.json` under the engram server entry.
