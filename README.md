@@ -54,6 +54,10 @@ sequenceDiagram
     LLM-->>E: promote, demote, adjust, merge
 ```
 
+## Requirements
+
+- An **OpenAI-compatible API** for embeddings (`text-embedding-3-small`) and LLM calls (consolidation, triage, audit). Set `ENGRAM_LLM_URL` and `ENGRAM_LLM_KEY`. Without this, engram still works but falls back to keyword search and heuristic-only lifecycle — you lose the smart parts.
+
 ## Setup
 
 **For AI agents** — paste this into your session and let it handle the rest:

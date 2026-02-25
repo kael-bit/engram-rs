@@ -19,6 +19,12 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             name: engram-windows-x86_64.exe
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: engram-macos-x86_64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: engram-macos-aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -65,3 +71,5 @@ jobs:
           files: |
             artifacts/engram-linux-x86_64/engram-linux-x86_64
             artifacts/engram-windows-x86_64.exe/engram-windows-x86_64.exe
+            artifacts/engram-macos-x86_64/engram-macos-x86_64
+            artifacts/engram-macos-aarch64/engram-macos-aarch64
