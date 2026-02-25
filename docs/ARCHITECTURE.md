@@ -345,6 +345,10 @@ Every audit operation passes through `RuleChecker` before execution:
 
 ## 6. LLM Call Sites
 
+**LLM Level** (`ENGRAM_LLM_LEVEL`, default `auto`): Controls when consolidation calls LLMs.
+In `auto` mode, high-confidence decisions use heuristics; only uncertain cases invoke LLMs.
+In `off` mode, triage/gate use pure heuristics and merge/reconcile are skipped.
+
 Every place the system calls an LLM, with model tier and purpose:
 
 | Call Site | Model Tier | Component Log | Purpose | Prompt |

@@ -8,6 +8,66 @@ use tracing::{debug, info, warn};
 
 use super::merge_tags;
 
+/// Tags that indicate high-signal content worth auto-promoting.
+const SIGNAL_TAGS: &[&str] = &["lesson", "procedural", "preference", "constraint"];
+
+/// Check if memory has tags indicating high-value content.
+fn has_signal_tags(tags: &[String]) -> bool {
+    tags.iter().any(|t| SIGNAL_TAGS.contains(&t.as_str()))
+}
+
+/// Heuristic: should this buffer memory be auto-promoted to Working?
+/// Used in `auto` and `off` modes to skip LLM for obvious promotions.
+pub(super) fn heuristic_should_promote(mem: &Memory) -> bool {
+    mem.access_count > 3
+        || mem.repetition_count > 1
+        || has_signal_tags(&mem.tags)
+        || mem.importance >= 0.7
+}
+
+/// Heuristic: is this buffer memory too weak to bother evaluating?
+/// Used in `auto` mode to skip LLM for obvious keeps.
+fn heuristic_should_keep(mem: &Memory) -> bool {
+    mem.access_count == 0
+        && !has_signal_tags(&mem.tags)
+        && mem.content.len() < 20
+}
+
+/// Pure-heuristic buffer triage for `off` mode. No LLM calls.
+/// Returns (promoted_count, promoted_ids).
+pub(super) fn heuristic_triage_buffer_sync(
+    db: &MemoryDB, min_age_ms: i64, already_promoted: &[String],
+) -> (usize, Vec<String>) {
+    let now = crate::db::now_ms();
+    let all_buffers: Vec<Memory> = db.list_by_layer_meta(Layer::Buffer, 10000, 0)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| {
+            let dominated = m.tags.iter().any(|t| t == "distilled" || t == "ephemeral");
+            let old_enough = (now - m.created_at) > min_age_ms;
+            !dominated && old_enough && !already_promoted.contains(&m.id)
+        })
+        .collect();
+
+    let mut promoted_count = 0;
+    let mut promoted_ids = Vec::new();
+
+    for mem in &all_buffers {
+        if heuristic_should_promote(mem) {
+            if db.promote(&mem.id, Layer::Working).is_ok() {
+                info!(id = %crate::util::short_id(&mem.id), "auto-promoted {} (heuristic: high signal)", crate::util::short_id(&mem.id));
+                promoted_ids.push(mem.id.clone());
+                promoted_count += 1;
+            }
+        }
+    }
+
+    if promoted_count > 0 {
+        info!(total = promoted_count, "heuristic buffer triage complete");
+    }
+    (promoted_count, promoted_ids)
+}
+
 #[derive(Debug, Deserialize)]
 struct TriageDecision {
     id: String,
@@ -23,11 +83,13 @@ struct TriageResult {
 
 /// Evaluate buffer memories using LLM and promote worthy ones to Working.
 /// Only considers memories older than `min_age_ms` with at least one access.
+/// In `auto` mode, heuristics handle obvious cases; only uncertain memories go to LLM.
 /// Returns (promoted_count, promoted_ids).
 pub(super) async fn triage_buffer(
     db: &SharedDB, cfg: &AiConfig,
     min_age_ms: i64, max_batch: usize,
     already_promoted: &[String],
+    llm_level: &str,
 ) -> (usize, Vec<String>) {
     let now = crate::db::now_ms();
 
@@ -45,14 +107,43 @@ pub(super) async fn triage_buffer(
             .collect()
     }).await.unwrap_or_default();
 
+    // In `auto` mode, pre-classify with heuristics before sending to LLM.
+    let mut heuristic_promoted = 0usize;
+    let mut heuristic_ids = Vec::new();
+    let mut uncertain_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    if llm_level == "auto" {
+        for mem in &all_buffers {
+            if heuristic_should_promote(mem) {
+                let db3 = db.clone();
+                let mid = mem.id.clone();
+                let promoted = tokio::task::spawn_blocking(move || {
+                    db3.promote(&mid, Layer::Working).is_ok()
+                }).await.unwrap_or(false);
+                if promoted {
+                    info!(id = %crate::util::short_id(&mem.id), "auto-promoted {} (heuristic: high signal)", crate::util::short_id(&mem.id));
+                    heuristic_ids.push(mem.id.clone());
+                    heuristic_promoted += 1;
+                }
+            } else if !heuristic_should_keep(mem) {
+                uncertain_ids.insert(mem.id.clone());
+            }
+            // heuristic_should_keep memories are skipped entirely (not sent to LLM)
+        }
+    }
+
     // Process each namespace separately
     let mut ns_groups: std::collections::HashMap<&str, Vec<&Memory>> = std::collections::HashMap::new();
     for m in &all_buffers {
+        // In auto mode, only send uncertain memories to LLM
+        if llm_level == "auto" && !uncertain_ids.contains(&m.id) {
+            continue;
+        }
         ns_groups.entry(&m.namespace).or_default().push(m);
     }
 
-    let mut total_promoted = 0;
-    let mut all_ids = Vec::new();
+    let mut total_promoted = heuristic_promoted;
+    let mut all_ids = heuristic_ids;
 
     for (ns, mems) in &ns_groups {
         let candidates: Vec<_> = mems.iter().take(max_batch).collect();

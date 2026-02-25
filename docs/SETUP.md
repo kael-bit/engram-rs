@@ -71,6 +71,11 @@ ENGRAM_EMBED_KEY=sk-xxx \
 
 > **Why split?** The gate decides what gets promoted to permanent Core memory — it needs to distinguish "never force-push to main" (lesson, keep forever) from "fixed the build, 198 tests pass" (changelog, don't keep). Cheap models fail at this. Text merging and query expansion don't need that judgment.
 
+**LLM usage level:** Set `ENGRAM_LLM_LEVEL` to control how much consolidation relies on LLMs:
+- `auto` (default) — heuristics handle obvious cases, LLM only for uncertain ones
+- `full` — always use LLM for triage and gate decisions
+- `off` — zero LLM calls in consolidation (pure heuristics, merge/reconcile skipped)
+
 ```bash
 # Optional: enable auth (for remote/shared deployments)
 ENGRAM_API_KEY=your-secret-key ./engram

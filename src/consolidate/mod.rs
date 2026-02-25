@@ -32,7 +32,7 @@ pub use triage::dedup_buffer;
 use distill::distill_sessions;
 use merge::{merge_similar, reconcile_updates};
 use summary::update_core_summary;
-use triage::triage_buffer;
+use triage::{triage_buffer, heuristic_triage_buffer_sync};
 
 #[derive(Debug, Deserialize)]
 pub struct ConsolidateRequest {
@@ -81,7 +81,7 @@ pub struct ConsolidateResponse {
     pub facts_extracted: usize,
     /// IDs that passed access/age thresholds but await LLM gate review.
     #[serde(skip)]
-    pub promotion_candidates: Vec<(String, String, i64, i64)>, // (id, content, access_count, repetition_count)
+    pub promotion_candidates: Vec<(String, String, i64, i64, f64, Vec<String>)>, // (id, content, access_count, repetition_count, importance, tags)
     /// Number of session notes distilled into project context.
     #[serde(skip_serializing_if = "is_zero")]
     pub distilled: usize,
@@ -102,9 +102,14 @@ pub async fn consolidate(
 ) -> ConsolidateResponse {
     let do_merge = req.as_ref().and_then(|r| r.merge).unwrap_or(false);
 
+    let llm_level = std::env::var("ENGRAM_LLM_LEVEL")
+        .unwrap_or_else(|_| "auto".to_string())
+        .to_lowercase();
+
     let db2 = db.clone();
+    let llm_level_sync = llm_level.clone();
     let mut result = tokio::task::spawn_blocking(move || {
-        consolidate_sync(&db2, req.as_ref())
+        consolidate_sync(&db2, req.as_ref(), &llm_level_sync)
     })
     .await
     .unwrap_or_else(|e| {
@@ -113,101 +118,238 @@ pub async fn consolidate(
     });
 
     // LLM gate: review promotion candidates before moving to Core.
+    // Behavior depends on ENGRAM_LLM_LEVEL:
+    //   full  — always call LLM (original behavior)
+    //   auto  — heuristic pre-filter, LLM for uncertain cases only
+    //   off   — pure heuristic gate, no LLM calls
     // Without AI config, promote all candidates directly (backward compat).
     let candidates = std::mem::take(&mut result.promotion_candidates);
     if !candidates.is_empty() {
-        match &ai {
-            Some(cfg) => {
-                for (id, content, access_count, rep_count) in &candidates {
-                    match llm_promotion_gate(cfg, content, *access_count, *rep_count).await {
-                        Ok((true, kind, usage, model, duration_ms)) => {
-                            if let Some(ref u) = usage {
-                                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                                let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
-                            }
-                            let db2 = db.clone();
-                            let id2 = id.clone();
-                            let promoted = tokio::task::spawn_blocking(move || -> bool {
-                                if db2.promote(&id2, Layer::Core).is_ok() {
-                                    if let Some(k) = kind {
-                                        if let Ok(Some(mem)) = db2.get(&id2) {
-                                            if mem.kind == "semantic" {
-                                                let _ = db2.update_kind(&id2, &k);
+        match llm_level.as_str() {
+            "off" => {
+                // Pure heuristic gate: ac >= 3 AND importance >= 0.6
+                for (id, _content, access_count, _rep_count, importance, _tags) in &candidates {
+                    if *access_count >= 3 && *importance >= 0.6 {
+                        let db2 = db.clone();
+                        let id2 = id.clone();
+                        let promoted = tokio::task::spawn_blocking(move || {
+                            db2.promote(&id2, Layer::Core).is_ok()
+                        }).await.unwrap_or(false);
+                        if promoted {
+                            info!(id = %id, "auto-approved {} for Core (heuristic: off-mode gate)", crate::util::short_id(id));
+                            result.promoted_ids.push(id.clone());
+                            result.promoted += 1;
+                        }
+                    }
+                    // In off mode, don't tag-reject — memory stays in Working
+                    // for proper LLM evaluation when mode changes back.
+                }
+            }
+            "auto" => {
+                // Pre-filter with heuristics, send uncertain to LLM.
+                let mut uncertain = Vec::new();
+                for cand in &candidates {
+                    let (id, _content, ac, rep, imp, tags) = cand;
+                    // Auto-approve: strong signal
+                    if *ac >= 5
+                        && (*rep >= 2 || tags.iter().any(|t| t == "lesson" || t == "procedural"))
+                        && *imp >= 0.6
+                    {
+                        let db2 = db.clone();
+                        let id2 = id.clone();
+                        let promoted = tokio::task::spawn_blocking(move || {
+                            db2.promote(&id2, Layer::Core).is_ok()
+                        }).await.unwrap_or(false);
+                        if promoted {
+                            info!(id = %id, "auto-approved {} for Core (heuristic: strong candidate)", crate::util::short_id(id));
+                            result.promoted_ids.push(id.clone());
+                            result.promoted += 1;
+                        }
+                    } else {
+                        uncertain.push(cand);
+                    }
+                }
+                // Send uncertain to LLM
+                if !uncertain.is_empty() {
+                    match &ai {
+                        Some(cfg) => {
+                            for (id, content, access_count, rep_count, _importance, _tags) in uncertain {
+                                match llm_promotion_gate(cfg, content, *access_count, *rep_count).await {
+                                    Ok((true, kind, usage, model, duration_ms)) => {
+                                        if let Some(ref u) = usage {
+                                            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                                            let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
+                                        }
+                                        let db2 = db.clone();
+                                        let id2 = id.clone();
+                                        let promoted = tokio::task::spawn_blocking(move || -> bool {
+                                            if db2.promote(&id2, Layer::Core).is_ok() {
+                                                if let Some(k) = kind {
+                                                    if let Ok(Some(mem)) = db2.get(&id2) {
+                                                        if mem.kind == "semantic" {
+                                                            let _ = db2.update_kind(&id2, &k);
+                                                        }
+                                                    }
+                                                }
+                                                true
+                                            } else {
+                                                false
                                             }
+                                        }).await.unwrap_or(false);
+                                        if promoted {
+                                            result.promoted_ids.push(id.clone());
+                                            result.promoted += 1;
+                                            debug!(id = %id, "promoted to Core");
                                         }
                                     }
-                                    true
-                                } else {
-                                    false
+                                    Ok((false, _, usage, model, duration_ms)) => {
+                                        if let Some(ref u) = usage {
+                                            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                                            let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
+                                        }
+                                        result.gate_rejected += 1;
+                                        let db2 = db.clone();
+                                        let id2 = id.clone();
+                                        let _ = tokio::task::spawn_blocking(move || {
+                                            if let Ok(Some(mem)) = db2.get(&id2) {
+                                                let mut tags: Vec<String> = mem.tags.iter()
+                                                    .filter(|t| !t.starts_with("gate-rejected"))
+                                                    .cloned().collect();
+                                                let had_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
+                                                let had_1 = mem.tags.iter().any(|t| t == "gate-rejected");
+                                                let new_tag = if had_2 {
+                                                    "gate-rejected-final"
+                                                } else if had_1 {
+                                                    "gate-rejected-2"
+                                                } else {
+                                                    "gate-rejected"
+                                                };
+                                                tags.push(new_tag.into());
+                                                let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
+                                            }
+                                        }).await;
+                                        info!(id = %id, content = %truncate_chars(content, 50), "gate rejected promotion to Core");
+                                    }
+                                    Err(e) => {
+                                        warn!(id = %id, error = %e, "LLM gate failed, skipping");
+                                    }
                                 }
-                            }).await.unwrap_or(false);
-                            if promoted {
-                                result.promoted_ids.push(id.clone());
-                                result.promoted += 1;
-                                debug!(id = %id, "promoted to Core");
                             }
                         }
-                        Ok((false, _, usage, model, duration_ms)) => {
-                            if let Some(ref u) = usage {
-                                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                                let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
-                            }
-                            result.gate_rejected += 1;
+                        None => {
+                            // No AI config — promote all uncertain candidates (backward compat)
                             let db2 = db.clone();
-                            let id2 = id.clone();
-                            let _ = tokio::task::spawn_blocking(move || {
-                                if let Ok(Some(mem)) = db2.get(&id2) {
-                                    let mut tags: Vec<String> = mem.tags.iter()
-                                        .filter(|t| !t.starts_with("gate-rejected"))
-                                        .cloned().collect();
-                                    // Escalate: no tag → gate-rejected → gate-rejected-2 → gate-rejected-final
-                                    let had_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
-                                    let had_1 = mem.tags.iter().any(|t| t == "gate-rejected");
-                                    let new_tag = if had_2 {
-                                        "gate-rejected-final"
-                                    } else if had_1 {
-                                        "gate-rejected-2"
-                                    } else {
-                                        "gate-rejected"
-                                    };
-                                    tags.push(new_tag.into());
-                                    let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
-                                }
-                            }).await;
-                            info!(id = %id, content = %truncate_chars(content, 50), "gate rejected promotion to Core");
-                        }
-                        Err(e) => {
-                            warn!(id = %id, error = %e, "LLM gate failed, skipping");
+                            let cands: Vec<String> = uncertain.iter().map(|(id, _, _, _, _, _)| id.clone()).collect();
+                            let promoted_ids: Vec<String> = tokio::task::spawn_blocking(move || {
+                                cands.into_iter().filter(|id| db2.promote(id, Layer::Core).is_ok()).collect::<Vec<_>>()
+                            }).await.unwrap_or_default();
+                            result.promoted += promoted_ids.len();
+                            result.promoted_ids.extend(promoted_ids);
                         }
                     }
                 }
             }
-            None => {
-                let db2 = db.clone();
-                let cands: Vec<String> = candidates.iter().map(|(id, _, _, _)| id.clone()).collect();
-                let promoted_ids: Vec<String> = tokio::task::spawn_blocking(move || {
-                    cands.into_iter().filter(|id| db2.promote(id, Layer::Core).is_ok()).collect::<Vec<_>>()
-                }).await.unwrap_or_default();
-                result.promoted += promoted_ids.len();
-                result.promoted_ids.extend(promoted_ids);
+            _ => {
+                // "full" mode — original behavior: always call LLM
+                match &ai {
+                    Some(cfg) => {
+                        for (id, content, access_count, rep_count, _importance, _tags) in &candidates {
+                            match llm_promotion_gate(cfg, content, *access_count, *rep_count).await {
+                                Ok((true, kind, usage, model, duration_ms)) => {
+                                    if let Some(ref u) = usage {
+                                        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                                        let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
+                                    }
+                                    let db2 = db.clone();
+                                    let id2 = id.clone();
+                                    let promoted = tokio::task::spawn_blocking(move || -> bool {
+                                        if db2.promote(&id2, Layer::Core).is_ok() {
+                                            if let Some(k) = kind {
+                                                if let Ok(Some(mem)) = db2.get(&id2) {
+                                                    if mem.kind == "semantic" {
+                                                        let _ = db2.update_kind(&id2, &k);
+                                                    }
+                                                }
+                                            }
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }).await.unwrap_or(false);
+                                    if promoted {
+                                        result.promoted_ids.push(id.clone());
+                                        result.promoted += 1;
+                                        debug!(id = %id, "promoted to Core");
+                                    }
+                                }
+                                Ok((false, _, usage, model, duration_ms)) => {
+                                    if let Some(ref u) = usage {
+                                        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                                        let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
+                                    }
+                                    result.gate_rejected += 1;
+                                    let db2 = db.clone();
+                                    let id2 = id.clone();
+                                    let _ = tokio::task::spawn_blocking(move || {
+                                        if let Ok(Some(mem)) = db2.get(&id2) {
+                                            let mut tags: Vec<String> = mem.tags.iter()
+                                                .filter(|t| !t.starts_with("gate-rejected"))
+                                                .cloned().collect();
+                                            let had_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
+                                            let had_1 = mem.tags.iter().any(|t| t == "gate-rejected");
+                                            let new_tag = if had_2 {
+                                                "gate-rejected-final"
+                                            } else if had_1 {
+                                                "gate-rejected-2"
+                                            } else {
+                                                "gate-rejected"
+                                            };
+                                            tags.push(new_tag.into());
+                                            let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
+                                        }
+                                    }).await;
+                                    info!(id = %id, content = %truncate_chars(content, 50), "gate rejected promotion to Core");
+                                }
+                                Err(e) => {
+                                    warn!(id = %id, error = %e, "LLM gate failed, skipping");
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        let db2 = db.clone();
+                        let cands: Vec<String> = candidates.iter().map(|(id, _, _, _, _, _)| id.clone()).collect();
+                        let promoted_ids: Vec<String> = tokio::task::spawn_blocking(move || {
+                            cands.into_iter().filter(|id| db2.promote(id, Layer::Core).is_ok()).collect::<Vec<_>>()
+                        }).await.unwrap_or_default();
+                        result.promoted += promoted_ids.len();
+                        result.promoted_ids.extend(promoted_ids);
+                    }
+                }
             }
         }
     }
 
     // Reconcile: detect same-topic memories where newer one updates/supersedes older.
     // Runs every consolidation cycle (not just when merge is requested).
-    if let Some(ref cfg) = ai {
-        let (count, ids) = reconcile_updates(&db, cfg).await;
-        result.reconciled = count;
-        result.reconciled_ids = ids;
+    // Skipped in `off` mode (requires LLM for content comparison).
+    if llm_level != "off" {
+        if let Some(ref cfg) = ai {
+            let (count, ids) = reconcile_updates(&db, cfg).await;
+            result.reconciled = count;
+            result.reconciled_ids = ids;
+        }
     }
 
     // Session distillation: turn accumulated session notes into project context.
     // Session notes can't promote to Core (by design), but the project knowledge
     // they contain is valuable. When 3+ session notes pile up, LLM distills them
     // into a single project-status memory that CAN promote normally.
-    if let Some(ref cfg) = ai {
-        result.distilled = distill_sessions(&db, cfg).await;
+    // Skipped in `off` mode (requires LLM for synthesis).
+    if llm_level != "off" {
+        if let Some(ref cfg) = ai {
+            result.distilled = distill_sessions(&db, cfg).await;
+        }
     }
 
     // Buffer dedup: remove near-duplicate entries within the buffer layer.
@@ -220,17 +362,32 @@ pub async fn consolidate(
         result.buffer_deduped = deduped;
     }
 
-    // Buffer triage: LLM evaluates buffer memories that have usage signal.
-    // Replaces mechanical access_count threshold with intelligent promotion.
-    // Memories must be >1h old and have at least one access to be considered.
-    if let Some(ref cfg) = ai {
+    // Buffer triage: evaluates buffer memories for promotion.
+    // In `off` mode: pure heuristic triage (no AI config needed).
+    // In `auto` mode: heuristic pre-filter + LLM for uncertain cases.
+    // In `full` mode: all candidates go to LLM.
+    {
         let min_age = 600 * 1000; // 10 minutes — gives time for dedup to run first
-        let (count, ids) = triage_buffer(&db, cfg, min_age, 20, &result.promoted_ids).await;
-        result.triaged = count;
-        for id in ids {
-            result.promoted_ids.push(id);
+        if llm_level == "off" {
+            // Pure heuristic triage — no LLM needed
+            let db2 = db.clone();
+            let promoted_set = result.promoted_ids.clone();
+            let (count, ids) = tokio::task::spawn_blocking(move || {
+                heuristic_triage_buffer_sync(&db2, min_age, &promoted_set)
+            }).await.unwrap_or((0, vec![]));
+            result.triaged = count;
+            for id in ids {
+                result.promoted_ids.push(id);
+            }
+            result.promoted += count;
+        } else if let Some(ref cfg) = ai {
+            let (count, ids) = triage_buffer(&db, cfg, min_age, 20, &result.promoted_ids, &llm_level).await;
+            result.triaged = count;
+            for id in ids {
+                result.promoted_ids.push(id);
+            }
+            result.promoted += count;
         }
-        result.promoted += count;
     }
 
     // Extract fact triples from Working/Core memories that don't have any yet.
@@ -240,7 +397,8 @@ pub async fn consolidate(
     //     result.facts_extracted = extract_facts_batch(&db, cfg, 5).await;
     // }
 
-    if do_merge {
+    // Merge: LLM combines near-duplicate memories. Skipped in `off` mode.
+    if do_merge && llm_level != "off" {
         if let Some(ref cfg) = ai {
             let (count, ids) = merge_similar(&db, cfg).await;
             result.merged = count;
@@ -261,8 +419,11 @@ pub async fn consolidate(
     // Generate or update Core summary when Core is large enough to need
     // compression at resume time. The summary is cached in engram_meta and
     // invalidated by a hash of Core memory IDs + content lengths.
-    if let Some(ref cfg) = ai {
-        update_core_summary(&db, cfg).await;
+    // Skipped in `off` mode (requires LLM for summarization).
+    if llm_level != "off" {
+        if let Some(ref cfg) = ai {
+            update_core_summary(&db, cfg).await;
+        }
     }
 
     result
@@ -342,7 +503,7 @@ pub fn fix_stuck_buffer(db: &MemoryDB) {
     }
 }
 
-pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> ConsolidateResponse {
+pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_level: &str) -> ConsolidateResponse {
     cleanup_stale_tags(db);
     fix_stuck_buffer(db);
 
@@ -520,6 +681,16 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
         let is_rejected_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
         let is_rejected_1 = mem.tags.iter().any(|t| t == "gate-rejected");
         if is_rejected_2 {
+            if llm_level == "auto" {
+                // Auto mode: third strike — auto-reject as final, skip LLM
+                let mut cleaned: Vec<String> = mem.tags.iter()
+                    .filter(|t| !t.starts_with("gate-rejected"))
+                    .cloned().collect();
+                cleaned.push("gate-rejected-final".into());
+                let _ = db.update_fields(&mem.id, None, None, None, Some(&cleaned));
+                info!(id = %mem.id, "auto-rejected for Core (heuristic: gate-rejected-2, third strike)");
+                continue;
+            }
             if now - mem.last_accessed < gate_retry_2_ms {
                 continue;
             }
@@ -548,7 +719,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
             && mem.importance >= promote_min_imp;
 
         if by_score || by_age {
-            promotion_candidates.push((mem.id.clone(), mem.content.clone(), mem.access_count, mem.repetition_count));
+            promotion_candidates.push((mem.id.clone(), mem.content.clone(), mem.access_count, mem.repetition_count, mem.importance, mem.tags.clone()));
         }
     }
 

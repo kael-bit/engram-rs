@@ -119,13 +119,13 @@ fn promote_high_access_working() {
     let meh = mem_with_ts("leave-me", Layer::Working, 0.8, 1, now - 1000, now);
     db.import(&[good, meh]).unwrap();
 
-    let result = consolidate_sync(&db, None);
+    let result = consolidate_sync(&db, None, "full");
     // Without LLM, candidates are collected but not promoted
     assert_eq!(result.promotion_candidates.len(), 1);
     assert_eq!(result.promotion_candidates[0].0, "promote-me");
 
     // Simulate no-AI fallback: promote candidates directly
-    for (id, _, _, _) in &result.promotion_candidates {
+    for (id, _, _, _, _, _) in &result.promotion_candidates {
         db.promote(id, Layer::Core).unwrap();
     }
     let promoted = db.get("promote-me").unwrap().unwrap();
@@ -145,8 +145,8 @@ fn age_promote_old_working() {
     let fresh = mem_with_ts("too-young", Layer::Working, 0.6, 1, now - 1000, now);
     db.import(&[old, fresh]).unwrap();
 
-    let result = consolidate_sync(&db, None);
-    let candidate_ids: Vec<&str> = result.promotion_candidates.iter().map(|(id, _, _, _)| id.as_str()).collect();
+    let result = consolidate_sync(&db, None, "full");
+    let candidate_ids: Vec<&str> = result.promotion_candidates.iter().map(|(id, _, _, _, _, _)| id.as_str()).collect();
     assert!(candidate_ids.contains(&"old-but-worthy"));
     assert!(!candidate_ids.contains(&"too-young"));
 }
@@ -164,7 +164,7 @@ fn drop_expired_low_importance_buffer() {
     let barely = mem_with_ts("not-enough", Layer::Buffer, 0.5, 1, three_days_ago, three_days_ago);
     db.import(&[expendable, valuable, barely]).unwrap();
 
-    let _result = consolidate_sync(&db, None);
+    let _result = consolidate_sync(&db, None, "full");
     assert!(db.get("bye").unwrap().is_none(), "never-accessed buffer should be gone");
     assert!(db.get("not-enough").unwrap().is_none(), "barely-accessed buffer should be gone after TTL");
     let saved = db.get("save-me").unwrap();
@@ -179,7 +179,7 @@ fn nothing_to_do() {
     let stable = mem_with_ts("stable", Layer::Core, 0.9, 10, now - 1000, now);
     db.import(&[stable]).unwrap();
 
-    let r = consolidate_sync(&db, None);
+    let r = consolidate_sync(&db, None, "full");
     assert_eq!(r.promoted, 0);
     assert_eq!(r.decayed, 0);
 }
@@ -194,7 +194,7 @@ fn buffer_promoted_by_access() {
     let not_enough = mem_with_ts("still-young", Layer::Buffer, 0.1, 3, now - 1000, now);
     db.import(&[accessed, not_enough]).unwrap();
 
-    let r = consolidate_sync(&db, None);
+    let r = consolidate_sync(&db, None, "full");
     assert_eq!(r.promoted, 1);
     let got = db.get("recalled").unwrap().unwrap();
     assert_eq!(got.layer, Layer::Working);
@@ -212,7 +212,7 @@ fn buffer_ttl_accessed_enough_promotes() {
     let barely = mem_with_ts("barely", Layer::Buffer, 0.1, 1, three_days_ago, three_days_ago);
     db.import(&[accessed, barely]).unwrap();
 
-    let r = consolidate_sync(&db, None);
+    let r = consolidate_sync(&db, None, "full");
     assert!(r.promoted >= 1);
     let got = db.get("rescued").unwrap().unwrap();
     assert_eq!(got.layer, Layer::Working);
@@ -227,7 +227,7 @@ fn buffer_ttl_never_accessed_drops() {
     let unused = mem_with_ts("forgotten", Layer::Buffer, 0.1, 0, three_days_ago, three_days_ago);
     db.import(&[unused]).unwrap();
 
-    let r = consolidate_sync(&db, None);
+    let r = consolidate_sync(&db, None, "full");
     assert!(r.decayed >= 1);
     assert!(db.get("forgotten").unwrap().is_none());
 }
@@ -251,8 +251,8 @@ fn operational_tag_blocks_working_to_core_promotion() {
 
     db.import(&[session_mem, normal, ephemeral]).unwrap();
 
-    let result = consolidate_sync(&db, None);
-    let candidate_ids: Vec<&str> = result.promotion_candidates.iter().map(|(id, _, _, _)| id.as_str()).collect();
+    let result = consolidate_sync(&db, None, "full");
+    let candidate_ids: Vec<&str> = result.promotion_candidates.iter().map(|(id, _, _, _, _, _)| id.as_str()).collect();
 
     assert!(candidate_ids.contains(&"normal-mem"), "normal memory should be a candidate");
     assert!(!candidate_ids.contains(&"session-mem"), "session memory must not be a candidate");
@@ -273,7 +273,7 @@ fn lesson_tag_survives_buffer_ttl() {
 
     db.import(&[lesson, regular]).unwrap();
 
-    let r = consolidate_sync(&db, None);
+    let r = consolidate_sync(&db, None, "full");
     assert!(db.get("never-force-push").unwrap().is_some(), "lesson must survive TTL");
     assert!(db.get("some-note").unwrap().is_none(), "regular buffer should be dropped");
     assert!(r.decayed >= 1);
@@ -295,10 +295,10 @@ fn gate_rejected_skips_promotion() {
 
     db.import(&[rejected, eligible]).unwrap();
 
-    let r = consolidate_sync(&db, None);
+    let r = consolidate_sync(&db, None, "full");
 
     // gate-rejected should NOT appear in promotion candidates
-    let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _)| id.as_str()).collect();
+    let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _, _, _)| id.as_str()).collect();
     assert!(!candidate_ids.contains(&"gate-rej"), "gate-rejected must not be a promotion candidate");
     assert!(candidate_ids.contains(&"eligible"), "eligible should be a promotion candidate");
 }
@@ -316,10 +316,10 @@ fn gate_rejected_retries_after_cooldown() {
 
     db.import(&[retry]).unwrap();
 
-    let r = consolidate_sync(&db, None);
+    let r = consolidate_sync(&db, None, "full");
 
     // Should now be a promotion candidate (tag cleared, eligible again)
-    let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _)| id.as_str()).collect();
+    let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _, _, _)| id.as_str()).collect();
     assert!(candidate_ids.contains(&"retry-me"), "gate-rejected with expired cooldown should retry");
 
     // Tag should be removed
@@ -340,7 +340,7 @@ fn high_importance_buffer_rescued_at_ttl() {
 
     db.import(&[important, junk]).unwrap();
 
-    let r = consolidate_sync(&db, None);
+    let r = consolidate_sync(&db, None, "full");
 
     assert!(db.get("design-decision").unwrap().is_some(), "high importance buffer should survive");
     let rescued = db.get("design-decision").unwrap().unwrap();
@@ -366,7 +366,7 @@ fn distilled_tag_blocks_buffer_promotion() {
 
     db.import(&[distilled, normal]).unwrap();
 
-    let r = consolidate_sync(&db, None);
+    let r = consolidate_sync(&db, None, "full");
     assert_eq!(r.promoted, 1, "only the non-distilled should promote");
     let d = db.get("distilled-note").unwrap().unwrap();
     assert_eq!(d.layer, Layer::Buffer, "distilled must stay in Buffer");
@@ -390,8 +390,8 @@ fn auto_distilled_blocks_core_promotion() {
 
     db.import(&[ad, normal]).unwrap();
 
-    let r = consolidate_sync(&db, None);
-    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _)| id.as_str()).collect();
+    let r = consolidate_sync(&db, None, "full");
+    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _, _, _)| id.as_str()).collect();
     assert!(!ids.contains(&"project-status"), "auto-distilled must not be a Core candidate");
     assert!(ids.contains(&"real-lesson"), "normal Working should be a candidate");
 }
@@ -436,8 +436,8 @@ fn gate_rejected_within_cooldown_skips_promotion() {
     gr.repetition_count = 5;
 
     db.import(&[gr]).unwrap();
-    let r = consolidate_sync(&db, None);
-    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _)| id.as_str()).collect();
+    let r = consolidate_sync(&db, None, "full");
+    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _, _, _)| id.as_str()).collect();
     assert!(!ids.contains(&"gr-fresh"), "gate-rejected within 24h must not be a candidate");
 
     // Verify the tag is still there (not cleared prematurely)
@@ -457,13 +457,13 @@ fn gate_rejected_after_cooldown_retries() {
     gr.repetition_count = 5;
 
     db.import(&[gr]).unwrap();
-    let r = consolidate_sync(&db, None);
+    let r = consolidate_sync(&db, None, "full");
 
     // After cooldown, the tag should be removed and it becomes a candidate
     let m = db.get("gr-old").unwrap().unwrap();
     assert!(!m.tags.iter().any(|t| t == "gate-rejected"),
         "tag should be cleared after 24h cooldown");
-    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _)| id.as_str()).collect();
+    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _, _, _)| id.as_str()).collect();
     assert!(ids.contains(&"gr-old"), "should re-enter promotion pipeline after cooldown");
 }
 
@@ -478,8 +478,8 @@ fn session_notes_blocked_from_core_promotion() {
     session.repetition_count = 10;
 
     db.import(&[session]).unwrap();
-    let r = consolidate_sync(&db, None);
-    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _)| id.as_str()).collect();
+    let r = consolidate_sync(&db, None, "full");
+    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _, _, _)| id.as_str()).collect();
     assert!(!ids.contains(&"session-note"), "session notes must never reach Core promotion");
 }
 
