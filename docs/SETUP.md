@@ -146,17 +146,19 @@ You have persistent memory via engram MCP tools.
 
 ### 2. When & What to Store (Tool: `engram_store`)
 
-**Default: store it.** If information came from the user, store it. Engram handles dedup and decay. The cost of forgetting is always higher than the cost of storing.
+**Default: store user-provided info** — except anything in DO NOT store below. Engram handles dedup and decay. The cost of forgetting is always higher than the cost of storing.
 
 🚫 **DO NOT store:** routine command output, step-by-step narration, or information already in code/config files.
+
+**Store includes:** user identity, preferences, decisions, constraints, lessons from mistakes, and milestone recaps ("what we decided" + "next steps").
 
 **CRITICAL:** When the user corrects you or states a rule → store FIRST, then reply.
 
 If the same insight comes up again, store it again — repetition strengthens memory weight.
 
-**Storage modifiers:**
+**Storage modifiers (MCP tool parameters):**
 - Workflows/procedures → `kind="procedural"` (never decay)
-- Lessons → `tags: ["lesson", "trigger:kebab-verb"]`
+- Lessons → `tags=["lesson", "trigger:kebab-verb"]`
 - High-confidence knowledge (user corrections, explicit rules) → `layer=2` (direct to Working, skip Buffer)
 - Cross-project knowledge (identity, preferences) → `namespace="default"`
 
@@ -202,19 +204,21 @@ curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 
 ### 2. When & What to Store
 
-**Default: store it.** If information came from the user, store it. Engram handles dedup and decay. The cost of forgetting is always higher than the cost of storing.
+**Default: store user-provided info** — except anything in DO NOT store below. Engram handles dedup and decay. The cost of forgetting is always higher than the cost of storing.
 
 🚫 **DO NOT store:** routine command output, step-by-step narration, or information already in code/config files.
+
+**Store includes:** user identity, preferences, decisions, constraints, lessons from mistakes, and milestone recaps ("what we decided" + "next steps").
 
 **CRITICAL:** When the user corrects you or states a rule → store FIRST, then reply.
 
 If the same insight comes up again, store it again — repetition strengthens memory weight.
 
-**Storage modifiers:**
-- Workflows/procedures → `kind="procedural"` (never decay)
-- Lessons → `tags: ["lesson", "trigger:kebab-verb"]`
+**Storage modifiers (HTTP JSON body / headers):**
+- Workflows/procedures → `"kind": "procedural"` (never decay)
+- Lessons → `"tags": ["lesson", "trigger:kebab-verb"]`
 - High-confidence knowledge (user corrections, explicit rules) → `"layer": 2` (direct to Working, skip Buffer)
-- Cross-project knowledge (identity, preferences) → `X-Namespace: default` header
+- Cross-project knowledge (identity, preferences) → `-H "X-Namespace: default"`
 
 ```bash
 curl -sf -X POST http://localhost:3917/memories \
