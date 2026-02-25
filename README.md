@@ -225,12 +225,24 @@ Returns structured sections: `core` (identity/permanent), `working` (active cont
 
 ### Namespace Isolation
 
-Multi-agent support — each agent gets its own memory space:
+One engram instance, multiple projects. Set `ENGRAM_NAMESPACE` per workspace:
+
+```bash
+# MCP: set in .mcp.json env
+"ENGRAM_NAMESPACE": "my-project"
+
+# HTTP: set env var or pass header
+curl -X POST http://localhost:3917/memories \
+  -H 'X-Namespace: my-project' \
+  -d '{"content": "project-specific context"}'
+```
+
+Resume and recall automatically include the `default` namespace alongside your project namespace. Store cross-project knowledge (user identity, preferences, universal lessons) to `default` explicitly:
 
 ```bash
 curl -X POST http://localhost:3917/memories \
-  -H 'X-Namespace: agent-alpha' \
-  -d '{"content": "agent-alpha private context"}'
+  -H 'X-Namespace: default' \
+  -d '{"content": "User prefers concise Chinese replies"}'
 ```
 
 ### Triggers

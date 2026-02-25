@@ -120,7 +120,8 @@ Or create `.mcp.json` in the project root:
       "command": "node",
       "args": ["/absolute/path/to/engram/mcp/dist/index.js"],
       "env": {
-        "ENGRAM_URL": "http://localhost:3917"
+        "ENGRAM_URL": "http://localhost:3917",
+        "ENGRAM_NAMESPACE": "my-project"
       }
     }
   }
@@ -161,6 +162,10 @@ Common patterns and how to tag them:
 | Milestone recap (decisions + next steps) | `session` | *(default)* |
 
 This list is not exhaustive — use the principle above.
+
+🌐 **Cross-Project Knowledge**
+
+Memories default to your project namespace. For knowledge that applies across ALL projects (user identity, preferences, universal lessons), store to namespace `"default"` explicitly: `engram_store(content="...", namespace="default")`.
 
 🔄 **Memory Reinforcement (Repetition is Good!)**
 
@@ -235,6 +240,15 @@ Common patterns and how to tag them:
 | Milestone recap (decisions + next steps) | `session` | *(default)* |
 
 This list is not exhaustive — use the principle above.
+
+🌐 **Cross-Project Knowledge**
+
+Memories default to your project namespace. For knowledge that applies across ALL projects (user identity, preferences, universal lessons), store to namespace `"default"` explicitly:
+
+```bash
+curl -sf -X POST http://localhost:3917/memories -H "X-Namespace: default" \\
+  -d '{"content": "User prefers concise replies in Chinese"}'
+```
 
 🔄 **Memory Reinforcement (Repetition is Good!)**
 
@@ -345,4 +359,15 @@ EOF
 sudo systemctl enable --now engram
 ```
 
-For multi-agent setups, add `X-Namespace: agent-name` header to all requests to isolate each agent's memory.
+## Project Isolation (Namespace)
+
+Set `ENGRAM_NAMESPACE` to isolate memories per project. One engram instance, multiple workspaces:
+
+- **MCP**: Set `ENGRAM_NAMESPACE` in `.mcp.json` env (see Step 3 above)
+- **HTTP**: Set env var `ENGRAM_NAMESPACE=my-project` or pass `-H "X-Namespace: my-project"` on all requests
+
+Resume and recall automatically include the `default` namespace alongside your project namespace, so cross-project knowledge (user identity, preferences, universal lessons) is always available.
+
+To store cross-project knowledge explicitly, override the namespace to `default`:
+- **MCP**: `engram_store(content="...", namespace="default")`
+- **HTTP**: `curl -X POST ... -H "X-Namespace: default" -d '{"content":"..."}'`

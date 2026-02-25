@@ -6,11 +6,15 @@ import { z } from "zod";
 
 const ENGRAM_URL = process.env.ENGRAM_URL || "http://localhost:3917";
 const ENGRAM_API_KEY = process.env.ENGRAM_API_KEY || "";
+const ENGRAM_NAMESPACE = process.env.ENGRAM_NAMESPACE || "";
 
 async function engramFetch(path: string, body?: unknown): Promise<unknown> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (ENGRAM_API_KEY) {
     headers["Authorization"] = `Bearer ${ENGRAM_API_KEY}`;
+  }
+  if (ENGRAM_NAMESPACE) {
+    headers["X-Namespace"] = ENGRAM_NAMESPACE;
   }
 
   const method = body !== undefined ? "POST" : "GET";
@@ -42,6 +46,9 @@ async function engramMethod(method: string, path: string, body?: unknown): Promi
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (ENGRAM_API_KEY) {
     headers["Authorization"] = `Bearer ${ENGRAM_API_KEY}`;
+  }
+  if (ENGRAM_NAMESPACE) {
+    headers["X-Namespace"] = ENGRAM_NAMESPACE;
   }
   const resp = await fetch(`${ENGRAM_URL}${path}`, {
     method,
@@ -78,7 +85,7 @@ server.tool(
     source: z.string().optional().describe("Source identifier"),
     supersedes: z.array(z.string()).optional().describe("IDs of old memories this one replaces"),
     skip_dedup: z.boolean().optional().describe("Skip near-duplicate detection"),
-    namespace: z.string().optional().describe("Namespace for multi-agent isolation"),
+    namespace: z.string().optional().describe("Override namespace. Use \"default\" for cross-project knowledge (user identity, preferences, universal lessons)"),
     sync_embed: z.boolean().optional().describe("Wait for embedding generation before returning (default: false)"),
   },
   async ({ content, importance, kind, tags, source, supersedes, skip_dedup, namespace, sync_embed }) => {

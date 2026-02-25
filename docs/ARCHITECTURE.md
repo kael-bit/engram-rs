@@ -376,7 +376,15 @@ All LLM calls are logged in `llm_usage` table with component, model, token count
 
 ## 7. Resume System
 
-`GET /resume` provides session recovery context. Budget-aware, prioritized sections:
+`GET /resume` provides session recovery context. Budget-aware, prioritized sections.
+
+### Namespace Merging
+
+When a project namespace is set (e.g. `ns=engram-rs`), resume fetches from **both** the project
+namespace and `default`. This ensures cross-project knowledge (user identity, preferences, universal
+lessons stored in `default`) is always available alongside project-specific context.
+
+Recall follows the same rule: queries with a namespace filter also include `default` results.
 
 ### Section Priority (filled in order)
 

@@ -202,7 +202,8 @@ pub fn recall(
             }
         }
         if let Some(ref ns) = req.namespace {
-            if mem.namespace != *ns {
+            // Allow "default" namespace memories through when filtering by a project namespace
+            if mem.namespace != *ns && mem.namespace != "default" {
                 return false;
             }
         }

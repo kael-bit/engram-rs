@@ -291,19 +291,38 @@ pub(super) async fn do_resume(
 
         // Use list_by_layer_meta — skip embedding blobs, resume doesn't need them.
         // DB already sorts by importance DESC.
-        let core: Vec<db::Memory> = d
+
+        // When a project namespace is set, also include "default" namespace
+        // memories (cross-project knowledge: identity, preferences, universal lessons).
+        let include_default = ns_filter.as_deref().map_or(false, |ns| ns != "default");
+
+        let mut core: Vec<db::Memory> = d
             .list_by_layer_meta_ns(db::Layer::Core, core_limit * 2, 0, ns_filter.as_deref())
-            .unwrap_or_default()
-            .into_iter()
+            .unwrap_or_default();
+        if include_default {
+            let default_core = d
+                .list_by_layer_meta_ns(db::Layer::Core, core_limit, 0, Some("default"))
+                .unwrap_or_default();
+            let existing: std::collections::HashSet<String> = core.iter().map(|m| m.id.clone()).collect();
+            core.extend(default_core.into_iter().filter(|m| !existing.contains(&m.id)));
+        }
+        let core: Vec<db::Memory> = core.into_iter()
             .filter(|m| ws_match(m))
             .take(core_limit)
             .collect();
 
         // Working: exclude session-source memories (they go in sessions section)
-        let working: Vec<db::Memory> = d
+        let mut working: Vec<db::Memory> = d
             .list_by_layer_meta_ns(db::Layer::Working, core_limit * 2, 0, ns_filter.as_deref())
-            .unwrap_or_default()
-            .into_iter()
+            .unwrap_or_default();
+        if include_default {
+            let default_working = d
+                .list_by_layer_meta_ns(db::Layer::Working, core_limit, 0, Some("default"))
+                .unwrap_or_default();
+            let existing: std::collections::HashSet<String> = working.iter().map(|m| m.id.clone()).collect();
+            working.extend(default_working.into_iter().filter(|m| !existing.contains(&m.id)));
+        }
+        let working: Vec<db::Memory> = working.into_iter()
             .filter(|m| ws_match(m) && !is_session(m))
             .take(core_limit)
             .collect();
