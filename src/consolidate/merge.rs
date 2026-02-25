@@ -8,12 +8,14 @@ use tracing::{debug, info, warn};
 
 use super::{format_ts, layer_label, merge_tags};
 
+use crate::thresholds;
+
 /// Cosine threshold for near-duplicate detection and merging.
-const MERGE_SIMILARITY: f64 = 0.78;
+const MERGE_SIMILARITY: f64 = thresholds::MERGE_SIM;
 
 /// Cosine window for reconcile: related-but-not-duplicate pairs.
-const RECONCILE_MIN_SIM: f64 = 0.55;
-const RECONCILE_MAX_SIM: f64 = MERGE_SIMILARITY;
+const RECONCILE_MIN_SIM: f64 = thresholds::RECONCILE_MIN_SIM;
+const RECONCILE_MAX_SIM: f64 = thresholds::RECONCILE_MAX_SIM;
 
 const MERGE_SYSTEM: &str = "Merge these related memory entries into a single concise note. Rules:\n\
     - Preserve ALL specific names, tools, libraries, versions, and technical terms.\n\

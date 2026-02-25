@@ -627,7 +627,7 @@ pub async fn quick_semantic_dup(
     db: &MemoryDB,
     content: &str,
 ) -> Result<Option<String>, EngramError> {
-    quick_semantic_dup_threshold(ai_cfg, db, content, 0.78).await
+    quick_semantic_dup_threshold(ai_cfg, db, content, crate::thresholds::RECALL_DEDUP_SIM).await
 }
 
 /// Like `quick_semantic_dup` but with a custom cosine threshold.

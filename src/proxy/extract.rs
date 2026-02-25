@@ -144,7 +144,7 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
         }
 
         let dup_id: Option<String> =
-            match crate::recall::quick_semantic_dup_threshold(ai_cfg, &state.db, &entry.content, 0.60).await {
+            match crate::recall::quick_semantic_dup_threshold(ai_cfg, &state.db, &entry.content, crate::thresholds::PROXY_DEDUP_SIM).await {
                 Ok(id) => id,
                 Err(_) => {
                     let db = state.db.clone();

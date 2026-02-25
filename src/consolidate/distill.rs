@@ -79,7 +79,7 @@ async fn distill_one_ns(
 
     let db3 = db.clone();
     let sc = summary.clone();
-    let is_dup = tokio::task::spawn_blocking(move || db3.is_near_duplicate_with(&sc, 0.75))
+    let is_dup = tokio::task::spawn_blocking(move || db3.is_near_duplicate_with(&sc, crate::thresholds::TRIAGE_DEDUP_SIM))
         .await.unwrap_or(false);
 
     if is_dup {

@@ -49,7 +49,7 @@ pub struct SandboxResult {
     pub summary: String,
 }
 
-const SAFETY_THRESHOLD: f64 = 0.7;
+const SAFETY_THRESHOLD: f64 = crate::thresholds::SANDBOX_SAFETY_THRESHOLD;
 
 /// Heuristic rules that catch obviously bad audit decisions.
 pub struct RuleChecker<'a> {
@@ -112,7 +112,7 @@ impl<'a> RuleChecker<'a> {
         } else {
             (self.now_ms - mem.created_at) as f64 / 3_600_000.0
         };
-        if mod_age_h < 24.0 {
+        if mod_age_h < crate::thresholds::SANDBOX_RECENT_MOD_HOURS {
             return OpGrade {
                 op: op.clone(), grade: Grade::Bad,
                 reason: format!("deleting memory modified {:.1}h ago (< 24h)", mod_age_h),
@@ -226,7 +226,7 @@ impl<'a> RuleChecker<'a> {
                 || mem.content.to_lowercase().contains("教训")
                 || mem.content.to_lowercase().contains("原则")
                 || mem.content.to_lowercase().contains("严禁");
-            if !(age_h < 48.0 || is_lesson_content) {
+            if !(age_h < crate::thresholds::SANDBOX_NEW_AGE_HOURS || is_lesson_content) {
                 return OpGrade {
                     op: op.clone(), grade: Grade::Marginal,
                     reason: "promoting to Core with zero accesses — unproven value".into(),

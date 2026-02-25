@@ -385,7 +385,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
         for i in 0..embeddings.len() {
             for j in (i + 1)..embeddings.len() {
                 let sim = crate::ai::cosine_similarity(&embeddings[i].1, &embeddings[j].1);
-                if sim > 0.70 {
+                if sim > crate::thresholds::CORE_OVERLAP_SIM {
                     let (id_a, id_b) = if embeddings[i].0 < embeddings[j].0 {
                         (&embeddings[i].0, &embeddings[j].0)
                     } else {
@@ -502,7 +502,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> Cons
             // that the content itself is valuable even without being recalled.
             // This saves design decisions and architecture notes from silent death.
             let worth_keeping = rescue_score >= buffer_threshold / 2.0
-                || mem.importance >= 0.7;
+                || mem.importance >= crate::thresholds::BUFFER_RESCUE_IMPORTANCE;
             if worth_keeping {
                 if db.promote(&mem.id, Layer::Working).is_ok() {
                     promoted_ids.insert(mem.id.clone());

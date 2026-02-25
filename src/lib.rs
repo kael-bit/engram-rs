@@ -8,6 +8,7 @@ pub mod error;
 pub mod extract;
 pub mod proxy;
 pub mod recall;
+pub mod thresholds;
 pub mod util;
 
 use std::sync::Arc;

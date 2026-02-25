@@ -6,8 +6,7 @@ use crate::util::truncate_chars;
 use serde::{Deserialize, Serialize};
 
 /// Similarity range for audit merge hints (below auto-merge threshold).
-const AUDIT_MERGE_MIN_SIM: f64 = 0.65;
-const AUDIT_MERGE_MAX_SIM: f64 = 0.78;
+use crate::thresholds::{AUDIT_MERGE_MIN_SIM, AUDIT_MERGE_MAX_SIM};
 
 // Re-exported for sandbox use
 pub(crate) const AUDIT_SYSTEM_PUB: &str = AUDIT_SYSTEM;

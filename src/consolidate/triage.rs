@@ -174,7 +174,7 @@ pub fn dedup_buffer(db: &MemoryDB) -> usize {
     }
 
     let mut removed: Vec<String> = Vec::new();
-    let threshold = 0.75;
+    let threshold = crate::thresholds::TRIAGE_DEDUP_SIM;
 
     for i in 0..buffers.len() {
         if removed.contains(&buffers[i].0.id) { continue; }

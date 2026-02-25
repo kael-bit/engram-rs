@@ -358,9 +358,9 @@ pub(super) async fn do_resume(
                 // ensures resume stays manageable even at 600+ Core.
                 let identity_boost = |m: &db::Memory| -> f64 {
                     if m.tags.iter().any(|t| matches!(t.as_str(), "identity" | "constraint" | "bootstrap")) {
-                        0.25
+                        crate::thresholds::RESUME_HIGH_RELEVANCE
                     } else if m.kind == "procedural" || m.tags.iter().any(|t| matches!(t.as_str(), "lesson" | "procedural" | "preference")) {
-                        0.10
+                        crate::thresholds::RESUME_LOW_RELEVANCE
                     } else {
                         0.0
                     }
@@ -380,7 +380,7 @@ pub(super) async fn do_resume(
 
                 scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                 let max_core = 20;
-                let threshold = 0.35;
+                let threshold = crate::thresholds::RESUME_CORE_THRESHOLD;
                 let total = scored.len();
                 let kept: Vec<db::Memory> = scored.into_iter()
                     .filter(|(_, s)| *s >= threshold)

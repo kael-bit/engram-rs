@@ -32,7 +32,7 @@ pub(super) async fn create_memory(
             if cfg.has_embed() {
                 tracing::debug!("semantic dedup: checking before insert");
                 match crate::recall::quick_semantic_dup_threshold(
-                    cfg, &state.db, &input.content, 0.65,
+                    cfg, &state.db, &input.content, crate::thresholds::INSERT_DEDUP_SIM,
                 ).await {
                     Ok(Some(existing_id)) if !existing_id.is_empty() => {
                         let db = state.db.clone();
@@ -53,7 +53,7 @@ pub(super) async fn create_memory(
                         let contents_differ = input.content != existing.content;
                         // Jaccard < 0.8 means there's meaningful textual difference
                         let textually_different = !db::jaccard_similar(
-                            &existing.content, &input.content, 0.8,
+                            &existing.content, &input.content, crate::thresholds::INSERT_MERGE_SIM,
                         );
 
                         if contents_differ && textually_different {
