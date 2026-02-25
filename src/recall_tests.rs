@@ -17,7 +17,9 @@ fn tokens_cjk() {
 #[test]
 fn tokens_mixed() {
     let tokens = estimate_tokens("hello 你好");
-    assert!(tokens >= 2);
+    // "hello" ~1.5 + space + "你好" ~2 CJK chars → expect 3-5 tokens
+    assert!(tokens >= 2 && tokens <= 6,
+        "mixed en/cjk 'hello 你好' should be 2-6 tokens, got {tokens}");
 }
 
 // --- recall integration tests ---
@@ -90,10 +92,10 @@ fn budget_limits_output() {
         ..Default::default()
     };
     let result = recall(&db, &req, None, None);
-    assert!(result.memories.len() <= 2, "budget=5 should limit to at most 2 results");
-    // Budget allows one overshoot (the memory that crosses the threshold is included)
-    // but total shouldn't be wildly over budget
-    assert!(result.total_tokens <= 8, "budget=5 shouldn't overshoot to {}", result.total_tokens);
+    // Budget enforcement: first result always included (even if over budget),
+    // subsequent results rejected if they'd exceed budget
+    assert!(result.memories.len() <= 1,
+        "budget=5 tokens should return at most 1 result, got {}", result.memories.len());
 }
 
 #[test]

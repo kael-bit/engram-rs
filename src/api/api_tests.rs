@@ -195,6 +195,9 @@ async fn consolidate_empty_body() {
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let j = body_json(resp).await;
+    // consolidate returns a result object with counts
+    assert!(j.is_object(), "consolidate should return JSON object");
 }
 
 // --- Batch delete ---
