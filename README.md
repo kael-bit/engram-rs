@@ -2,6 +2,10 @@
 
 Persistent memory for AI agents. Store, forget, and recall like a brain.
 
+<p align="center">
+  <img src="docs/engram-quickstart.gif" alt="engram demo — store, context reset, recall" width="720">
+</p>
+
 ## Why?
 
 Most agent memory is just a vector database. Everything stays forever, retrieval is dumb similarity search, and there's no concept of what matters.
@@ -10,13 +14,13 @@ engram is different. It uses a three-layer model inspired by [how human memory a
 
 | Layer | Role | Behavior |
 |-------|------|----------|
-| **Buffer** | Short-term context | Decays in ~24h unless reinforced |
-| **Working** | Active knowledge | High-value signals (lessons, procedures, importance ≥ 0.9) route here directly; others promoted from Buffer by usage + LLM triage |
-| **Core** | Identity & principles | Earned through repeated access, LLM quality gate |
+| **Buffer** | Short-term intake | All new memories land here. Capacity-capped (FIFO overflow), unreinforced entries decay naturally |
+| **Working** | Active knowledge | Promoted from Buffer when accessed repeatedly, reinforced by duplicates, or tagged as lessons/procedures |
+| **Core** | Long-term identity | Promoted from Working through sustained usage and LLM quality gate. Procedures never decay |
 
 You just store memories. The system figures out what's important and promotes it. Unused memories fade naturally. Lessons and procedures persist indefinitely. Storing the same insight again doesn't create duplicates — it reinforces the existing memory's weight.
 
-Single binary, ~9 MB, no Docker, no Python, no external database.
+Single binary, ~9 MB, ~80 MB RSS in production. No Docker, no Python, no external database.
 ## How It Works
 
 ```mermaid
@@ -47,66 +51,14 @@ sequenceDiagram
 
 ## Setup
 
-**For AI agents:** paste this into your agent session and let it handle the rest:
+**For AI agents** — paste this into your session and let it handle the rest:
 
 ```
 Set up engram (persistent memory) by following the guide at:
 https://raw.githubusercontent.com/kael-bit/engram-rs/main/docs/SETUP.md
 ```
 
-**For humans:** see [docs/SETUP.md](docs/SETUP.md) for step-by-step instructions covering Claude Code, OpenClaw, Codex, and other editors. Supports MCP tools or HTTP API integration.
-
-### systemd (Production)
-
-```ini
-# /etc/systemd/system/engram.socket
-[Unit]
-Description=engram memory engine socket
-
-[Socket]
-ListenStream=3917
-NoDelay=true
-
-[Install]
-WantedBy=sockets.target
-```
-
-```ini
-# /etc/systemd/system/engram.service
-[Unit]
-Description=engram memory engine
-After=network.target
-Requires=engram.socket
-
-[Service]
-ExecStart=/usr/local/bin/engram
-Environment=ENGRAM_DB=/var/lib/engram/engram.db
-# Optional: enable auth for remote/shared deployments
-# Environment=ENGRAM_API_KEY=your-secret-key
-
-# Embeddings
-Environment=ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings
-Environment=ENGRAM_EMBED_KEY=sk-xxx
-
-# LLM — default model (text processing: merge, rerank, expand)
-Environment=ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions
-Environment=ENGRAM_LLM_KEY=sk-xxx
-Environment=ENGRAM_LLM_MODEL=gpt-4o-mini
-
-# Judgment — Core promotion gate + audit (needs strong model)
-Environment=ENGRAM_GATE_MODEL=claude-sonnet-4-6
-Restart=always
-RestartSec=1
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Socket activation gives zero-downtime deploys — the socket stays open during restarts, queuing connections in the kernel.
-
-```bash
-sudo systemctl enable --now engram.socket engram
-```
+**For humans** — see [docs/SETUP.md](docs/SETUP.md) for step-by-step integration (MCP or HTTP API).
 
 ## Features
 
@@ -120,257 +72,38 @@ Three kinds of memory with different decay behavior:
 | `episodic` | Normal | Events, experiences, time-bound context |
 | `procedural` | Near-zero | Workflows, instructions, how-to — persists indefinitely |
 
-```bash
-curl -X POST http://localhost:3917/memories \
-  -d '{"content": "deploy with: cargo build --release && scp ...", "kind": "procedural"}'
-```
-
 ### Fact Triples & Contradiction Resolution
 
-engram extracts structured facts as (subject, predicate, object) triples from memories, enabling relationship queries and automatic contradiction detection:
-
-```bash
-# Store facts explicitly
-curl -X POST http://localhost:3917/facts \
-  -d '{"facts": [{"subject": "alice", "predicate": "role", "object": "engineer"}]}'
-
-# Query by entity
-curl 'http://localhost:3917/facts?entity=alice'
-
-# When a contradicting fact is inserted, the old one is auto-superseded
-curl -X POST http://localhost:3917/facts \
-  -d '{"facts": [{"subject": "alice", "predicate": "role", "object": "manager"}]}'
-# Response includes {"resolved": 1} — the old "engineer" fact is now timestamped as superseded
-
-# View fact history
-curl 'http://localhost:3917/facts/history?subject=alice&predicate=role'
-```
-
-Facts are also extracted automatically when using `/extract`.
+Structured (subject, predicate, object) relationships extracted from memories. When a contradicting fact is stored, the old one is automatically superseded with a timestamp — no manual cleanup needed.
 
 ### Hybrid Search
 
-Recall combines multiple signals:
-
-- **Semantic search**: cosine similarity on embeddings (requires AI)
-- **FTS5 keyword search**: BM25 with jieba segmentation for Chinese and bigram tokenization for Japanese/Korean
-- **Fact lookup**: exact entity matching via the facts table
-- **Composite scoring**: `(0.6 × relevance + 0.2 × importance + 0.2 × recency) × layer_bonus`
-- **Keyword affinity**: semantic-only results that lack any query terms get a 0.7× penalty — mitigates embedding model weaknesses with short CJK queries
-- **Stop word filtering**: common words (的、是、了、the、is、etc.) are excluded from FTS queries to reduce noise
-- **FTS relevance floor**: keyword matches require minimum relevance to contribute to dual-hit boosting
-- **Score cap**: final scores are capped at 1.0 to prevent threshold confusion from stacked bonuses
-
-Results are deduplicated across all search modes. When both semantic and keyword search find the same memory, relevance gets a boost.
-
-```bash
-# Basic recall (fast — embedding lookup + local scoring)
-curl -X POST http://localhost:3917/recall \
-  -d '{"query": "deploy process", "limit": 5}'
-
-# With LLM reranking (slower — adds ~2-4s for an LLM call, better ordering)
-curl -X POST http://localhost:3917/recall \
-  -d '{"query": "deploy process", "limit": 5, "rerank": true}'
-
-# With query expansion (slower — adds ~1-2s, helps vague/short queries)
-curl -X POST http://localhost:3917/recall \
-  -d '{"query": "部署", "limit": 5, "expand": true}'
-```
-
-**Recall parameters:**
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `query` | string | required | Search query |
-| `limit` | int | `20` | Max results |
-| `budget_tokens` | int | `2000` | Token budget (0 = unlimited) |
-| `rerank` | bool | `false` | LLM reranking — better accuracy, +2-4s latency |
-| `expand` | bool | `false` | LLM query expansion — helps short/vague queries, +1-2s |
-| `min_score` | float | `0.0` | Minimum relevance threshold |
-| `dry` | bool | `false` | Don't increment access counts |
-| `tags` | string[] | — | Filter by tags |
-| `source` | string | — | Filter by source |
-| `layers` | int[] | — | Filter by layer (1=Buffer, 2=Working, 3=Core) |
-| `since` / `until` | string | — | ISO 8601 time range |
-| `sort_by` | string | `"score"` | `"score"`, `"recent"`, or `"accessed"` |
-| `namespace` | string | — | Multi-agent isolation |
-
-**Performance guidance:**
-- Default recall (no `rerank`/`expand`): **~30ms** local, **~1.2s** with first-time embedding
-- `rerank: true` adds an LLM round-trip (~2-4s) — use only when result ordering matters
-- `expand: true` adds an LLM round-trip (~1-2s) — use for short or ambiguous queries
-- Auto-expand triggers when top result relevance < 0.25 (won't activate for most queries)
-- Embedding results are cached — repeated queries hit in **<15ms**
+Recall combines semantic embeddings, BM25 keyword search (with [jieba](https://github.com/messense/jieba-rs) segmentation for CJK), and fact-triple lookup into a single ranked result set. Dual-hit boosting when multiple signals agree. Embedding cache for repeat queries (<15ms).
 
 ### Session Recovery
 
-One call to restore agent context on wake-up or after context compaction:
-
-```bash
-# Full resume
-curl http://localhost:3917/resume?hours=4
-
-# Token-efficient (recommended for agents)
-curl 'http://localhost:3917/resume?hours=4&compact=true&budget=16000'
-```
-
-Returns structured sections: `core` (identity/permanent), `working` (active context), `recent` (time-windowed), `sessions` (session notes), `next_actions` (tagged next-action).
-
-`compact=true` strips metadata, `budget=N` caps total output characters (default 16000, ~4K tokens). When budget is tight, top items stay full-length while lower-priority items compress to one-line summaries. Core memories are relevance-filtered against current session context — identity and constraints always included, unrelated knowledge is omitted.
-
-**When to call resume:**
-- On session start (new conversation, fresh context)
-- After context compaction (summaries are lossy — resume restores details)
-- On heartbeat / cron wake-up
+One call to restore agent context on wake-up or after context compaction. Returns structured sections: core identity, active context, recent history, and pending actions. Budget-aware — compresses lower-priority items when token space is tight.
 
 ### Namespace Isolation
 
-One engram instance, multiple projects. Set `ENGRAM_NAMESPACE` per workspace:
-
-```bash
-# MCP: set in .mcp.json env
-"ENGRAM_NAMESPACE": "my-project"
-
-# HTTP: set env var or pass header
-curl -X POST http://localhost:3917/memories \
-  -H 'X-Namespace: my-project' \
-  -d '{"content": "project-specific context"}'
-```
-
-Resume and recall automatically include the `default` namespace alongside your project namespace. Store cross-project knowledge (user identity, preferences, universal lessons) to `default` explicitly:
-
-```bash
-curl -X POST http://localhost:3917/memories \
-  -H 'X-Namespace: default' \
-  -d '{"content": "User prefers concise Chinese replies"}'
-```
-
-Consolidation merge is directional: project memories can be absorbed into `default`, but `default` memories are never pulled into a project namespace.
+One engram instance, multiple projects. Each workspace gets its own memory space with shared access to a `default` namespace for cross-project knowledge (user identity, preferences, universal lessons).
 
 ### Triggers
 
-Pre-action safety recall. Tag memories with `trigger:action-name`, then query before risky operations:
-
-```bash
-# Store a lesson
-curl -X POST http://localhost:3917/memories \
-  -d '{"content": "never force-push to main", "tags": ["trigger:git-push"]}'
-
-# Before pushing, check
-curl http://localhost:3917/triggers/git-push
-```
+Pre-action safety recall. Tag memories with `trigger:deploy` or `trigger:git-push`, then query before risky operations to surface relevant lessons.
 
 ### Background Maintenance
 
-engram runs autonomously — no cron or external scheduler needed:
+Runs autonomously — no cron or external scheduler needed:
 
-- **Auto-consolidation** every 30 minutes: promotes active memories, decays neglected ones, reconciles buffer updates against Working/Core
-- **Auto-audit** every 24 hours: LLM reviews all Working/Core memories for quality, merges duplicates, demotes stale entries
+- **Auto-consolidation** every 30 minutes: promotes active memories, decays neglected ones, deduplicates and merges related content
+- **Auto-audit** every 24 hours: LLM reviews memory quality, merges duplicates, demotes stale entries
 
-## API Reference
+## MCP & API
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/` | Health + endpoint list |
-| `GET` | `/health` | Health only (uptime, RSS, cache, integrity — no endpoints) |
-| `GET` | `/stats` | Layer counts |
-| `POST` | `/memories` | Create memory |
-| `POST` | `/memories/batch` | Batch create |
-| `GET` | `/memories` | List (`?layer=N&tag=X&ns=X&limit=50&offset=0`) |
-| `GET` | `/memories/:id` | Get by id (prefix match supported) |
-| `PATCH` | `/memories/:id` | Update content/tags/importance/kind |
-| `DELETE` | `/memories/:id` | Delete |
-| `DELETE` | `/memories` | Batch delete (`{"ids": [...]}` or `{"namespace": "x"}`) |
-| `GET` | `/trash` | List soft-deleted memories (`?limit=100&offset=0`) |
-| `POST` | `/trash/:id/restore` | Restore a memory from trash |
-| `DELETE` | `/trash` | Permanently purge all trash |
-| `POST` | `/recall` | Hybrid search (semantic + keyword + facts) |
-| `GET` | `/search` | Quick keyword search (`?q=term&limit=10`) |
-| `GET` | `/recent` | Recent memories (`?hours=2&limit=20`) |
-| `GET` | `/resume` | Session recovery (`?hours=4&compact=true&budget=16000`) |
-| `GET` | `/triggers/:action` | Pre-action recall |
-| `POST` | `/consolidate` | Maintenance cycle (`{"merge": true}` for LLM merge) |
-| `POST` | `/audit` | LLM-powered memory reorganization (requires AI) |
-| `POST` | `/extract` | LLM text → structured memories |
-| `POST` | `/repair` | Fix FTS index + backfill embeddings |
-| `POST` | `/vacuum` | Reclaim disk space |
-| `GET` | `/export` | Export as JSON (`?embed=true` includes vectors) |
-| `POST` | `/import` | Import memories (skips existing ids) |
-| `POST` | `/facts` | Insert fact triples |
-| `GET` | `/facts` | Query facts by entity (`?entity=alice`) |
-| `GET` | `/facts/all` | List all facts |
-| `GET` | `/facts/conflicts` | Check conflicts (`?subject=X&predicate=Y`) |
-| `GET` | `/facts/history` | Fact history (`?subject=X&predicate=Y`) |
-| `DELETE` | `/facts/:id` | Delete fact |
-| `GET` | `/ui` | Web dashboard |
+16 MCP tools for Claude Code, Cursor, Windsurf, OpenClaw, and others — see [docs/MCP.md](docs/MCP.md) and root `mcp-config.json`.
 
-## MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `engram_store` | Store a memory with optional importance, tags, kind |
-| `engram_recall` | Hybrid search with budget, time filters, reranking |
-| `engram_recent` | List recent memories by time |
-| `engram_resume` | Full session recovery bootstrap |
-| `engram_search` | Quick keyword search |
-| `engram_extract` | LLM-powered text → memories |
-| `engram_consolidate` | Run promotion/decay/merge cycle |
-| `engram_stats` | Layer counts and status |
-| `engram_health` | Detailed health check |
-| `engram_triggers` | Pre-action safety recall |
-| `engram_repair` | Fix indexes and backfill embeddings |
-| `engram_delete` | Delete a memory by ID |
-| `engram_update` | Update importance, tags, or layer |
-| `engram_trash` | List soft-deleted memories |
-| `engram_restore` | Restore a memory from trash |
-
-## Configuration
-
-### Core
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENGRAM_PORT` | `3917` | Server port |
-| `ENGRAM_DB` | `engram.db` | SQLite database path |
-| `ENGRAM_API_KEY` | — | Bearer token auth (optional, for remote/shared) |
-| `ENGRAM_WORKSPACE` | — | Default workspace tag for `/resume` |
-| `RUST_LOG` | `info` | Log level (`debug` for verbose) |
-
-### LLM & Embeddings
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENGRAM_LLM_URL` | — | Chat completions endpoint (enables AI features) |
-| `ENGRAM_LLM_KEY` | — | LLM API key |
-| `ENGRAM_LLM_MODEL` | `gpt-4o-mini` | Default model (used as fallback for all components) |
-| `ENGRAM_EMBED_URL` | *(from LLM_URL)* | Embeddings endpoint |
-| `ENGRAM_EMBED_KEY` | *(LLM_KEY)* | Embeddings API key |
-| `ENGRAM_EMBED_MODEL` | `text-embedding-3-small` | Embedding model |
-
-### Model Routing
-
-Engram uses LLMs for several tasks with different requirements. You can assign a model per role:
-
-| Role | Env var(s) | Needs | Recommended |
-|------|-----------|-------|-------------|
-| **Judgment** — Core promotion gate | `ENGRAM_GATE_MODEL` | Distinguishing lessons from changelogs, deciding what's permanent | Claude Sonnet, GPT-4o |
-| **Judgment** — Memory audit | `ENGRAM_AUDIT_MODEL` | Reviewing memory quality, merge/demote/delete decisions | *(falls back to GATE_MODEL)* |
-| **Text processing** — Merge, rerank, query expansion, triage | `ENGRAM_MERGE_MODEL`, `ENGRAM_RERANK_MODEL`, `ENGRAM_EXPAND_MODEL`, `ENGRAM_EXTRACT_MODEL` | Text transformation, no judgment calls | GPT-4o-mini, GPT-5-mini |
-
-All default to `ENGRAM_LLM_MODEL` if not set. If you only set one model, everything works — but separating roles lets you save cost without sacrificing quality where it matters.
-
-### Consolidation
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENGRAM_NAMESPACE` | *(none)* | Default namespace for project isolation. Resume/recall auto-include `default` namespace |
-| `ENGRAM_CONSOLIDATE_MINS` | `30` | Auto-consolidation interval (0 = off) |
-| `ENGRAM_LLM_LEVEL` | `auto` | LLM usage in consolidation: `auto` (heuristic-first, LLM on uncertainty), `full` (always LLM), `off` (zero LLM calls) |
-| `ENGRAM_AUTO_MERGE` | `false` | Enable LLM merge in auto-consolidation |
-| `ENGRAM_AUTO_RERANK` | `false` | Auto-rerank all recall results via LLM |
-| `ENGRAM_AUDIT_HOURS` | `24` | Background audit interval (0 = off) |
-| `ENGRAM_WORKING_CAP` | `30` | Max Working memories (excess evicted by utility) |
-| `ENGRAM_BUFFER_CAP` | `200` | Max Buffer memories (overflow evicted FIFO) |
+HTTP API and configuration reference: [docs/SETUP.md](docs/SETUP.md)
 
 ## License
 
