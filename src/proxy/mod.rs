@@ -206,6 +206,3 @@ async fn stream_response(
 }
 
 
-#[cfg(test)]
-#[path = "proxy_tests.rs"]
-mod tests;

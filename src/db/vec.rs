@@ -15,9 +15,9 @@ fn top_k(scored: &mut Vec<(String, f64)>, limit: usize) {
 
 /// In-memory vector entry: embedding + namespace for filtering without DB lookup.
 #[derive(Clone)]
-pub(crate) struct VecEntry {
-    pub(crate) emb: Vec<f32>,
-    pub(crate) namespace: String,
+pub struct VecEntry {
+    pub emb: Vec<f32>,
+    pub namespace: String,
 }
 
 const HNSW_MAX_NB_CONN: usize = 16;
@@ -29,7 +29,7 @@ const HNSW_INITIAL_CAPACITY: usize = 10_000;
 const NS_OVERFETCH: usize = 5;
 
 /// Combined vector index: HashMap for ID lookups + HNSW for ANN search.
-pub(crate) struct VecIndex {
+pub struct VecIndex {
     entries: HashMap<String, VecEntry>,
     hnsw: Hnsw<'static, f32, DistCosine>,
     id_to_idx: HashMap<String, usize>,
@@ -75,12 +75,11 @@ impl VecIndex {
         // For heavy churn, a periodic rebuild would be needed.
     }
 
-    pub(crate) fn get(&self, id: &str) -> Option<&VecEntry> {
+    pub fn get(&self, id: &str) -> Option<&VecEntry> {
         self.entries.get(id)
     }
 
-    #[cfg(test)]
-    pub(crate) fn contains_key(&self, id: &str) -> bool {
+    pub fn contains_key(&self, id: &str) -> bool {
         self.entries.contains_key(id)
     }
 
@@ -193,7 +192,7 @@ impl MemoryDB {
     }
 
     /// Remove an embedding from the vector index.
-    pub(super) fn vec_index_remove(&self, id: &str) {
+    pub fn vec_index_remove(&self, id: &str) {
         if let Ok(mut idx) = self.vec_index.write() {
             idx.remove(id);
         }
@@ -356,6 +355,3 @@ impl MemoryDB {
     }
 }
 
-#[cfg(test)]
-#[path = "vec_tests.rs"]
-mod tests;

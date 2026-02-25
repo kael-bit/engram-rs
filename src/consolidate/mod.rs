@@ -717,6 +717,3 @@ pub fn format_ts(ms: i64) -> String {
     }
 }
 
-#[cfg(test)]
-#[path = "../consolidate_tests.rs"]
-mod tests;

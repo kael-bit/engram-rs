@@ -217,6 +217,3 @@ pub fn dedup_buffer(db: &MemoryDB) -> usize {
     removed.len()
 }
 
-#[cfg(test)]
-#[path = "triage_tests.rs"]
-mod triage_tests;

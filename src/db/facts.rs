@@ -317,6 +317,3 @@ impl MemoryDB {
 }
 
 
-#[cfg(test)]
-#[path = "facts_tests.rs"]
-mod tests;

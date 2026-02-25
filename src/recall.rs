@@ -113,7 +113,6 @@ pub fn recency_score(last_accessed: i64, decay_rate: f64) -> f64 {
     (-rate * hours / 168.0).exp()
 }
 
-#[cfg(test)]
 pub fn score_combined(importance: f64, relevance: f64, last_accessed: i64) -> f64 {
     let now = crate::db::now_ms();
     let age_hours = ((now - last_accessed) as f64 / 3_600_000.0).max(0.0);
@@ -661,7 +660,3 @@ pub async fn quick_semantic_dup_threshold(
 }
 
 
-
-#[cfg(test)]
-#[path = "recall_tests.rs"]
-mod recall_tests;

@@ -1,4 +1,6 @@
 use engram::recall::*;
+use engram::db::{MemoryDB, MemoryInput, Layer, Memory};
+use std::collections::HashSet;
 
 #[test]
 fn tokens_ascii() {
@@ -24,7 +26,6 @@ fn tokens_mixed() {
 
 // --- recall integration tests ---
 
-use engram::db::{MemoryDB, MemoryInput, Layer, Memory};
 
 fn test_db_with_data() -> MemoryDB {
     let db = MemoryDB::open(":memory:").expect("in-memory db");

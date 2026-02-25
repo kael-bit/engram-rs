@@ -1,10 +1,10 @@
 //! SQLite-backed memory storage with FTS5 full-text search.
 
 mod memory;
-mod fts;
+pub mod fts;
 mod facts;
 mod proxy;
-mod vec;
+pub mod vec;
 
 use std::sync::{OnceLock, RwLock};
 
@@ -569,7 +569,7 @@ const DROP_TRIGGERS: [&str; 3] = [
 pub struct MemoryDB {
     pool: Pool<SqliteConnectionManager>,
     /// In-memory HNSW-backed vector index for fast semantic search.
-    vec_index: RwLock<vec::VecIndex>,
+    pub vec_index: RwLock<vec::VecIndex>,
 }
 
 
@@ -895,17 +895,3 @@ fn row_to_memory_impl(row: &rusqlite::Row, include_embedding: bool) -> rusqlite:
 }
 
 
-#[cfg(test)]
-mod meta_tests {
-    use super::*;
-
-    #[test]
-    fn meta_get_set() {
-        let db = MemoryDB::open(":memory:").unwrap();
-        assert_eq!(db.get_meta("nonexistent"), None);
-        db.set_meta("last_audit_ms", "1234567890").unwrap();
-        assert_eq!(db.get_meta("last_audit_ms"), Some("1234567890".to_string()));
-        db.set_meta("last_audit_ms", "9999999999").unwrap();
-        assert_eq!(db.get_meta("last_audit_ms"), Some("9999999999".to_string()));
-    }
-}

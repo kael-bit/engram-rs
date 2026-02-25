@@ -1,6 +1,7 @@
 use crate::ai::{self, AiConfig};
 use crate::SharedDB;
 use crate::util::truncate_chars;
+use serde::Deserialize;
 use tracing::{info, warn};
 
 #[allow(dead_code)]
@@ -11,9 +12,42 @@ const FACT_EXTRACT_PROMPT: &str = "Extract factual triples from this memory text
     - Only extract concrete, stable facts — NOT transient states or opinions\n\
     - Subject/object should be short noun phrases (1-3 words)\n\
     - Predicate should be a verb or relationship label\n\
-    - Skip if the text is purely procedural/operational with no factual content\n\n\
-    Output a JSON array of objects: [{\"subject\": \"...\", \"predicate\": \"...\", \"object\": \"...\"}]\n\
-    Return [] if no facts can be extracted. Output ONLY the JSON array.";
+    - Skip if the text is purely procedural/operational with no factual content";
+
+#[derive(Deserialize)]
+struct FactsResult {
+    facts: Vec<FactTriple>,
+}
+
+#[derive(Deserialize)]
+struct FactTriple {
+    subject: String,
+    predicate: String,
+    object: String,
+}
+
+#[allow(dead_code)]
+fn fact_extract_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "facts": {
+                "type": "array",
+                "description": "Extracted triples. Empty array if nothing to extract.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "subject": {"type": "string", "description": "Short noun phrase (1-3 words)"},
+                        "predicate": {"type": "string", "description": "Verb or relationship label"},
+                        "object": {"type": "string", "description": "Short noun phrase (1-3 words)"}
+                    },
+                    "required": ["subject", "predicate", "object"]
+                }
+            }
+        },
+        "required": ["facts"]
+    })
+}
 
 #[allow(dead_code)]
 pub(super) async fn extract_facts_batch(db: &SharedDB, cfg: &AiConfig, limit: usize) -> usize {
@@ -32,7 +66,11 @@ pub(super) async fn extract_facts_batch(db: &SharedDB, cfg: &AiConfig, limit: us
     let mut total = 0;
     for mem in &mems {
         let content = truncate_chars(&mem.content, 500);
-        let result = match ai::llm_chat_as(cfg, "extract", FACT_EXTRACT_PROMPT, &content).await {
+        let result: ai::ToolCallResult<FactsResult> = match ai::llm_tool_call(
+            cfg, "extract", FACT_EXTRACT_PROMPT, &content,
+            "extract_facts", "Extract factual triples from the text",
+            fact_extract_schema(),
+        ).await {
             Ok(r) => r,
             Err(e) => {
                 warn!(error = %e, id = %mem.id, "fact extraction LLM failed");
@@ -52,14 +90,9 @@ pub(super) async fn extract_facts_batch(db: &SharedDB, cfg: &AiConfig, limit: us
             }).await;
         }
 
-        let json_str = crate::ai::unwrap_json(&result.content);
-        let triples: Vec<serde_json::Value> = match serde_json::from_str(&json_str) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+        let triples = result.value.facts;
 
         if triples.is_empty() {
-            // Insert a sentinel fact so we don't retry this memory every cycle
             let sentinel = crate::db::FactInput {
                 subject: "_no_facts".into(),
                 predicate: "_scanned".into(),
@@ -75,16 +108,10 @@ pub(super) async fn extract_facts_batch(db: &SharedDB, cfg: &AiConfig, limit: us
 
         let mut count = 0;
         for t in &triples {
-            let (Some(subj), Some(pred), Some(obj)) = (
-                t.get("subject").and_then(|v| v.as_str()),
-                t.get("predicate").and_then(|v| v.as_str()),
-                t.get("object").and_then(|v| v.as_str()),
-            ) else { continue };
-
             let input = crate::db::FactInput {
-                subject: subj.to_string(),
-                predicate: pred.to_string(),
-                object: obj.to_string(),
+                subject: t.subject.clone(),
+                predicate: t.predicate.clone(),
+                object: t.object.clone(),
                 memory_id: Some(mem.id.clone()),
                 valid_from: None,
             };

@@ -348,6 +348,3 @@ fn spawn_embed_batch(db: crate::SharedDB, cfg: ai::AiConfig, items: Vec<(String,
 }
 
 
-#[cfg(test)]
-#[path = "api_tests.rs"]
-mod api_tests;

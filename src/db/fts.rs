@@ -261,6 +261,3 @@ pub fn is_stopword(word: &str) -> bool {
 }
 
 
-#[cfg(test)]
-#[path = "fts_tests.rs"]
-mod tests;

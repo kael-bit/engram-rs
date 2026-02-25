@@ -1,8 +1,8 @@
 use engram::api::router;
 use engram::AppState;
-use engram::EmbedCache;;
+use engram::EmbedCache;
 use axum::body::Body;
-use axum::http::StatusCode;
+use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 

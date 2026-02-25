@@ -1066,6 +1066,3 @@ impl MemoryDB {
 }
 
 
-#[cfg(test)]
-#[path = "memory_tests.rs"]
-mod memory_tests;
