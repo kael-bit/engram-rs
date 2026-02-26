@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.kael-bit/engram",
+  "description": "Hierarchical memory for AI agents. Three-layer (buffer/working/core) with decay and promotion.",
+  "repository": {
+    "url": "https://github.com/kael-bit/engram-rs",
+    "source": "github"
+  },
+  "version": "0.10.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "engram-rs-mcp",
+      "version": "0.10.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "URL of the engram server",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "ENGRAM_URL"
+        },
+        {
+          "description": "API key for authentication",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "ENGRAM_API_KEY"
+        }
+      ]
+    }
+  ]
+}

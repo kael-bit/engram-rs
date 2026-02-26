@@ -535,7 +535,7 @@ fn buffer_cap_evicts_oldest() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all().build().unwrap();
     rt.block_on(async {
-        engram::consolidate::consolidate(db.clone(), None, None).await;
+        engram::consolidate::consolidate(db.clone(), None, None, false).await;
     });
 
     let after = db.list_by_layer_meta(Layer::Buffer, 100, 0).unwrap();

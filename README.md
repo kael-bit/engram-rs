@@ -58,7 +58,29 @@ sequenceDiagram
 
 - An **OpenAI-compatible or Anthropic-native API** for embeddings (`text-embedding-3-small`) and LLM calls (consolidation, triage, audit). Set `ENGRAM_LLM_URL` and `ENGRAM_LLM_KEY`. For Anthropic's native `/v1/messages` format, also set `ENGRAM_LLM_PROVIDER=anthropic`. Without this, engram still works but falls back to keyword search and heuristic-only lifecycle — you lose the smart parts.
 
-## Setup
+## Install
+
+**One-liner:**
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/kael-bit/engram-rs/main/install.sh | bash
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/kael-bit/engram-rs/main/install.ps1 | iex
+```
+
+The installer walks you through download, configuration, and startup interactively.
+
+**Or manually:**
+
+```bash
+# From source
+cargo install --git https://github.com/kael-bit/engram-rs.git
+
+# Or via npm (MCP wrapper)
+npx engram-rs-mcp
+```
 
 **For AI agents** — paste this into your session and let it handle the rest:
 
@@ -67,7 +89,7 @@ Set up engram (persistent memory) by following the guide at:
 https://raw.githubusercontent.com/kael-bit/engram-rs/main/docs/SETUP.md
 ```
 
-**For humans** — see [docs/SETUP.md](docs/SETUP.md) for step-by-step integration (MCP or HTTP API).
+See [docs/SETUP.md](docs/SETUP.md) for full configuration reference.
 
 ## Features
 

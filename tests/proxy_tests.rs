@@ -83,6 +83,7 @@ fn test_state() -> engram::AppState {
         ai: None,
         api_key: None,
         embed_cache: engram::EmbedCache::new(4),
+        embed_queue: None,
         proxy: None,
         started_at: std::time::Instant::now(),
         last_proxy_turn: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),

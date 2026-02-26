@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.11.0
+
+### Highlights
+
+- **Interactive install scripts**: One-liner setup for macOS, Linux, and Windows. Walks through download, configuration (LLM, embeddings, port, database), MCP client setup, and startup.
+- **Embed queue with time-window batching**: Embedding requests are batched using a 500ms time window with a 50-item cap — first item triggers the window, flush on expiry or cap hit. Eliminates per-memory API round-trips.
+- **Embed-only mode**: Start engram with just `ENGRAM_EMBED_URL` — no LLM required. Semantic search works, consolidation falls back to heuristics.
+- **HNSW memory optimization**: Incremental reconcile/merge (O(new×existing) instead of O(n²)), auto-rebuild at >20% ghost ratio, dynamic initial capacity, embeddings loaded from vec index instead of SQLite.
+
+### Features
+
+- `install.sh` — interactive installer for macOS/Linux (binary download, cargo, systemd, MCP config)
+- `install.ps1` — interactive installer for Windows (binary download, cargo, MCP config)
+- Embed queue: `MAX_BATCH=50`, `WINDOW_MS=500`, configurable in `src/lib.rs`
+- Embed-only `AiConfig::from_env()` — starts with embedding support even without LLM credentials
+- HNSW `last_reconcile_ts` tracking for incremental reconciliation
+- HNSW auto-rebuild when ghost node ratio exceeds 20%
+- Dynamic HNSW capacity: `max(count * 2, 1000)`
+- Health endpoint now reports `embed_queue_pending` count
+
+### Fixes
+
+- Consolidation no longer causes 2x memory spike from full HNSW rebuild
+- Resume output sorted by importance (descending) as final sort pass
+- Fixed embed queue race condition on shutdown
+
 ## 0.10.0
 
 ### Highlights
