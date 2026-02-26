@@ -186,6 +186,7 @@ async fn health_data(state: &AppState) -> serde_json::Value {
         "db_size_mb": db_size_mb,
         "ai_enabled": state.ai.is_some(),
         "embed_cache": { "size": cache_len, "capacity": cache_cap, "hits": cache_hits, "misses": cache_misses },
+        "embed_queue_pending": state.embed_queue.as_ref().map_or(0, |q| q.pending_count()),
         "proxy": {
             "enabled": state.proxy.is_some(),
             "requests": proxy_reqs,

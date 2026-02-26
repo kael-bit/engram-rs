@@ -88,7 +88,9 @@ pub(super) async fn create_memory(
                                     .map_err(|e| EngramError::Internal(e.to_string()))?
                                     .ok_or(EngramError::NotFound)?;
 
-                                if let Some(ref cfg) = state.ai {
+                                if let Some(ref eq) = state.embed_queue {
+                                    eq.push(mem.id.clone(), mem.content.clone());
+                                } else if let Some(ref cfg) = state.ai {
                                     spawn_embed(state.db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
                                 }
 
@@ -143,6 +145,8 @@ pub(super) async fn create_memory(
                     Err(e) => warn!(error = %e, "sync embedding failed"),
                     _ => {}
                 }
+            } else if let Some(ref eq) = state.embed_queue {
+                eq.push(mem.id.clone(), mem.content.clone());
             } else {
                 spawn_embed(state.db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
             }
@@ -204,6 +208,10 @@ pub(super) async fn batch_create(
                         }).await;
                     }
                     Err(e) => warn!(error = %e, "sync batch embedding failed"),
+                }
+            } else if let Some(ref eq) = state.embed_queue {
+                for (id, content) in items {
+                    eq.push(id, content);
                 }
             } else {
                 spawn_embed_batch(state.db.clone(), cfg.clone(), items);

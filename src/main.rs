@@ -1,7 +1,7 @@
 //! engram — three-layer memory engine for AI agents.
 //! buffer → working → core, with decay + promotion.
 
-use engram::{ai, api, consolidate, db, proxy, AppState, EmbedCache, SharedDB};
+use engram::{ai, api, consolidate, db, proxy, AppState, EmbedCache, EmbedQueue, SharedDB};
 
 use clap::Parser;
 use std::sync::Arc;
@@ -65,9 +65,13 @@ async fn main() {
     });
 
     let embed_cache = EmbedCache::new(128);
+    let embed_queue = ai_cfg.as_ref()
+        .filter(|c| c.has_embed())
+        .map(|c| EmbedQueue::new(shared.clone(), c.clone()));
     proxy::init_proxy_counters(&shared);
     let state = AppState {
         db: shared.clone(), ai: ai_cfg, api_key, embed_cache,
+        embed_queue,
         proxy: proxy_cfg,
         started_at: std::time::Instant::now(),
         last_proxy_turn: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),

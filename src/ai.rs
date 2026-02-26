@@ -103,7 +103,14 @@ impl AiConfig {
 
     /// Returns `None` if `ENGRAM_LLM_URL` is not set.
     pub fn from_env() -> Option<Self> {
-        let llm_url = std::env::var("ENGRAM_LLM_URL").ok()?;
+        let llm_url = std::env::var("ENGRAM_LLM_URL").unwrap_or_default();
+        let embed_url_explicit = std::env::var("ENGRAM_EMBED_URL").ok();
+
+        // Need at least one of LLM or Embed URL to create config
+        if llm_url.is_empty() && embed_url_explicit.is_none() {
+            return None;
+        }
+
         let llm_key = std::env::var("ENGRAM_LLM_KEY").unwrap_or_default();
         let llm_model =
             std::env::var("ENGRAM_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
@@ -119,8 +126,9 @@ impl AiConfig {
         };
 
         let embed_url = std::env::var("ENGRAM_EMBED_URL").unwrap_or_else(|_| {
-            // Only rewrite if this looks like a chat completions endpoint
-            if llm_url.contains("/chat/completions") {
+            if llm_url.is_empty() {
+                String::new()
+            } else if llm_url.contains("/chat/completions") {
                 llm_url.replace("/chat/completions", "/embeddings")
             } else {
                 format!("{}/embeddings", llm_url.trim_end_matches('/'))
