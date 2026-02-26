@@ -284,6 +284,9 @@ pub(super) async fn delete_memory(
         .await??;
 
     if deleted {
+        if let Some(ref tx) = state.topiary_trigger {
+            let _ = tx.send(());
+        }
         Ok(Json(serde_json::json!({"ok": true})))
     } else {
         Err(EngramError::NotFound)
@@ -316,6 +319,12 @@ pub(super) async fn batch_delete(
         count
     })
     .await?;
+
+    if deleted > 0 {
+        if let Some(ref tx) = state.topiary_trigger {
+            let _ = tx.send(());
+        }
+    }
 
     Ok(Json(serde_json::json!({"deleted": deleted})))
 }
