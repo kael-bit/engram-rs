@@ -22,12 +22,14 @@ pub(super) async fn update_core_summary(db: &SharedDB, cfg: &AiConfig) {
     // budget pressure. Below this threshold, full listing always fits.
     if core.len() < 10 { return; }
 
-    // Hash Core IDs + content lengths to detect changes cheaply.
+    // Hash Core IDs + content only (not volatile metadata like importance or access_count).
+    // This ensures the hash only changes when actual memory content changes, preventing
+    // unnecessary re-summarization on every consolidation cycle.
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for m in &core {
         m.id.hash(&mut hasher);
-        m.content.len().hash(&mut hasher);
+        m.content.hash(&mut hasher);
     }
     let hash = format!("{:016x}", hasher.finish());
 

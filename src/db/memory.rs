@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 /// Column list excluding the embedding blob. Used in "meta" queries to avoid
 /// deserializing large vectors when only scalar fields are needed.
-const META_COLS: &str = "id, content, layer, importance, created_at, last_accessed, \
+pub(super) const META_COLS: &str = "id, content, layer, importance, created_at, last_accessed, \
     access_count, repetition_count, decay_rate, source, tags, namespace, kind, modified_at";
 
 use super::*;

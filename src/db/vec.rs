@@ -44,11 +44,16 @@ pub struct VecIndex {
 
 impl VecIndex {
     pub(crate) fn new() -> Self {
+        Self::with_capacity(HNSW_INITIAL_CAPACITY)
+    }
+
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        let cap = capacity.max(1000);
         Self {
             entries: HashMap::new(),
             hnsw: Hnsw::<f32, DistCosine>::new(
                 HNSW_MAX_NB_CONN,
-                HNSW_INITIAL_CAPACITY,
+                cap,
                 HNSW_MAX_LAYER,
                 HNSW_EF_CONSTRUCTION,
                 DistCosine,
@@ -78,7 +83,14 @@ impl VecIndex {
         self.entries.remove(id);
         // HNSW doesn't support true deletion — the point remains in the graph
         // but won't be returned since we verify against `entries` post-search.
-        // For heavy churn, a periodic rebuild would be needed.
+        // When ghost ratio exceeds 20%, rebuild to reclaim wasted traversal.
+        let ratio = self.ghost_ratio();
+        if ratio > 0.2 {
+            let ghosts = self.idx_to_id.len() - self.entries.len();
+            let total = self.idx_to_id.len();
+            tracing::info!(ghosts, total, "rebuilding HNSW index");
+            self.rebuild_hnsw();
+        }
     }
 
     pub fn get(&self, id: &str) -> Option<&VecEntry> {
@@ -123,9 +135,8 @@ impl VecIndex {
     }
 
     /// Rebuild the HNSW graph from scratch using current entries.
-    #[allow(dead_code)]
     fn rebuild_hnsw(&mut self) {
-        let cap = self.entries.len().max(HNSW_INITIAL_CAPACITY);
+        let cap = self.entries.len().max(1000);
         self.hnsw = Hnsw::<f32, DistCosine>::new(
             HNSW_MAX_NB_CONN,
             cap,
@@ -143,12 +154,29 @@ impl VecIndex {
             self.hnsw.insert((&entry.emb, idx));
         }
     }
+
+    /// Ghost ratio: fraction of HNSW graph nodes that have been removed from entries.
+    fn ghost_ratio(&self) -> f64 {
+        let total = self.idx_to_id.len();
+        if total == 0 { return 0.0; }
+        (total - self.entries.len()) as f64 / total as f64
+    }
 }
 
 impl MemoryDB {
     /// Load all embeddings from DB into the in-memory vector index.
     pub(super) fn load_vec_index(&self) {
         let Ok(conn) = self.conn() else { return };
+
+        // Count rows first to size the HNSW graph appropriately
+        let count: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0) as usize;
+
         let Ok(mut stmt) = conn.prepare(
             "SELECT id, embedding, namespace FROM memories WHERE embedding IS NOT NULL",
         ) else {
@@ -175,7 +203,8 @@ impl MemoryDB {
             .unwrap_or_default();
 
         if let Ok(mut idx) = self.vec_index.write() {
-            *idx = VecIndex::new();
+            let capacity = count.checked_mul(2).unwrap_or(count).max(1000);
+            *idx = VecIndex::with_capacity(capacity);
             let count = pairs.len();
             for (id, entry) in pairs {
                 idx.insert(id, entry);
@@ -244,6 +273,70 @@ impl MemoryDB {
                     .collect()
             })
             .unwrap_or_default())
+    }
+
+    /// Get all memories with embeddings, reading metadata from SQLite but
+    /// embeddings from the in-memory vec_index (avoids reading large blobs
+    /// from the DB, reducing memory spikes during consolidation).
+    pub fn get_all_with_embeddings_from_index(&self) -> Vec<(Memory, Vec<f32>)> {
+        let id_emb_pairs: Vec<(String, Vec<f32>)> = {
+            let idx = match self.vec_index.read() {
+                Ok(idx) => idx,
+                Err(_) => return vec![],
+            };
+            if idx.len() == 0 {
+                return vec![];
+            }
+            idx.iter().map(|(id, entry)| (id.clone(), entry.emb.clone())).collect()
+        };
+
+        let conn = match self.conn() {
+            Ok(c) => c,
+            Err(_) => return vec![],
+        };
+
+        // Build a lookup map from ID → embedding
+        let id_to_emb: std::collections::HashMap<String, Vec<f32>> =
+            id_emb_pairs.into_iter().collect();
+        let ids: Vec<&str> = id_to_emb.keys().map(|s| s.as_str()).collect();
+
+        // Fetch metadata (no embedding blob) in batches of 500 to avoid SQLite variable limits
+        const BATCH_SIZE: usize = 500;
+        let mut result = Vec::with_capacity(ids.len());
+
+        for chunk in ids.chunks(BATCH_SIZE) {
+            let placeholders = chunk.iter().enumerate()
+                .map(|(i, _)| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT {} FROM memories WHERE id IN ({})",
+                super::memory::META_COLS,
+                placeholders
+            );
+            let mut stmt = match conn.prepare(&sql) {
+                Ok(s) => s,
+                Err(e) => { tracing::warn!("prepare batch meta: {e}"); continue; }
+            };
+            let params: Vec<rusqlite::types::Value> = chunk.iter()
+                .map(|s| rusqlite::types::Value::Text(s.to_string()))
+                .collect();
+            let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), row_to_memory_meta);
+            if let Ok(rows) = rows {
+                for row in rows {
+                    match row {
+                        Ok(mem) => {
+                            if let Some(emb) = id_to_emb.get(&mem.id) {
+                                result.push((mem, emb.clone()));
+                            }
+                        }
+                        Err(e) => tracing::warn!("row parse: {e}"),
+                    }
+                }
+            }
+        }
+
+        result
     }
 
     /// Semantic search using HNSW index, with optional namespace filtering.

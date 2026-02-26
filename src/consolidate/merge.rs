@@ -27,17 +27,22 @@ pub fn reconcile_pair_key(id_a: &str, id_b: &str) -> String {
 /// (RECONCILE_MIN_SIM..MERGE_SIMILARITY) to find topically related but not near-duplicate pairs.
 /// Near-duplicates (>MERGE_SIMILARITY) are handled by merge_similar instead.
 pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
+    let now = crate::db::now_ms();
+
+    // Load last_reconcile_ts and all memories with embeddings
     let db2 = db.clone();
-    let all = tokio::task::spawn_blocking(move || db2.get_all_with_embeddings())
-        .await
-        .unwrap_or_else(|e| {
-            warn!(error = %e, "reconcile: get_all_with_embeddings task failed");
-            Ok(vec![])
-        })
-        .unwrap_or_else(|e| {
-            warn!(error = %e, "reconcile: get_all_with_embeddings failed");
-            vec![]
-        });
+    let (last_reconcile_ts, all): (i64, Vec<(Memory, Vec<f32>)>) = tokio::task::spawn_blocking(move || {
+        let ts: i64 = db2.get_meta("last_reconcile_ts")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let mems = db2.get_all_with_embeddings_from_index();
+        (ts, mems)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        warn!(error = %e, "reconcile: load task failed");
+        (0, vec![])
+    });
 
     let wc: Vec<&(Memory, Vec<f32>)> = all
         .iter()
@@ -48,21 +53,19 @@ pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, 
         return (0, vec![]);
     }
 
-    // Skip if nothing changed since last reconcile
-    let fingerprint = {
-        let count = wc.len();
-        let max_mod = wc.iter().map(|(_m, _)| _m.modified_at).max().unwrap_or(0);
-        format!("{}:{}", count, max_mod)
-    };
-    {
-        let db_fp = db.clone();
-        let fp = fingerprint.clone();
-        let last = tokio::task::spawn_blocking(move || db_fp.get_meta("reconcile_fingerprint"))
-            .await.unwrap_or_default();
-        if last.as_deref() == Some(fp.as_str()) {
-            debug!("reconcile: no changes since last run, skipping");
-            return (0, vec![]);
-        }
+    // Determine which Working/Core memories are "new" (modified or created after last run).
+    // On first run (last_reconcile_ts == 0), all memories are considered new.
+    let new_wc_ids: std::collections::HashSet<&str> = wc.iter()
+        .filter(|(m, _)| {
+            let ts = m.modified_at.max(m.created_at);
+            ts > last_reconcile_ts
+        })
+        .map(|(m, _)| m.id.as_str())
+        .collect();
+
+    if last_reconcile_ts > 0 && new_wc_ids.is_empty() {
+        debug!("reconcile: no Working/Core changes since last run, skipping");
+        return (0, vec![]);
     }
 
     let mut reconciled = 0;
@@ -79,9 +82,12 @@ pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, 
         }).await.unwrap_or_default()
     };
 
-    // Pass 1: Within Working/Core — newer supersedes older on same topic.
+    // Pass 1: new Working/Core vs ALL Working/Core (not all×all).
+    // On first run new_wc_ids contains all, so this becomes the full scan.
     for i in 0..wc.len() {
         if removed_ids.contains(&wc[i].0.id) { continue; }
+        // Only start a comparison chain when i is a "new" memory
+        if !new_wc_ids.contains(wc[i].0.id.as_str()) { continue; }
         for j in (i + 1)..wc.len() {
             if removed_ids.contains(&wc[j].0.id) { continue; }
             if let Some(id) = try_reconcile_pair(
@@ -94,10 +100,15 @@ pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, 
         }
     }
 
-    // Pass 2: Buffer -> Working/Core — buffer item updates a higher-layer memory.
+    // Pass 2: Buffers newer than last_reconcile_ts vs Working/Core.
     let buffers: Vec<&(Memory, Vec<f32>)> = all
         .iter()
-        .filter(|(m, e)| !e.is_empty() && m.layer == Layer::Buffer && !removed_ids.contains(&m.id))
+        .filter(|(m, e)| {
+            !e.is_empty()
+                && m.layer == crate::db::Layer::Buffer
+                && !removed_ids.contains(&m.id)
+                && (last_reconcile_ts == 0 || m.created_at > last_reconcile_ts || m.modified_at > last_reconcile_ts)
+        })
         .collect();
 
     for buf in &buffers {
@@ -121,13 +132,11 @@ pub(super) async fn reconcile_updates(db: &SharedDB, cfg: &AiConfig) -> (usize, 
         info!(reconciled, "reconciliation complete");
     }
 
-    // Save fingerprint so we skip next time if nothing changed
-    if !fingerprint.is_empty() {
-        let db_save = db.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            db_save.set_meta("reconcile_fingerprint", &fingerprint)
-        }).await;
-    }
+    // Save last_reconcile_ts = now
+    let db_save = db.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        db_save.set_meta("last_reconcile_ts", &now.to_string())
+    }).await;
 
     (reconciled, removed_ids.into_iter().collect())
 }
@@ -270,17 +279,21 @@ async fn try_reconcile_pair(
 }
 
 pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<String>) {
+    let now = crate::db::now_ms();
+
     let db2 = db.clone();
-    let all = tokio::task::spawn_blocking(move || db2.get_all_with_embeddings())
-        .await
-        .unwrap_or_else(|e| {
-            warn!(error = %e, "get_all_with_embeddings task failed");
-            Ok(vec![])
-        })
-        .unwrap_or_else(|e| {
-            warn!(error = %e, "get_all_with_embeddings failed");
-            vec![]
-        });
+    let (last_merge_ts, all): (i64, Vec<(Memory, Vec<f32>)>) = tokio::task::spawn_blocking(move || {
+        let ts: i64 = db2.get_meta("last_merge_ts")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let mems = db2.get_all_with_embeddings_from_index();
+        (ts, mems)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        warn!(error = %e, "merge_similar: load task failed");
+        (0, vec![])
+    });
 
     if all.len() < 2 {
         return (0, vec![]);
@@ -326,11 +339,25 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
             let ns_mems: Vec<&(Memory, Vec<f32>)> =
                 ns_indices.iter().map(|&i| layer_mems[i]).collect();
 
+        // Incremental merge: only compare memories newer than last_merge_ts against all.
+        // On first run (last_merge_ts == 0), all memories are treated as new (full scan).
         // text-embedding-3-small produces lower cosine scores for short CJK text,
         // but 0.68 was too aggressive — it merged related-but-distinct memories
         // (e.g. two v0.6.0 progress notes), destroying specific terms like "r2d2".
         // MERGE_SIMILARITY limits merging to near-duplicates with high content overlap.
-        let clusters = find_clusters(&ns_mems, MERGE_SIMILARITY);
+        let new_indices: Vec<usize> = (0..ns_mems.len())
+            .filter(|&i| {
+                let m = &ns_mems[i].0;
+                last_merge_ts == 0 || m.created_at > last_merge_ts || m.modified_at > last_merge_ts
+            })
+            .collect();
+
+        if new_indices.is_empty() {
+            continue;
+        }
+
+        // find_clusters_incremental: new × all (new mems seed clusters, old mems join them)
+        let clusters = find_clusters_incremental(&ns_mems, &new_indices, MERGE_SIMILARITY);
 
         for cluster in clusters {
             if cluster.len() < 2 {
@@ -511,6 +538,12 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
         info!(merged = merged_total, "memory merge complete");
     }
 
+    // Save last_merge_ts = now
+    let db_save = db.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        db_save.set_meta("last_merge_ts", &now.to_string())
+    }).await;
+
     (merged_total, merged_ids)
 }
 
@@ -538,6 +571,56 @@ pub fn find_clusters(mems: &[&(Memory, Vec<f32>)], threshold: f64) -> Vec<Vec<us
 
         clusters.push(cluster);
     }
+
+    clusters
+}
+
+/// Incremental cluster finder: only seeds from `new_indices`, but allows old memories
+/// to join clusters seeded by new ones. Returns only clusters that contain at least one
+/// new memory and at least one other memory.
+///
+/// This reduces the comparison from O(n²) to O(new × n) when most memories are unchanged.
+fn find_clusters_incremental(
+    mems: &[&(Memory, Vec<f32>)],
+    new_indices: &[usize],
+    threshold: f64,
+) -> Vec<Vec<usize>> {
+    let n = mems.len();
+    let new_set: std::collections::HashSet<usize> = new_indices.iter().copied().collect();
+    let mut used = vec![false; n];
+    let mut clusters = Vec::new();
+
+    // Only seed clusters from new memories
+    for &i in new_indices {
+        if used[i] {
+            continue;
+        }
+        used[i] = true;
+        let mut cluster = vec![i];
+
+        // Compare against ALL memories (not just new ones)
+        for j in 0..n {
+            if j == i || used[j] {
+                continue;
+            }
+            if cosine_similarity(&mems[i].1, &mems[j].1) > threshold {
+                cluster.push(j);
+                used[j] = true;
+            }
+        }
+
+        // Only emit clusters that actually have 2+ members or include an old mem
+        // (a new mem alone doesn't need merging)
+        if cluster.len() >= 2 {
+            clusters.push(cluster);
+        }
+    }
+
+    // For completeness: if any non-new memory was clustered with a new one above,
+    // it's already captured. We don't need to seed from old memories.
+    // But: if an old memory was used as the seed in a previous full scan,
+    // mark it as "used" so we don't double-count. (Already handled by used[] flag.)
+    let _ = new_set; // used for documentation clarity
 
     clusters
 }
