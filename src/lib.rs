@@ -10,6 +10,7 @@ pub mod prompts;
 pub mod proxy;
 pub mod recall;
 pub mod thresholds;
+pub mod topiary;
 pub mod util;
 
 use std::sync::Arc;
@@ -41,6 +42,7 @@ pub struct AppState {
     pub proxy: Option<proxy::ProxyConfig>,
     pub started_at: std::time::Instant,
     pub last_proxy_turn: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    pub topiary_trigger: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
 
 use lru::LruCache;
@@ -101,11 +103,11 @@ pub struct EmbedQueue {
 }
 
 impl EmbedQueue {
-    pub fn new(db: SharedDB, cfg: ai::AiConfig) -> Self {
+    pub fn new(db: SharedDB, cfg: ai::AiConfig, topiary_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let pending2 = pending.clone();
-        tokio::spawn(Self::worker(rx, db, cfg, pending2));
+        tokio::spawn(Self::worker(rx, db, cfg, pending2, topiary_tx));
         Self {
             tx: std::sync::Arc::new(tx),
             pending,
@@ -126,6 +128,7 @@ impl EmbedQueue {
         db: SharedDB,
         cfg: ai::AiConfig,
         pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        topiary_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) {
         use tracing::{info, warn};
 
@@ -178,6 +181,10 @@ impl EmbedQueue {
                             let _ = tokio::task::spawn_blocking(move || {
                                 db.set_embedding(&id, &emb)
                             }).await;
+                        }
+                        // Trigger topiary rebuild after embeddings are stored
+                        if let Some(ref tx) = topiary_tx {
+                            let _ = tx.send(());
                         }
                         break;
                     }

@@ -1,7 +1,7 @@
 //! engram — three-layer memory engine for AI agents.
 //! buffer → working → core, with decay + promotion.
 
-use engram::{ai, api, consolidate, db, proxy, AppState, EmbedCache, EmbedQueue, SharedDB};
+use engram::{ai, api, consolidate, db, proxy, topiary, AppState, EmbedCache, EmbedQueue, SharedDB};
 
 use clap::Parser;
 use std::sync::Arc;
@@ -69,9 +69,22 @@ async fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(128);
     let embed_cache = EmbedCache::new(embed_cache_cap);
+
+    // Topiary trigger channel
+    let (topiary_tx, topiary_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let topiary_tx_clone = topiary_tx.clone();
+
     let embed_queue = ai_cfg.as_ref()
         .filter(|c| c.has_embed())
-        .map(|c| EmbedQueue::new(shared.clone(), c.clone()));
+        .map(|c| EmbedQueue::new(shared.clone(), c.clone(), Some(topiary_tx_clone)));
+
+    // Spawn topiary worker
+    let _topiary_handle = topiary::worker::spawn_worker(
+        shared.clone(),
+        ai_cfg.clone(),
+        topiary_rx,
+    );
+
     proxy::init_proxy_counters(&shared);
     let state = AppState {
         db: shared.clone(), ai: ai_cfg, api_key, embed_cache,
@@ -79,6 +92,7 @@ async fn main() {
         proxy: proxy_cfg,
         started_at: std::time::Instant::now(),
         last_proxy_turn: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        topiary_trigger: Some(topiary_tx),
     };
     let app = api::router(state.clone());
 
@@ -114,6 +128,10 @@ async fn main() {
                 let r = consolidate::consolidate(
                     bg_state.db.clone(), req, ai_cfg, false,
                 ).await;
+                // Trigger topiary rebuild after consolidation
+                if let Some(ref tx) = bg_state.topiary_trigger {
+                    let _ = tx.send(());
+                }
                 if r.promoted > 0 || r.decayed > 0 || r.merged > 0
                     || r.gate_rejected > 0 || r.demoted > 0 || r.reconciled > 0
                     || r.distilled > 0

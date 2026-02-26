@@ -46,7 +46,8 @@ Add the config above to `.cursor/mcp.json` or equivalent.
 |------|-------------|
 | `engram_store` | Store a memory with optional importance, tags, kind |
 | `engram_recall` | Hybrid search with budget, time filters, reranking |
-| `engram_resume` | Session recovery (core + working + recent + actions) |
+| `engram_resume` | Session recovery — core + recent + topic index + triggers |
+| `engram_topic` | Drill into topic clusters by ID from the knowledge index |
 | `engram_recent` | List recent memories by time window |
 | `engram_search` | Quick keyword search |
 | `engram_extract` | LLM-powered text → structured memories |
@@ -59,10 +60,11 @@ Add the config above to `.cursor/mcp.json` or equivalent.
 | `engram_trash` | List soft-deleted memories |
 | `engram_restore` | Restore from trash |
 | `engram_facts` | Insert fact triples |
+| `engram_repair` | Fix FTS index + backfill embeddings |
 
 ## What is engram?
 
-Persistent memory that works like a brain — three-layer model (Buffer → Working → Core) with automatic decay, promotion, dedup, and LLM-powered quality gates. Single binary, ~9 MB.
+Persistent memory organized along two dimensions — **time** (three-layer lifecycle: Buffer → Working → Core) and **space** (self-organizing topic tree). Automatic decay, promotion, dedup, LLM-powered quality gates, and topic clustering. Single binary, ~9 MB.
 
 See the [main repo](https://github.com/kael-bit/engram-rs) for full documentation.
 

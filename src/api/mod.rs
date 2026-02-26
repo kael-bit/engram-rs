@@ -14,12 +14,16 @@ use crate::{ai, db, AppState};
 mod admin;
 mod facts;
 mod memory;
-mod recall_handlers;
+mod recall;
+mod resume;
+mod topiary_api;
 
 use admin::*;
 use facts::*;
 use memory::*;
-use recall_handlers::*;
+use recall::*;
+use resume::*;
+use topiary_api::*;
 
 /// Run a blocking closure on the spawn_blocking pool and map JoinError.
 async fn blocking<T, F>(f: F) -> Result<T, EngramError>
@@ -121,6 +125,7 @@ pub fn router(state: AppState) -> Router {
         .route("/trash", get(trash_list).delete(trash_purge))
         .route("/trash/{id}/restore", post(trash_restore))
         .route("/llm-usage", get(llm_usage).delete(clear_llm_usage))
+        .route("/topic", post(topiary_topic_handler))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Import needs a bigger body limit for exports with embeddings

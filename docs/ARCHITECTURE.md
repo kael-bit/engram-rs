@@ -343,7 +343,89 @@ Every audit operation passes through `RuleChecker` before execution:
 
 ---
 
-## 6. LLM Call Sites
+## 6. Topiary — Topic Clustering
+
+### 6.1 Overview
+
+Topiary builds a hierarchical topic tree from memory embeddings. It organizes all memories (Core,
+Working, and Buffer) into named topic clusters, providing an index for resume and drill-down recall
+via `POST /topic`.
+
+### 6.2 Architecture
+
+```
+memory write → embed queue → 500ms batch → embeddings stored
+    → topiary trigger → 5s debounce → rebuild tree
+    → name dirty topics (LLM) → cache in engram_meta
+
+consolidation completes → topiary trigger → same flow
+```
+
+**Module structure:** `src/topiary/`
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `mod.rs` | ~600 | TopicNode, TopicTree, insert, consolidate, hierarchy, helpers |
+| `cluster.rs` | ~560 | k-means (spherical, seeded), split/merge passes, enforce_budget |
+| `worker.rs` | ~220 | Debounced async background worker |
+| `naming.rs` | ~210 | LLM batch naming via `ai::llm_tool_call` |
+
+### 6.3 Data Flow
+
+1. **Entry bridge:** engram `db::Memory` → `topiary::Entry { id, text, embedding: Vec<f32> }`.
+   Only memories with embeddings are included.
+2. **Insert:** Each entry assigned to closest leaf (cosine > `assign_threshold`) or creates a new
+   singleton leaf. Centroid updated incrementally with L2 normalization.
+3. **Consolidate:** Up to 10 split/merge cycles until stable, then `enforce_budget` (k-means if
+   leaves exceed `LEAF_BUDGET=256`), hierarchy construction, small-leaf absorption, single-child
+   pruning. Leaf IDs reassigned to sequential `kb1, kb2, ...`.
+4. **Naming:** Dirty leaves (new/changed) batched in groups of 30, sent to LLM via `ai::llm_tool_call`
+   with `TOPIC_NAMING_SYSTEM` prompt. Existing names provided as dedup context.
+5. **Storage:** Two forms cached in `engram_meta`:
+   - `topiary_tree`: JSON summary (topic IDs, names, member counts, sample texts)
+   - `topiary_tree_full`: Full serialized `TopicTree` (with centroids, for future incremental updates)
+   - `topiary_entry_ids`: Ordered entry ID list for index→ID resolution
+
+### 6.4 Worker
+
+`topiary::worker::spawn_worker(db, ai, trigger_rx)` — tokio task.
+
+- **Trigger sources:** EmbedQueue flush completion, post-consolidation
+- **Debounce:** 5 second quiet window (drains signals, resets on each new signal)
+- **Startup:** If no `topiary_tree` in meta, immediately rebuilds
+- **Input:** All Core + Working + Buffer memories with embeddings
+- **Output:** Cached tree in `engram_meta`
+
+### 6.5 Parameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `assign_threshold` | 0.30 | Min cosine similarity to assign entry to existing leaf |
+| `merge_threshold` | 0.55 | Min similarity between leaf centroids to merge |
+| `max_leaf_size` | 8 | Split threshold for oversized leaves |
+| `min_internal_sim` | 0.35 | Minimum intra-cluster similarity |
+| `LEAF_BUDGET` | 256 | Max leaf count before k-means enforcement |
+| `ABSORB_THRESHOLD` | 0.40 | Min similarity to absorb small (≤2 member) leaves |
+| Debounce | 5s | Quiet window before rebuild |
+| Naming batch | 30 | Max topics per LLM naming call |
+
+### 6.6 POST /topic Endpoint
+
+```
+POST /topic
+Body: {"ids": ["kb1", "kb3"]}
+Response: {
+  "kb1": {"name": "Memory architecture", "memories": [...]},
+  "kb3": {"name": "User preferences", "memories": [...]}
+}
+```
+
+Loads `topiary_tree_full` from meta, finds leaf by ID, resolves member indices to entry IDs
+via `topiary_entry_ids`, fetches full memories from DB.
+
+---
+
+## 7. LLM Call Sites
 
 **LLM Level** (`ENGRAM_LLM_LEVEL`, default `auto`): Controls when consolidation calls LLMs.
 In `auto` mode, high-confidence decisions use heuristics; only uncertain cases invoke LLMs.
@@ -365,6 +447,7 @@ Every place the system calls an LLM, with model tier and purpose:
 | **Insert merge** | `merge` | `insert_merge` | Merge on insert when high similarity | `INSERT_MERGE_PROMPT` |
 | **Rerank** | `rerank` | `rerank` | Re-order recall results by relevance | `RERANK_SYSTEM` |
 | **Distill** | `gate` | `distill` | Synthesize session notes into status | Inline system prompt |
+| **Naming** | `naming` (→default) | `naming` | Name topic clusters for resume index | `TOPIC_NAMING_SYSTEM` |
 
 Model tier resolution (`AiConfig::model_for`): each component checks its env var
 (e.g. `ENGRAM_GATE_MODEL`), falls back to `ENGRAM_LLM_MODEL`, defaults to `gpt-4o-mini`.
@@ -376,7 +459,7 @@ All LLM calls are logged in `llm_usage` table with component, model, token count
 
 ## 7. Resume System
 
-`GET /resume` provides session recovery context. Budget-aware, prioritized sections.
+`GET /resume` provides session recovery context. Four sections, fixed budget.
 
 ### Namespace Merging
 
@@ -388,32 +471,42 @@ Recall follows the same rule: queries with a namespace filter also include `defa
 
 **Directional merge rule:** Consolidation merge and reconcile allow cross-namespace operations only
 when one side is `default`. The merged result always stays in `default` — project-level memories can
-be absorbed into `default`, but `default` memories are never pulled into a project namespace. Two
-different project namespaces never merge with each other.
+be absorbed into `default`, but `default` memories are never pulled into a project namespace.
 
-### Section Priority (filled in order)
+### Output Format
 
-1. **Core** (45% budget cap) — permanent knowledge. Context-relevance filtered:
-   - Compute centroid of recent context embeddings (buffer + sessions + recent).
-   - Score each Core memory's cosine similarity to centroid.
-   - Identity/constraint/bootstrap tags get `+0.25` boost.
-   - Lesson/procedural/preference tags get `+0.10` boost.
-   - Threshold: `RESUME_CORE_THRESHOLD = 0.35`. Max 20 kept.
-   - If Core is too large: use cached `core_summary` from `engram_meta`, or LLM-compress.
-2. **Sessions** — continuity notes (`source: session` or `tag: session`).
-3. **Working** (30% floor) — active context. Filtered with `RESUME_WORKING_THRESHOLD = 0.20`. Max 40.
-4. **Recent** (20% reserve) — recently modified memories not in layer sections.
-5. **Buffer** — newest unprocessed intake.
+```
+=== Core (N) ===
+[full text, no truncation, up to ~2k tokens]
 
-### Compression
+=== Recent (Nh) ===
+[recently modified/created non-Core memories, time descending, up to ~1k tokens]
 
-When a section exceeds its budget:
-1. Check `engram_meta` cache (keyed by section label + memory IDs/modified_at hash).
-2. On cache miss: LLM compresses (model: `resume` tier).
-3. Hard truncate safety if LLM exceeds budget.
-4. Result cached for subsequent calls.
+=== Topics (Working: N, Buffer: N) ===
+kb1: "Topic name" [8]
+kb2: "Another topic" [5]
+...
 
-Adaptive budget: default 16K chars, scales with total memory count (min 16K, max 64K).
+Triggers: git-push, deploy, memory-store, ...
+```
+
+### Section Details
+
+| Section | Content | Budget | Sort |
+|---------|---------|--------|------|
+| **Core** | Permanent rules/identity, full text | ~2k tokens | `importance × kind_boost × (1 + rep × 2.5)` |
+| **Recent** | Non-Core memories modified in last N hours | ~1k tokens | Time descending |
+| **Topics** | Flat leaf index from cached topiary tree | ~300-500 tokens | Member count descending |
+| **Triggers** | All `trigger:*` tags | ~100-200 tokens | Access count descending |
+
+**Core sorting:** `kind_boost` = 1.3 for procedural, 1.0 for others. Procedural memories naturally
+rank higher because they never decay AND get a 1.3× boost.
+
+**Topics:** Read from `topiary_tree` in `engram_meta`. If no tree cached, section is omitted.
+Agent can drill into any topic via `POST /topic {"ids": ["kb1", "kb3"]}`.
+
+**Triggers:** Collected from all memories with tags matching `trigger:*` pattern, deduplicated,
+sorted by aggregate access count.
 
 ---
 
@@ -518,3 +611,6 @@ Adaptive budget: default 16K chars, scales with total memory count (min 16K, max
    infinite retry loops while giving memories a fair hearing.
 9. **Resume doesn't touch memories** — only recall (query-driven) increments access counts.
 10. **Merge direction is always upward** — cross-layer merge result goes to the highest source layer.
+11. **Topiary is eventually consistent** — tree rebuilds are debounced and async. Resume reads a
+    cached snapshot; it may lag a few seconds behind the latest writes. This is intentional — resume
+    must be fast, and the tree is an index, not a source of truth.

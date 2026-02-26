@@ -170,7 +170,13 @@ You have persistent memory via engram MCP tools.
 **Trigger:** Every session start OR after context compaction.
 
 - Call `engram_resume` with hours=6 and compact=true.
-- **Rule:** If you see a `<summary>` block or "Compacted" system message, you MUST resume immediately, before responding to any user message. Compaction summaries are lossy; read the core and working sections returned by the tool.
+- **Rule:** If you see a `<summary>` block or "Compacted" system message, you MUST resume immediately, before responding to any user message.
+
+**Resume returns 4 sections:**
+- **Core** — permanent rules/identity (full text, never truncated)
+- **Recent** — recently changed memories for short-term continuity
+- **Topics** — a named topic index of ALL your memories (e.g. `kb1: "Deploy procedures" [5]`). Use `engram_topic` with IDs to drill into any topic and see its full memories.
+- **Triggers** — pre-action safety tags for reflex recall
 
 ### 2. When & What to Store (Tool: `engram_store`)
 
@@ -191,7 +197,7 @@ If the same insight comes up again, store it again — repetition strengthens me
 - Information that must survive more than a day (reminders, scheduled tasks, deadlines) → `layer=2`. Buffer decays fast; anything that needs to last should skip it.
 - Cross-project knowledge (identity, preferences) → `namespace="default"`
 
-### 3. Recalling Memories (Tools: `engram_recall` & `engram_triggers`)
+### 3. Recalling Memories (Tools: `engram_recall` & `engram_triggers` & `engram_topic`)
 
 Before acting on any non-trivial task, you **MUST** check your memory. Do not assume you remember.
 
@@ -200,6 +206,7 @@ Before acting on any non-trivial task, you **MUST** check your memory. Do not as
   - `query` (required): Search string.
   - `expand` (boolean): Set to true for short/vague queries (+1-2s).
   - `limit` (default 20), `budget_tokens` (default 2000), `tags`, `min_score`.
+- **Topic drill-down:** Resume includes a topic index (e.g. `kb3: "Memory architecture" [8]`). To explore a topic's full memories, call `engram_topic` with `ids=["kb3"]`. Use this when you need all memories about a subject, not just the top search results.
 
 ### 4. Milestone Recaps
 
@@ -229,7 +236,13 @@ You have persistent memory via engram at http://localhost:3917
 curl -sf "http://localhost:3917/resume?hours=6&compact=true"
 ```
 
-**Rule:** If you see a `<summary>` block or "Compacted" system message, you MUST resume immediately, before responding to any user message. Compaction summaries are lossy; read the core and working sections returned.
+**Rule:** If you see a `<summary>` block or "Compacted" system message, you MUST resume immediately, before responding to any user message.
+
+**Resume returns 4 sections:**
+- **Core** — permanent rules/identity (full text, never truncated)
+- **Recent** — recently changed memories for short-term continuity
+- **Topics** — a named topic index of ALL your memories (e.g. `kb1: "Deploy procedures" [5]`). Use `POST /topic {"ids":["kb1"]}` to drill into any topic.
+- **Triggers** — pre-action safety tags for reflex recall
 
 ### 2. When & What to Store
 
@@ -272,6 +285,7 @@ curl -sf -X POST http://localhost:3917/memories \
 Before acting on any non-trivial task, you **MUST** check your memory. Do not assume you remember.
 
 - **Pre-action check:** Before risky operations (e.g., deploying, pushing code), check triggers for relevant lessons.
+- **Topic drill-down:** Resume includes a topic index (e.g. `kb3: "Memory architecture" [8]`). To explore a topic's full memories, use `POST /topic {"ids":["kb3"]}`. Use this when you need all memories about a subject.
 - **General search:** Query with the topic.
   - `query` (required): Search string.
   - `expand` (boolean): Set to true for short/vague queries (+1-2s).
@@ -283,6 +297,10 @@ curl -sf -X POST http://localhost:3917/recall \
 
 # Pre-action trigger check
 curl -sf http://localhost:3917/triggers/deploy
+
+# Drill into specific topics from resume index
+curl -sf -X POST http://localhost:3917/topic \
+  -d '{"ids": ["kb1", "kb3"]}'
 ```
 
 ### 4. Milestone Recaps

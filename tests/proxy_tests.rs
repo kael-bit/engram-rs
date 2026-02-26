@@ -87,6 +87,7 @@ fn test_state() -> engram::AppState {
         proxy: None,
         started_at: std::time::Instant::now(),
         last_proxy_turn: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        topiary_trigger: None,
     }
 }
 

@@ -386,6 +386,20 @@ server.tool(
   }
 );
 
+server.tool(
+  "engram_topic",
+  "Drill into topic clusters by ID. Use after /resume to explore specific topics from the knowledge index.",
+  {
+    ids: z.array(z.string()).min(1).describe('Topic IDs to fetch (e.g. ["kb1", "kb3"])'),
+  },
+  async ({ ids }: { ids: string[] }) => {
+    const result = await engramFetch("/topic", { ids });
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
 
 async function main() {
   const transport = new StdioServerTransport();

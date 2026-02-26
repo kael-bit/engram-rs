@@ -57,6 +57,7 @@ ENGRAM_URL=http://localhost:3917 node dist/index.js
 | `engram_trash` | `GET /trash` | List soft-deleted memories |
 | `engram_restore` | `POST /trash/:id/restore` | Restore from trash |
 | `engram_facts` | `POST /facts` | Insert fact triples |
+| `engram_topic` | `POST /topic` | Drill into topic clusters by ID |
 
 ## Editor-Specific Setup
 

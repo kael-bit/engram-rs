@@ -30,6 +30,11 @@ pub(super) async fn do_consolidate(
     let result =
         consolidate::consolidate(state.db.clone(), parsed, state.ai.clone(), q.dry_run).await;
 
+    // Trigger topiary rebuild after consolidation
+    if let Some(ref tx) = state.topiary_trigger {
+        let _ = tx.send(());
+    }
+
     Ok(Json(result))
 }
 

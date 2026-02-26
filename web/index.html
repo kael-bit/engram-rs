@@ -104,6 +104,22 @@ label { font-size:11px; color:#888; }
 .ns-inp:focus { border-color:#5b9cf5; }
 .ns-inp.show { display:block; }
 
+.topic-card { background:#1a1a1a; border:1px solid #252525; border-radius:6px; padding:12px 16px; cursor:pointer; transition:border-color .15s; }
+.topic-card:hover { border-color:#3573e0; }
+.topic-card.expanded { border-color:#3573e0; }
+.topic-card .tc-head { display:flex; justify-content:space-between; align-items:center; }
+.topic-card .tc-name { font-size:13px; color:#eee; font-weight:500; }
+.topic-card .tc-id { font-size:10px; color:#555; margin-right:8px; }
+.topic-card .tc-count { font-size:11px; color:#5b9cf5; }
+.topic-card .tc-sample { font-size:11px; color:#666; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.topic-card .tc-body { margin-top:10px; padding-top:10px; border-top:1px solid #252525; }
+.topic-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:8px; }
+.trigger-tag { display:inline-block; padding:3px 10px; border-radius:12px; font-size:11px; background:#222; color:#888; margin:3px; border:1px solid #333; }
+.trigger-tag:hover { color:#ccc; border-color:#555; }
+.resume-section { margin-bottom:16px; }
+.resume-section-hdr { font-size:12px; color:#888; font-weight:600; margin-bottom:6px; cursor:pointer; }
+.resume-section-hdr:hover { color:#ccc; }
+
 @media(max-width:768px) {
   .sidebar { width:48px; }
   .sidebar h1, .nav .nl, .nav .ct, .sidebar-footer, .nav-group-label, .ns-bar { display:none; }
@@ -137,6 +153,7 @@ label { font-size:11px; color:#888; }
       <li data-v="recall"><span class="nl">Recall</span></li>
       <li data-v="search"><span class="nl">Search</span></li>
       <li data-v="resume"><span class="nl">Resume</span></li>
+      <li data-v="topics"><span class="nl">Topics</span></li>
     </ul>
     <div class="nav-group-label">Tools</div>
     <ul class="nav" id="nav3">
@@ -490,10 +507,20 @@ function renderResume(){
 
 let lastResumeData=null;
 
+function parseTopicsString(s){
+  if(!s||typeof s!=='string')return[];
+  const results=[];
+  const lines=s.trim().split('\n');
+  for(const line of lines){
+    const m=line.match(/^(\w+):\s*"(.+?)"\s*\[(\d+)\]$/);
+    if(m)results.push({id:m[1],name:m[2],count:parseInt(m[3])});
+  }
+  return results;
+}
+
 function renderResumeResult(r,ms){
   const countLine='core: '+(r.core_count||0)+', working: '+(r.working_count||0)+
-    ', buffer: '+(r.buffer_count||0)+', recent: '+(r.recent_count||0)+
-    ', sessions: '+(r.session_count||0);
+    ', buffer: '+(r.buffer_count||0)+', recent: '+(r.recent_count||0);
 
   function memCard(m){
     const tags=(m.tags||[]).map(t=>'<span class="tag">'+esc(t)+'</span>').join(' ');
@@ -505,18 +532,37 @@ function renderResumeResult(r,ms){
 
   function section(title,items){
     if(!items||!items.length) return '';
-    return '<div style="margin-bottom:16px"><b style="font-size:12px;color:#888">'+title+' ('+items.length+')</b>'+
+    return '<div class="resume-section"><b class="resume-section-hdr">'+title+' ('+items.length+')</b>'+
       '<div class="ml" style="margin-top:6px">'+items.map(m=>memCard(m)).join('')+'</div></div>';
   }
 
   let html='<div style="font-size:11px;color:#555;margin:10px 0 12px">'+ms+'ms — '+countLine+'</div>';
   html+=section('Core',r.core);
-  html+=section('Working',r.working);
-  html+=section('Sessions',r.sessions);
   html+=section('Recent',r.recent);
-  html+=section('Buffer',r.buffer);
 
-  if(!html.includes('ml')) html='<div class="empty">Empty resume</div>';
+  // Topics section
+  const topics=parseTopicsString(r.topics);
+  if(topics.length){
+    html+='<div class="resume-section"><b class="resume-section-hdr">Topics ('+topics.length+')</b>';
+    html+='<div class="topic-grid" style="margin-top:6px">';
+    for(const t of topics){
+      html+='<div class="topic-card" onclick="expandResumeTopic(this,\''+esc(t.id)+'\')">';
+      html+='<div class="tc-head"><span><span class="tc-id">'+esc(t.id)+'</span><span class="tc-name">'+esc(t.name)+'</span></span>';
+      html+='<span class="tc-count">'+t.count+' memories</span></div>';
+      html+='<div class="tc-body" style="display:none"></div>';
+      html+='</div>';
+    }
+    html+='</div></div>';
+  }
+
+  // Triggers section
+  const triggers=r.triggers||[];
+  if(triggers.length){
+    html+='<div class="resume-section"><b class="resume-section-hdr">Triggers ('+triggers.length+')</b>';
+    html+='<div style="margin-top:6px">'+triggers.map(t=>'<span class="trigger-tag">'+esc(t)+'</span>').join('')+'</div></div>';
+  }
+
+  if(!html.includes('resume-section')&&!html.includes('ml')) html='<div class="empty">Empty resume</div>';
   document.getElementById('resResult').innerHTML=html;
 }
 
@@ -556,6 +602,98 @@ async function doResume(){
   const ms=Math.round(performance.now()-t0);
   lastResumeData={data:r,ms};
   renderResumeResult(r,ms);
+}
+
+async function expandResumeTopic(el,topicId){
+  const body=el.querySelector('.tc-body');
+  if(body.style.display!=='none'){body.style.display='none';el.classList.remove('expanded');return;}
+  el.classList.add('expanded');
+  body.style.display='block';
+  body.innerHTML='<div class="empty">Loading...</div>';
+  try{
+    const tk=localStorage.getItem('engram_token')||'';
+    const ns=localStorage.getItem('engram_namespace')||'';
+    const h={'Content-Type':'application/json'};
+    if(tk)h['Authorization']='Bearer '+tk;
+    if(ns&&ns!=='default')h['X-Namespace']=ns;
+    const res=await fetch(A+'/topic',{method:'POST',headers:h,body:JSON.stringify({ids:[topicId]})});
+    const d=await res.json();
+    const mems=(d[topicId]&&d[topicId].memories)||[];
+    if(!mems.length){body.innerHTML='<div class="empty">No memories</div>';return;}
+    const tags=m=>(m.tags||[]).map(t=>'<span class="tag">'+esc(t)+'</span>').join(' ');
+    body.innerHTML='<div class="ml">'+mems.map(m=>
+      '<div class="mc" style="cursor:default"><div class="ct">'+esc((m.content||'').slice(0,300))+(m.content&&m.content.length>300?'…':'')+'</div>'+
+      '<div class="meta"><span class="lb l'+(m.layer||1)+'">'+ln(m.layer||1)+'</span> <span>imp '+(m.importance||0).toFixed(2)+'</span> '+tags(m)+'</div></div>'
+    ).join('')+'</div>';
+  }catch(e){body.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>';}
+}
+
+/* --- Topics page --- */
+let topicsData=[];
+
+function renderTopics(){
+  document.getElementById('main').innerHTML=`
+    <h2>Topics</h2>
+    <div id="topicsContent"><div class="empty">Loading topics...</div></div>`;
+  loadTopics();
+}
+
+async function loadTopics(){
+  try{
+    const url='/resume?format=json&hours=168';
+    const r=await api(url);
+    topicsData=parseTopicsString(r.topics);
+    if(!topicsData.length){
+      document.getElementById('topicsContent').innerHTML='<div class="empty">No topics found</div>';
+      return;
+    }
+    renderTopicCards();
+  }catch(e){
+    document.getElementById('topicsContent').innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>';
+  }
+}
+
+function renderTopicCards(){
+  const el=document.getElementById('topicsContent');
+  let html='<div style="font-size:11px;color:#555;margin-bottom:10px">'+topicsData.length+' topics</div>';
+  html+='<div class="topic-grid">';
+  for(const t of topicsData){
+    html+='<div class="topic-card" id="tc-'+esc(t.id)+'" onclick="toggleTopic(\''+esc(t.id)+'\')">';
+    html+='<div class="tc-head"><span><span class="tc-id">'+esc(t.id)+'</span><span class="tc-name">'+esc(t.name)+'</span></span>';
+    html+='<span class="tc-count">'+t.count+' memories</span></div>';
+    html+='<div class="tc-body" style="display:none"></div>';
+    html+='</div>';
+  }
+  html+='</div>';
+  el.innerHTML=html;
+}
+
+async function toggleTopic(topicId){
+  const card=document.getElementById('tc-'+topicId);
+  if(!card)return;
+  const body=card.querySelector('.tc-body');
+  if(body.style.display!=='none'){body.style.display='none';card.classList.remove('expanded');return;}
+  card.classList.add('expanded');
+  body.style.display='block';
+  body.innerHTML='<div class="empty">Loading...</div>';
+  try{
+    const tk=localStorage.getItem('engram_token')||'';
+    const ns=localStorage.getItem('engram_namespace')||'';
+    const h={'Content-Type':'application/json'};
+    if(tk)h['Authorization']='Bearer '+tk;
+    if(ns&&ns!=='default')h['X-Namespace']=ns;
+    const res=await fetch(A+'/topic',{method:'POST',headers:h,body:JSON.stringify({ids:[topicId]})});
+    const d=await res.json();
+    const mems=(d[topicId]&&d[topicId].memories)||[];
+    if(!mems.length){body.innerHTML='<div class="empty">No memories in this topic</div>';return;}
+    const mkTags=m=>(m.tags||[]).map(t=>'<span class="tag">'+esc(t)+'</span>').join(' ');
+    body.innerHTML='<div class="ml">'+mems.map(m=>{
+      const kind=m.kind&&m.kind!=='semantic'?'<span class="kind-badge">'+esc(m.kind)+'</span>':'';
+      return '<div class="mc" style="cursor:default"><div class="ct">'+esc(m.content||'')+'</div>'+
+        '<div class="meta"><span class="lb l'+(m.layer||1)+'">'+ln(m.layer||1)+'</span> '+kind+
+        '<span>imp '+(m.importance||0).toFixed(2)+'</span> <span>'+ago(m.created_at)+'</span> '+mkTags(m)+'</div></div>';
+    }).join('')+'</div>';
+  }catch(e){body.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>';}
 }
 
 async function doSearch(){
@@ -1145,7 +1283,7 @@ function switchView(v){
   // clear LLM auto-refresh when navigating away
   if(v!=='llm-usage'&&llmRefreshTimer){clearInterval(llmRefreshTimer);llmRefreshTimer=null;}
   document.querySelectorAll('.nav li').forEach(li=>li.classList.toggle('active',li.dataset.v===v));
-  if(v==='recall')renderRecall();else if(v==='search')renderSearch();else if(v==='resume')renderResume();else if(v==='create')renderCreate();
+  if(v==='recall')renderRecall();else if(v==='search')renderSearch();else if(v==='resume')renderResume();else if(v==='topics')renderTopics();else if(v==='create')renderCreate();
   else if(v==='facts')renderFacts();else if(v==='proxy')renderProxy();else if(v==='health')renderHealth();
   else if(v==='trash')renderTrash();else if(v==='tools')renderTools();else if(v==='llm-usage')renderLlmUsage();else if(v==='tests')renderTests();else renderList(getMem());
 }

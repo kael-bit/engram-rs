@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.12.0
+
+### Highlights
+
+- **Topiary — topic clustering for memory organization**: Background process automatically clusters all memories (Core + Working + Buffer) into a hierarchical topic tree using spherical k-means with LLM-powered naming. Rebuilds incrementally after embedding updates with 5-second debounce. Resume exposes a compact topic index; agents drill into specific topics via `POST /topic`.
+- **Resume v3 — four-section format**: Resume output restructured into Core (full text, mixed-weight sorting), Recent (time-descending), Topics (topiary index), and Triggers (pre-action safety tags). Replaces the old five-section compressed format. No more LLM compression in resume path — all sections are deterministic.
+- **API reorganization**: `recall_handlers.rs` (1181 lines) split into `recall.rs`, `resume.rs`, and `topiary_api.rs` for maintainability.
+
+### Features
+
+- `src/topiary/` module: `mod.rs` (tree structure), `cluster.rs` (k-means), `worker.rs` (debounced async), `naming.rs` (LLM batch naming)
+- `POST /topic` endpoint: batch topic drill-down by ID (`{"ids": ["kb1", "kb3"]}`)
+- Topiary worker: debounced rebuild triggered after embed queue flush and consolidation
+- Topic naming via `ai::llm_tool_call` with `TOPIC_NAMING_SYSTEM` prompt
+- Core sorting: `importance × kind_boost × (1 + repetition_count × 2.5)`, procedural kind_boost = 1.3
+- Triggers section in resume: all `trigger:*` tags sorted by access count
+- `topiary_trigger` channel in `AppState` for cross-module signaling
+
+### Refactoring
+
+- `api/recall_handlers.rs` → `api/recall.rs` + `api/resume.rs` + `api/topiary_api.rs`
+- Resume no longer uses LLM compression — sections are budget-capped by character count
+- Removed old five-section resume format (Core/Sessions/Working/Recent/Buffer)
+
+### Documentation
+
+- ARCHITECTURE.md: added §6 Topiary, updated §7 Resume, added invariant #11
+- README: added Topic Clustering feature, updated mermaid diagram, updated Session Recovery
+- MCP.md: added `engram_topic` tool
+- SETUP.md: added `/topic` to HTTP and MCP templates
+
 ## 0.11.0
 
 ### Highlights

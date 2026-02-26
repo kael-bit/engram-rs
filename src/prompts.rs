@@ -403,3 +403,37 @@ pub fn fact_extract_schema() -> serde_json::Value {
 // ---------------------------------------------------------------------------
 
 pub const INSERT_MERGE_PROMPT: &str = r#"Merge two versions of the same memory into one. Preserve ALL specific details from BOTH versions — names, numbers, commands, constraints. Output ONLY the merged text, nothing else. Keep the same language as the input. Be concise; don't add commentary or explanation. Keep it to 2-3 concise sentences if possible."#;
+
+// ---------------------------------------------------------------------------
+// topiary/naming.rs — topic naming
+// ---------------------------------------------------------------------------
+
+pub const TOPIC_NAMING_SYSTEM: &str = r#"You are naming memory topics for an AI agent's retrieval index.
+For each cluster, write a name the agent can use to decide whether to open this topic.
+
+Rules:
+- 2-4 words, English only
+- Name must cover ALL samples, not just the most prominent one
+- If samples share a clear action/scenario, use verb phrase (e.g. "Fix scoring errors")
+- If samples are thematically related but diverse, use noun phrase (e.g. "Proxy and tunnel setup")
+- Avoid: filler words (notes, details, lessons, info, overview, misc), comma-joined unrelated concepts"#;
+
+pub fn topic_naming_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "topics": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Topic ID (e.g. kb1)" },
+                        "name": { "type": "string", "description": "2-4 word name" }
+                    },
+                    "required": ["id", "name"]
+                }
+            }
+        },
+        "required": ["topics"]
+    })
+}

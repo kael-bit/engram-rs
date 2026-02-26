@@ -17,6 +17,7 @@ fn test_state(api_key: Option<&str>) -> AppState {
         proxy: None,
         started_at: std::time::Instant::now(),
         last_proxy_turn: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        topiary_trigger: None,
     }
 }
 
@@ -408,19 +409,18 @@ async fn resume_returns_structured_sections() {
     });
     app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
 
-    // Seed: a session memory with next-action tag
+    // Seed: a working memory
     let body = serde_json::json!({
         "content": "next step: write more tests",
         "layer": 2, "importance": 0.7,
-        "source": "session", "tags": ["next-action"]
+        "tags": ["next-action"]
     });
     app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
 
-    // Seed: a regular session memory
+    // Seed: a buffer memory
     let body = serde_json::json!({
         "content": "did some refactoring today",
-        "layer": 2, "importance": 0.6,
-        "source": "session"
+        "layer": 1, "importance": 0.6
     });
     app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
 
@@ -430,12 +430,10 @@ async fn resume_returns_structured_sections() {
     assert_eq!(resp.status(), StatusCode::OK);
     let j = body_json(resp).await;
 
-    // Structure checks
+    // Structure checks — new format has core, recent, triggers, hours
     assert!(j["core"].is_array());
-    assert!(j["working"].is_array());
-    assert!(j["buffer"].is_array());
     assert!(j["recent"].is_array());
-    assert!(j["sessions"].is_array());
+    assert!(j["triggers"].is_array());
     assert!(j["hours"].as_f64().unwrap() > 0.0);
 
     // Core should include the high-importance core memory
@@ -443,28 +441,16 @@ async fn resume_returns_structured_sections() {
     assert!(!core.is_empty(), "should have core memories");
     assert!(core[0]["content"].as_str().unwrap().contains("test agent"));
 
-    // Sessions should have the session memory
-    let sessions = j["sessions"].as_array().unwrap();
-    assert!(!sessions.is_empty(), "should have session memories");
-
-    // Session memories must NOT leak into buffer or working sections
-    let buffer = j["buffer"].as_array().unwrap();
-    for b in buffer {
-        let src = b["source"].as_str().unwrap_or("");
-        assert_ne!(src, "session", "session memory leaked into buffer: {}", b["content"]);
-    }
-    let working = j["working"].as_array().unwrap();
-    for w in working {
-        let src = w["source"].as_str().unwrap_or("");
-        assert_ne!(src, "session", "session memory leaked into working: {}", w["content"]);
-    }
+    // Recent should include the non-core memories
+    let recent = j["recent"].as_array().unwrap();
+    assert!(!recent.is_empty(), "should have recent memories");
 }
 
 #[tokio::test]
 async fn resume_session_notes_in_buffer_go_to_sessions() {
     let app = router(test_state(None));
 
-    // Session note stored at buffer level (default layer=1) — real-world scenario
+    // Buffer-level memory — should appear in recent
     let body = serde_json::json!({
         "content": "Session: did auth refactor, tests pass",
         "source": "session",
@@ -472,7 +458,7 @@ async fn resume_session_notes_in_buffer_go_to_sessions() {
     });
     app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
 
-    // Session note with next-action tag at buffer level
+    // Another buffer memory with tag
     let body = serde_json::json!({
         "content": "Next: write integration tests for new auth flow",
         "source": "session", "tags": ["next-action"]
@@ -488,26 +474,15 @@ async fn resume_session_notes_in_buffer_go_to_sessions() {
     ).await.unwrap();
     let j = body_json(resp).await;
 
-    // Buffer-level session notes should appear in sessions, not buffer
-    let sessions = j["sessions"].as_array().unwrap();
-    assert!(sessions.iter().any(|s|
-        s["content"].as_str().unwrap_or("").contains("auth refactor")),
-        "session note missing from sessions section");
+    // All non-core recent memories should appear in the recent section
+    let recent = j["recent"].as_array().unwrap();
+    assert!(recent.iter().any(|r|
+        r["content"].as_str().unwrap_or("").contains("auth refactor")),
+        "session note missing from recent section");
 
-    // next-action tagged memories should appear in sessions (not as separate section)
-    assert!(sessions.iter().any(|s|
-        s["content"].as_str().unwrap_or("").contains("integration tests")),
-        "next-action tagged note missing from sessions");
-
-    let buffer = j["buffer"].as_array().unwrap();
-    for b in buffer {
-        let src = b["source"].as_str().unwrap_or("");
-        assert_ne!(src, "session", "session note leaked into buffer: {}", b["content"]);
-    }
-    // Non-session buffer should still be there
-    assert!(buffer.iter().any(|b|
-        b["content"].as_str().unwrap_or("").contains("dark mode")),
-        "non-session buffer memory missing");
+    assert!(recent.iter().any(|r|
+        r["content"].as_str().unwrap_or("").contains("dark mode")),
+        "non-session buffer memory missing from recent");
 }
 
 #[tokio::test]
