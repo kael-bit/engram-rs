@@ -64,7 +64,11 @@ async fn main() {
         }
     });
 
-    let embed_cache = EmbedCache::new(128);
+    let embed_cache_cap: usize = std::env::var("ENGRAM_EMBED_CACHE_SIZE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(128);
+    let embed_cache = EmbedCache::new(embed_cache_cap);
     let embed_queue = ai_cfg.as_ref()
         .filter(|c| c.has_embed())
         .map(|c| EmbedQueue::new(shared.clone(), c.clone()));
