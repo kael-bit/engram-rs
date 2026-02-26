@@ -13,6 +13,7 @@ fn test_state(api_key: Option<&str>) -> AppState {
         ai: None,
         api_key: api_key.map(|s| s.to_string()),
         embed_cache: engram::EmbedCache::new(16),
+        embed_queue: None,
         proxy: None,
         started_at: std::time::Instant::now(),
         last_proxy_turn: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -424,7 +425,7 @@ async fn resume_returns_structured_sections() {
     app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
 
     let resp = app.oneshot(
-        Request::builder().uri("/resume?hours=1").body(Body::empty()).unwrap()
+        Request::builder().uri("/resume?hours=1&format=json").body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let j = body_json(resp).await;
@@ -483,7 +484,7 @@ async fn resume_session_notes_in_buffer_go_to_sessions() {
     app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
 
     let resp = app.oneshot(
-        Request::builder().uri("/resume?hours=1").body(Body::empty()).unwrap()
+        Request::builder().uri("/resume?hours=1&format=json").body(Body::empty()).unwrap()
     ).await.unwrap();
     let j = body_json(resp).await;
 
@@ -529,7 +530,7 @@ async fn resume_respects_namespace() {
 
     // Resume with ns=ns-a
     let resp = app.oneshot(
-        Request::builder().uri("/resume?hours=1&ns=ns-a").body(Body::empty()).unwrap()
+        Request::builder().uri("/resume?hours=1&ns=ns-a&format=json").body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let j = body_json(resp).await;
@@ -650,7 +651,7 @@ async fn resume_compact_includes_kind() {
     app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
 
     let resp = app.oneshot(
-        Request::builder().uri("/resume?hours=1&compact=true").body(Body::empty()).unwrap()
+        Request::builder().uri("/resume?hours=1&compact=true&format=json").body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let j = body_json(resp).await;
