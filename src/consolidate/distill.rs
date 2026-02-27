@@ -8,9 +8,9 @@ use tracing::{info, warn};
 /// Distill session notes into project context memories.
 ///
 /// Groups session notes by namespace, then for each group with 3+ undistilled
-/// notes, LLM synthesizes a project status snapshot stored directly in Working.
-/// Tagged `auto-distilled` to block Core promotion (project status changes too
-/// often for Core). Source notes get `distilled` tag to prevent reprocessing.
+/// notes, LLM synthesizes a project status snapshot stored in Buffer as episodic.
+/// Tagged `auto-distilled` to block Core promotion (project status is ephemeral).
+/// Source notes get `distilled` tag to prevent reprocessing.
 pub(super) async fn distill_sessions(db: &SharedDB, cfg: &AiConfig) -> usize {
     let db2 = db.clone();
     let by_ns: std::collections::HashMap<String, Vec<Memory>> = match tokio::task::spawn_blocking(move || {
@@ -87,7 +87,7 @@ async fn distill_one_ns(
             tags: Some(vec!["project-status".into(), "auto-distilled".into()]),
             source: Some("consolidation".into()),
             importance: Some(0.7),
-            layer: Some(2),
+            kind: Some("episodic".into()),
             namespace: ns_val,
             ..Default::default()
         };
@@ -101,15 +101,11 @@ async fn distill_one_ns(
     }
 
     let db5 = db.clone();
-    let tags_map: Vec<(String, Vec<String>)> = to_distill.iter().map(|m| {
-        let mut tags = m.tags.clone();
-        tags.push("distilled".into());
-        (m.id.clone(), tags)
-    }).collect();
-    let count = tags_map.len();
+    let ids: Vec<String> = to_distill.iter().map(|m| m.id.clone()).collect();
+    let count = ids.len();
     let _ = tokio::task::spawn_blocking(move || {
-        for (id, tags) in &tags_map {
-            let _ = db5.update_fields(id, None, None, None, Some(tags));
+        for id in &ids {
+            let _ = db5.delete(id);
         }
     }).await;
     count
