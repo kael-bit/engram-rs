@@ -1,6 +1,6 @@
 {
   "name": "engram-rs-mcp",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "mcpName": "io.github.kael-bit/engram",
   "description": "MCP server for engram — hierarchical memory engine for AI agents",
   "type": "module",
