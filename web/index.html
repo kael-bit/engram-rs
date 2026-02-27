@@ -57,9 +57,9 @@ label { font-size:11px; color:#888; }
 .mc .meta { display:flex; gap:8px; margin-top:6px; font-size:10px; color:#666; flex-wrap:wrap; align-items:center; }
 .mc .score { color:#4caf50; font-weight:600; }
 .lb { display:inline-block; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:600; }
-.l1 { background:rgba(91,156,245,.12); color:#5b9cf5; }
-.l2 { background:rgba(212,164,74,.12); color:#d4a44a; }
-.l3 { background:rgba(168,122,219,.12); color:#a87adb; }
+.l1, .lbuffer { background:rgba(91,156,245,.12); color:#5b9cf5; }
+.l2, .lworking { background:rgba(212,164,74,.12); color:#d4a44a; }
+.l3, .lcore { background:rgba(168,122,219,.12); color:#a87adb; }
 .tag { display:inline-block; padding:1px 5px; border-radius:3px; font-size:9px; background:#222; color:#777; }
 .kind-badge { display:inline-block; padding:1px 5px; border-radius:3px; font-size:9px; background:rgba(76,175,80,.12); color:#4caf50; }
 
@@ -325,6 +325,15 @@ function card(m,score,rel){
       <span>${ago(m.created_at)}</span>${tags}</div></div>`;
 }
 
+function recallCard(m){
+  const tags=(m.tags||[]).map(t=>`<span class="tg">${esc(t)}</span>`).join('');
+  const kind=m.kind?`<span class="kind-badge">${m.kind}</span>`:'';
+  return`<div class="mc" style="cursor:default">
+    <div class="ct">${esc((m.content||'').slice(0,280))}${m.content&&m.content.length>280?'…':''}</div>
+    <div class="meta"><span class="lb l${m.layer}">${m.layer}</span><span class="score">${(m.score||0).toFixed(3)}</span>${kind}
+      <span style="font-size:10px;color:#777">${m.id}</span>${tags}</div></div>`;
+}
+
 function getMem(){
   if(curView==='proxy')return allMem.filter(m=>m.source==='proxy');
   if(['buffer','working','core'].includes(curView))return allMem.filter(m=>m.layer===lc(curView));
@@ -476,8 +485,7 @@ async function doRecall(){
   const r=d.memories||[];
   document.getElementById('rRes').innerHTML=`
     <div style="font-size:11px;color:#555;margin:10px 0 6px">${r.length} results, ${ms}ms — ${d.search_mode||'?'}</div>
-    <div class="ml">${r.length?r.map(m=>card(m,m.score,m.relevance)).join(''):'<div class="empty">Nothing found</div>'}</div>`;
-  bindCards();
+    <div class="ml">${r.length?r.map(m=>recallCard(m)).join(''):'<div class="empty">Nothing found</div>'}</div>`;
 }
 
 function renderSearch(){
