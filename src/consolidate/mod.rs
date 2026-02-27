@@ -16,6 +16,9 @@ mod sandbox;
 mod triage;
 
 pub use audit::{audit_memories, AuditOp, AuditResult, RawAuditOp, AuditToolResponse, audit_tool_schema, resolve_audit_ops};
+pub use cluster::{cluster_memories, batch_clusters, MemoryCluster};
+#[doc(hidden)]
+pub use cluster::{tag_jaccard, combined_similarity, generate_label};
 pub use sandbox::{sandbox_audit, SandboxResult, Grade, OpGrade, RuleChecker};
 pub use merge::{find_clusters, reconcile_pair_key};
 pub use triage::dedup_buffer;
