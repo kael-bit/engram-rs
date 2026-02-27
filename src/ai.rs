@@ -41,7 +41,7 @@ pub struct ResolvedConfig {
 
 /// All known LLM component names.
 const COMPONENTS: &[&str] = &[
-    "gate", "audit", "merge", "extract", "expand", "rerank", "proxy", "triage", "summary", "naming",
+    "gate", "audit", "merge", "extract", "expand", "proxy", "triage", "summary", "naming",
 ];
 
 /// Read per-component overrides from environment variables.

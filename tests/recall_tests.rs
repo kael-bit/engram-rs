@@ -60,7 +60,6 @@ fn score_favors_important() {
         since: None,
         until: None,
         sort_by: None,
-        rerank: None, source: None, tags: None,
         namespace: None,
         expand: None,
         ..Default::default()
@@ -85,7 +84,6 @@ fn budget_limits_output() {
         since: None,
         until: None,
         sort_by: None,
-        rerank: None, source: None, tags: None,
         namespace: None,
         expand: None,
         ..Default::default()
@@ -109,7 +107,6 @@ fn budget_zero_means_unlimited() {
         since: None,
         until: None,
         sort_by: None,
-        rerank: None, source: None, tags: None,
         namespace: None,
         expand: None,
         ..Default::default()
@@ -180,7 +177,6 @@ fn time_filter_since() {
         since: Some(now - 3_600_000), // last hour only
         until: None,
         sort_by: None,
-        rerank: None, source: None, tags: None,
         namespace: None,
         expand: None,
         ..Default::default()
@@ -208,7 +204,6 @@ fn filter_by_source() {
         query: "from".into(),
         budget_tokens: Some(2000),
         layers: None, min_importance: None, limit: Some(10),
-        since: None, until: None, sort_by: None, rerank: None,
         source: Some("session".into()), tags: None,
         namespace: None,
         expand: None,
@@ -237,7 +232,6 @@ fn filter_by_tags() {
         query: "project".into(),
         budget_tokens: Some(2000),
         layers: None, min_importance: None, limit: Some(10),
-        since: None, until: None, sort_by: None, rerank: None,
         source: None, tags: Some(vec!["rust".into()]),
         namespace: None,
         expand: None,
@@ -504,7 +498,7 @@ fn dry_recall_skips_touch() {
     // FTS hit with relevance > 0.5 should have touched
     // FTS-only recall (no embeddings) may not exceed touch relevance threshold (0.5)
     // The important assertion is below: dry recall must NOT touch regardless
-    let ac_after_normal = after_normal.access_count;
+    let _ac_after_normal = after_normal.access_count;
 
     // Dry recall should NOT touch
     let before = db.get(id).unwrap().unwrap();

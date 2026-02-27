@@ -1,6 +1,5 @@
 use engram::consolidate::*;
-use engram::db::{MemoryDB, MemoryInput, Layer, Memory, now_ms};
-use engram::ai::cosine_similarity;
+use engram::db::{MemoryDB, MemoryInput, Layer, Memory};
 
 fn make_mem(id: &str, layer: Layer, importance: f64, emb: Vec<f32>) -> (Memory, Vec<f32>) {
     (

@@ -349,21 +349,6 @@ pub fn distill_topic_schema() -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
-// recall.rs — rerank
-// ---------------------------------------------------------------------------
-
-pub const RERANK_SYSTEM: &str = "\
-You rerank memory search results by relevance to the user's query.
-Think step-by-step about what the user ACTUALLY needs:
-- \"X是谁\" / \"who is X\" → identity/relationship answers first
-- \"X怎么用\" / \"how to X\" → workflows, procedures, role descriptions first; lessons/caveats second
-- \"X怎么设计\" / \"how is X designed\" → architecture/design answers first
-Prefer results that DIRECTLY answer the question over tangential mentions or meta-commentary.
-A result describing what something does and how to use it beats a cautionary principle about it.
-Return ONLY the numbers, most relevant first, comma-separated. No explanation.
-Example: 3,1,5,2";
-
-// ---------------------------------------------------------------------------
 // proxy/extract.rs — proxy memory extraction
 // ---------------------------------------------------------------------------
 

@@ -166,15 +166,7 @@ pub(super) async fn do_recall(
         req.namespace = get_namespace(&headers);
     }
 
-    let auto_rerank = std::env::var("ENGRAM_AUTO_RERANK").map(|v| v != "false").unwrap_or(false);
-    let do_rerank = req.rerank.unwrap_or(auto_rerank)
-        && state.ai.as_ref().is_some_and(super::super::ai::AiConfig::has_llm);
     let query_text = req.query.clone();
-    let final_limit = req.limit.unwrap_or(20).min(100);
-
-    if do_rerank {
-        req.limit = Some(final_limit * 2);
-    }
 
     let query_emb = if let Some(ref cfg) = state.ai {
         if cfg.has_embed() {
@@ -280,12 +272,6 @@ pub(super) async fn do_recall(
         }
     } else {
         auto_expanded = None;
-    }
-
-    if do_rerank {
-        if let Some(cfg) = state.ai.as_ref() {
-            recall::rerank_results(&mut result, &query_text, final_limit, cfg, &state.db).await;
-        }
     }
 
     // attach expanded queries to response

@@ -3,10 +3,9 @@
 use crate::ai::{self, AiConfig};
 use crate::db::{is_cjk, Layer, Memory, MemoryDB, ScoredMemory};
 use crate::error::EngramError;
-use crate::prompts;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, warn};
+use tracing::debug;
 
 // scoring weights — should add up to 1.0
 use crate::thresholds::{RECALL_WEIGHT_RELEVANCE, RECALL_WEIGHT_WEIGHT, RECALL_WEIGHT_RECENCY, RECALL_SIM_FLOOR};
@@ -36,8 +35,7 @@ pub struct RecallRequest {
     pub until: Option<i64>,
     /// Sort order: "score" (default), "recent" (by created_at desc), "accessed" (by last_accessed desc).
     pub sort_by: Option<String>,
-    /// Whether to use LLM to re-rank results.
-    pub rerank: Option<bool>,
+    // rerank removed — FTS+semantic scoring is sufficient
     /// Filter by source (e.g. "session", "extract", "api").
     pub source: Option<String>,
     /// Filter by tags — memory must have ALL specified tags.
@@ -516,98 +514,7 @@ pub fn recall(
     }
 }
 
-/// Re-rank recall results using an LLM. Falls back to original order on failure.
-pub async fn rerank_results(
-    response: &mut RecallResponse,
-    query: &str,
-    limit: usize,
-    cfg: &AiConfig,
-    db: &crate::SharedDB,
-) {
-    if response.memories.len() < 2 {
-        return;
-    }
-
-    let mut numbered = String::new();
-    for (i, sm) in response.memories.iter().enumerate() {
-        use std::fmt::Write;
-        // Truncate long memories to save tokens
-        let content = &sm.memory.content;
-        let preview: String = content.chars().take(150).collect();
-        let suffix = if content.chars().count() > 150 { "…" } else { "" };
-        let _ = writeln!(numbered, "{}. {}{}", i + 1, preview, suffix);
-    }
-
-    let user = format!("Query: {query}\n\nResults:\n{numbered}");
-
-    #[derive(serde::Deserialize)]
-    struct RerankResult { ranked_ids: Vec<usize> }
-
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "ranked_ids": {
-                "type": "array",
-                "items": { "type": "integer" },
-                "description": "Result numbers sorted by relevance (1-indexed)"
-            }
-        },
-        "required": ["ranked_ids"]
-    });
-
-    match ai::llm_tool_call::<RerankResult>(
-        cfg, "rerank", prompts::RERANK_SYSTEM, &user,
-        "rerank_result", "Return result numbers sorted by relevance to the query",
-        schema,
-    ).await {
-        Ok(tcr) => {
-            if let Some(ref u) = tcr.usage {
-                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                let _ = db.log_llm_call("rerank", &tcr.model, u.prompt_tokens, u.completion_tokens, cached, tcr.duration_ms);
-            }
-            let order: Vec<usize> = tcr.value.ranked_ids.iter()
-                .filter(|&&n| n >= 1 && n <= response.memories.len())
-                .map(|&n| n - 1)
-                .collect();
-            debug!(order = ?order, query = query, "rerank result");
-            if order.is_empty() {
-                return;
-            }
-
-            let old = std::mem::take(&mut response.memories);
-            let mut seen = HashSet::new();
-            for idx in &order {
-                if seen.insert(*idx) && *idx < old.len() {
-                    response.memories.push(old[*idx].clone());
-                }
-            }
-            // append any the LLM didn't mention
-            for (i, sm) in old.into_iter().enumerate() {
-                if !seen.contains(&i) {
-                    response.memories.push(sm);
-                }
-            }
-            response.memories.truncate(limit);
-            // Re-assign scores so they reflect the reranked order.
-            // Highest-ranked gets the max score from the set, then
-            // linearly interpolate down to preserve magnitude info.
-            if response.memories.len() > 1 {
-                let max_s = response.memories.iter().map(|m| m.score)
-                    .fold(f64::NEG_INFINITY, f64::max);
-                let min_s = response.memories.iter().map(|m| m.score)
-                    .fold(f64::INFINITY, f64::min);
-                let n = response.memories.len() as f64;
-                for (i, sm) in response.memories.iter_mut().enumerate() {
-                    sm.score = max_s - (max_s - min_s) * (i as f64 / (n - 1.0));
-                }
-            }
-            response.search_mode = format!("{} +rerank", response.search_mode);
-        }
-        Err(e) => {
-            warn!(error = %e, "LLM rerank failed, keeping original order");
-        }
-    }
-}
+// rerank removed — FTS+semantic scoring is sufficient without LLM re-ranking
 
 /// Like `quick_semantic_dup` but with a custom cosine threshold.
 /// Proxy extraction uses a lower threshold (0.72) to catch cross-language dupes.
