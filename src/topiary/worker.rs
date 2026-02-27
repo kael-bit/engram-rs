@@ -146,14 +146,13 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
         }
     }
 
-    // Step 4.5: Don't overwrite good cached tree with all-unnamed tree
+    // Step 4.5: Don't store tree with unnamed topics — keep cached version
     {
-        let total_leaves: usize = tree.roots.iter().map(|r| r.leaf_count()).sum();
         let unnamed = count_unnamed_leaves(&tree.roots);
-        if unnamed == total_leaves && total_leaves > 0 {
+        if unnamed > 0 {
             warn!(
                 unnamed,
-                "topiary: all topics unnamed, keeping cached tree"
+                "topiary: {} unnamed topics, keeping cached tree", unnamed
             );
             return;
         }

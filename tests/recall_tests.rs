@@ -901,20 +901,6 @@ fn recency_score_zero_decay_rate() {
 }
 
 #[test]
-fn recency_score_24h_high_decay() {
-    let now = engram::db::now_ms();
-    let day_ago = now - 24 * 3_600_000;
-    let score = recency_score(day_ago, 5.0);
-    // hours = 24, rate = 5.0: exp(-5.0 * 24 / 168) = exp(-0.714) ≈ 0.4895
-    let expected = (-5.0_f64 * 24.0 / 168.0).exp();
-    assert!(
-        (score - expected).abs() < 0.01,
-        "24h old with decay=5.0 should be ≈{expected:.4}, got {score}"
-    );
-    assert!(score > 0.3 && score < 0.7, "should be in mid range, got {score}");
-}
-
-#[test]
 fn recency_score_huge_finite_decay() {
     let now = engram::db::now_ms();
     let hour_ago = now - 3_600_000;

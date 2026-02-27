@@ -61,7 +61,10 @@ label { font-size:11px; color:#888; }
 .l2, .lworking { background:rgba(212,164,74,.12); color:#d4a44a; }
 .l3, .lcore { background:rgba(168,122,219,.12); color:#a87adb; }
 .tag { display:inline-block; padding:1px 5px; border-radius:3px; font-size:9px; background:#222; color:#777; }
-.kind-badge { display:inline-block; padding:1px 5px; border-radius:3px; font-size:9px; background:rgba(76,175,80,.12); color:#4caf50; }
+.kind-badge { display:inline-block; padding:1px 5px; border-radius:3px; font-size:9px; }
+.kind-semantic { background:rgba(92,156,245,.12); color:#5b9cf5; }
+.kind-episodic { background:rgba(212,164,74,.12); color:#d4a44a; }
+.kind-procedural { background:rgba(76,175,80,.12); color:#4caf50; }
 
 .panel-bg { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:19; display:none; }
 .panel-bg.open { display:block; }
@@ -317,7 +320,7 @@ function card(m,score,rel){
   const tags=(m.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join(' ');
   const sc=score!=null?`<span class="score">${score.toFixed(3)}</span>`:'';
   const rl=rel!=null?`<span class="score" style="opacity:.6">rel ${rel.toFixed(3)}</span>`:'';
-  const kind=m.kind&&m.kind!=='semantic'?`<span class="kind-badge">${m.kind}</span>`:'';
+  const kind=m.kind?`<span class="kind-badge kind-${m.kind}">${m.kind}</span>`:`<span class="kind-badge kind-semantic">semantic</span>`;
   return`<div class="mc" data-id="${m.id}">
     <div class="ct">${esc((m.content||'').slice(0,280))}${m.content&&m.content.length>280?'…':''}</div>
     <div class="meta"><span class="lb l${m.layer}">${ln(m.layer)}</span>${sc}${rl}${kind}
@@ -327,7 +330,7 @@ function card(m,score,rel){
 
 function recallCard(m){
   const tags=(m.tags||[]).map(t=>`<span class="tg">${esc(t)}</span>`).join('');
-  const kind=m.kind?`<span class="kind-badge">${m.kind}</span>`:'';
+  const kind=m.kind?`<span class="kind-badge kind-${m.kind}">${m.kind}</span>`:`<span class="kind-badge kind-semantic">semantic</span>`;
   return`<div class="mc" style="cursor:default">
     <div class="ct">${esc((m.content||'').slice(0,280))}${m.content&&m.content.length>280?'…':''}</div>
     <div class="meta"><span class="lb l${m.layer}">${m.layer}</span><span class="score">${(m.score||0).toFixed(3)}</span>${kind}
@@ -373,8 +376,8 @@ function renderList(mems,scores){
   bindCards();
 }
 
-function goPage(p){page=Math.max(0,p);switchView(curView);}
-function changeSort(v){sortBy=v;page=0;switchView(curView);}
+function goPage(p){page=Math.max(0,p);renderList(getMem());}
+function changeSort(v){sortBy=v;page=0;renderList(getMem());}
 function applyFilter(){
   const q=(document.getElementById('flt')||{}).value||'';
   let mems=getMem();
@@ -503,7 +506,7 @@ function renderResume(){
     <h2>Resume</h2>
     <div class="card">
       <div class="row" style="margin:0;gap:12px;flex-wrap:wrap">
-        <label>Hours <input type="number" id="resHours" value="12" min="1" max="168" style="width:55px"></label>
+        <label>Epochs <input type="number" id="resEpochs" value="24" min="1" max="500" style="width:55px"></label>
         <label><input type="checkbox" id="resCompact"> compact</label>
         <label>Budget <input type="number" id="resBudget" value="0" min="0" style="width:70px" placeholder="0=unlimited"></label>
         <label>Format <select id="resFormat" style="padding:4px 8px;background:#222;color:#eee;border:1px solid #444;border-radius:4px"><option value="json">JSON</option><option value="text">Raw Text</option></select></label>
@@ -575,7 +578,7 @@ function renderResumeResult(r,ms){
 }
 
 async function doResume(){
-  const hours=parseInt(document.getElementById('resHours').value)||12;
+  const epochs=parseInt(document.getElementById('resEpochs').value)||24;
   const compact=document.getElementById('resCompact').checked;
   const budget=parseInt(document.getElementById('resBudget').value)||0;
   const fmt=document.getElementById('resFormat').value;
@@ -583,7 +586,7 @@ async function doResume(){
   const t0=performance.now();
 
   if(fmt==='text'){
-    let url='/resume?hours='+hours;
+    let url='/resume?recent_epochs='+epochs;
     if(compact) url+='&compact=true';
     if(budget>0) url+='&budget='+budget;
     try{
@@ -603,7 +606,7 @@ async function doResume(){
     return;
   }
 
-  let url='/resume?format=json&hours='+hours;
+  let url='/resume?format=json&recent_epochs='+epochs;
   if(compact) url+='&compact=true';
   if(budget>0) url+='&budget='+budget;
   const r=await api(url);
@@ -648,7 +651,7 @@ function renderTopics(){
 
 async function loadTopics(){
   try{
-    const url='/resume?format=json&hours=168';
+    const url='/resume?format=json&recent_epochs=500';
     const r=await api(url);
     topicsData=parseTopicsString(r.topics);
     if(!topicsData.length){
@@ -696,7 +699,7 @@ async function toggleTopic(topicId){
     if(!mems.length){body.innerHTML='<div class="empty">No memories in this topic</div>';return;}
     const mkTags=m=>(m.tags||[]).map(t=>'<span class="tag">'+esc(t)+'</span>').join(' ');
     body.innerHTML='<div class="ml">'+mems.map(m=>{
-      const kind=m.kind&&m.kind!=='semantic'?'<span class="kind-badge">'+esc(m.kind)+'</span>':'';
+      const kind='<span class="kind-badge kind-'+(m.kind||'semantic')+'">'+esc(m.kind||'semantic')+'</span>';
       return '<div class="mc" style="cursor:default"><div class="ct">'+esc(m.content||'')+'</div>'+
         '<div class="meta"><span class="lb l'+(m.layer||1)+'">'+ln(m.layer||1)+'</span> '+kind+
         '<span>imp '+(m.importance||0).toFixed(2)+'</span> <span>'+ago(m.created_at)+'</span> '+mkTags(m)+'</div></div>';
@@ -891,7 +894,7 @@ async function loadTrashPage(p){
     if(!items.length&&trashTotal===0){el.innerHTML='<div class="empty">Trash is empty</div>';if(pgEl)pgEl.innerHTML='';return;}
     el.innerHTML='<div class="ml">'+items.map(t=>{
       const tags=(t.tags||[]).map(tg=>'<span class="tag">'+esc(tg)+'</span>').join(' ');
-      const kind=t.kind&&t.kind!=='semantic'?'<span class="kind-badge">'+esc(t.kind)+'</span>':'';
+      const kind='<span class="kind-badge kind-'+(t.kind||'semantic')+'">'+esc(t.kind||'semantic')+'</span>';
       return '<div class="mc" style="opacity:0.85">'+
         '<div class="ct">'+esc((t.content||'').slice(0,280))+(t.content&&t.content.length>280?'…':'')+'</div>'+
         '<div class="meta">'+

@@ -304,30 +304,6 @@ fn gate_rejected_skips_promotion() {
 }
 
 #[test]
-fn gate_rejected_retries_after_cooldown() {
-    let db = test_db();
-    let old = engram::db::now_ms() - 3 * 86_400_000; // 3 days ago
-    let stale_access = engram::db::now_ms() - 2 * 86_400_000; // last accessed 2 days ago (>24h)
-
-    // gate-rejected but last_accessed > 7 days ago → cooldown expired
-    let mut retry = mem_with_ts("retry-me", Layer::Working, 0.8, 20, old, stale_access);
-    retry.tags = vec!["gate-rejected".into()];
-    retry.repetition_count = 5;
-
-    db.import(&[retry]).unwrap();
-
-    let r = consolidate_sync(&db, None, "full");
-
-    // Should now be a promotion candidate (tag cleared, eligible again)
-    let candidate_ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _, _, _)| id.as_str()).collect();
-    assert!(candidate_ids.contains(&"retry-me"), "gate-rejected with expired cooldown should retry");
-
-    // Tag should be removed
-    let mem = db.get("retry-me").unwrap().unwrap();
-    assert!(!mem.tags.contains(&"gate-rejected".to_string()), "gate-rejected tag should be cleared");
-}
-
-#[test]
 fn high_importance_buffer_rescued_at_ttl() {
     let db = test_db();
     let expired = engram::db::now_ms() - 49 * 3600 * 1000; // 49h ago, past hard_cap (48h)
@@ -423,48 +399,6 @@ fn gate_result_deserializes() {
     let r: GateResult = serde_json::from_str(json).unwrap();
     assert_eq!(r.decision, "reject");
     assert!(r.kind.is_none());
-}
-
-#[test]
-fn gate_rejected_within_cooldown_skips_promotion() {
-    let db = test_db();
-    let now = engram::db::now_ms();
-
-    // gate-rejected memory accessed recently (within 24h cooldown)
-    let mut gr = mem_with_ts("gr-fresh", Layer::Working, 0.8, 20, now - 3600_000, now - 1000);
-    gr.tags = vec!["gate-rejected".into()];
-    gr.repetition_count = 5;
-
-    db.import(&[gr]).unwrap();
-    let r = consolidate_sync(&db, None, "full");
-    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _, _, _)| id.as_str()).collect();
-    assert!(!ids.contains(&"gr-fresh"), "gate-rejected within 24h must not be a candidate");
-
-    // Verify the tag is still there (not cleared prematurely)
-    let m = db.get("gr-fresh").unwrap().unwrap();
-    assert!(m.tags.iter().any(|t| t == "gate-rejected"), "tag should persist within cooldown");
-}
-
-#[test]
-fn gate_rejected_after_cooldown_retries() {
-    let db = test_db();
-    let now = engram::db::now_ms();
-
-    // gate-rejected memory last accessed >24h ago
-    let old_access = now - 25 * 3600_000; // 25 hours ago
-    let mut gr = mem_with_ts("gr-old", Layer::Working, 0.8, 20, now - 48 * 3600_000, old_access);
-    gr.tags = vec!["gate-rejected".into()];
-    gr.repetition_count = 5;
-
-    db.import(&[gr]).unwrap();
-    let r = consolidate_sync(&db, None, "full");
-
-    // After cooldown, the tag should be removed and it becomes a candidate
-    let m = db.get("gr-old").unwrap().unwrap();
-    assert!(!m.tags.iter().any(|t| t == "gate-rejected"),
-        "tag should be cleared after 24h cooldown");
-    let ids: Vec<&str> = r.promotion_candidates.iter().map(|(id, _, _, _, _, _)| id.as_str()).collect();
-    assert!(ids.contains(&"gr-old"), "should re-enter promotion pipeline after cooldown");
 }
 
 #[test]

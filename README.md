@@ -1,6 +1,6 @@
 # engram
 
-Persistent memory for AI agents — organized by time and space. Important memories get promoted, noise fades away, and related knowledge clusters into a browsable topic tree. All automatic.
+Persistent memory for AI agents — organized by time and space. Important memories get promoted, noise decays naturally, and related knowledge clusters into a browsable topic tree. Fully automatic.
 
 <p align="center">
   <img src="docs/engram-quickstart.gif" alt="engram demo — store, context reset, recall" width="720">
@@ -26,46 +26,46 @@ curl -X POST http://localhost:3917/recall \
 curl http://localhost:3917/resume
 ```
 
-## What Makes engram Different
+## Core Features
 
-Most agent memory tools give you a vector store with search. engram adds a **lifecycle** — memories aren't just stored, they're managed over time.
+Most agent memory tools provide a vector store with search. engram adds a **lifecycle** — memories are not just stored, they are continuously managed.
 
-### LLM-Powered Quality Gate
+### LLM Quality Gate
 
-New memories land in Buffer. To reach Working or Core, they pass through an LLM quality gate that evaluates whether the content is worth keeping long-term. This isn't keyword matching — the LLM reads the memory in context and makes a judgment call.
+New memories enter the Buffer layer. Promotion to Working or Core requires passing an LLM quality gate — the LLM evaluates each memory in context and determines whether it warrants long-term retention.
 
 ```
 Buffer → [LLM gate: "Is this a decision, lesson, or preference?"] → Working
-Working → [sustained access + LLM gate] → Core (permanent)
+Working → [sustained access + LLM gate] → Core
 ```
 
 ### Semantic Dedup & Merge
 
-When two memories say the same thing differently, engram detects and merges them:
+When two memories express the same concept in different words, engram detects and merges them:
 
 ```
 Memory A: "use PostgreSQL for auth"
 Memory B: "auth service runs on Postgres"
-→ After consolidation: single merged memory with both contexts
+→ After consolidation: single merged memory preserving both contexts
 ```
 
-The merge is LLM-powered — it understands meaning, not just string similarity.
+Merging is LLM-powered — based on semantic understanding, not string similarity.
 
 ### Automatic Decay
 
-Memories that aren't accessed lose importance over time. But not all memories decay equally:
+Decay is epoch-based — it only occurs during active consolidation cycles, not by wall-clock time. If the agent is idle for a week, memories remain intact.
 
-| Kind | Decay | Use case |
-|------|-------|----------|
-| `semantic` | Normal | Knowledge, preferences, decisions (default) |
-| `episodic` | Normal | Events, experiences, time-bound context |
-| `procedural` | Never | Workflows, instructions, how-to — persists indefinitely |
+| Kind | Decay rate | Use case |
+|------|-----------|----------|
+| `episodic` | Fast | Events, experiences, time-bound context |
+| `semantic` | Slow | Knowledge, preferences, lessons (default) |
+| `procedural` | Slowest | Workflows, instructions, how-to |
 
-Working memories are never deleted — their importance can drop to zero, but they remain searchable. Buffer memories get evicted when they decay below threshold. Core memories are permanent.
+Working and Core memories are never deleted. In the Working layer, importance decreases gradually but memories remain searchable. Buffer serves as a temporary staging area where all kinds may be evicted.
 
 ### Self-Organizing Topic Tree
 
-Vector clustering groups related memories automatically. The tree is hierarchical, with LLM-generated names:
+Vector clustering automatically groups related memories. The tree is hierarchical, with LLM-generated names:
 
 ```
 Memory Architecture
@@ -78,18 +78,18 @@ Deploy & Ops
 User Preferences [6]
 ```
 
-The tree rebuilds automatically when memories change. On session start, the agent gets a topic index as a table of contents. Drill into any topic with `POST /topic {"ids": ["kb3"]}` to get the full memories in that cluster.
+The tree rebuilds automatically when memories change. At session start, the agent receives a topic index as a table of contents. Use `POST /topic {"ids": ["kb3"]}` to retrieve all memories within a specific cluster.
 
-### Trigger System
+### Triggers
 
-Tag a memory with `trigger:deploy`, and it auto-surfaces when the agent checks `/triggers/deploy` before deploying. Lessons learned from past mistakes become guardrails for future actions.
+Tag a memory with `trigger:deploy`, and it surfaces automatically when the agent queries `/triggers/deploy` before executing a deployment.
 
 ```bash
 # Store a lesson
 curl -X POST http://localhost:3917/memories \
   -d '{"content": "LESSON: always backup DB before migration", "tags": ["trigger:deploy", "lesson"]}'
 
-# Before deploying, agent checks:
+# Pre-deployment check
 curl http://localhost:3917/triggers/deploy
 # → returns all memories tagged trigger:deploy, ranked by access count
 ```
@@ -104,8 +104,8 @@ Memory is organized along two dimensions — **time** and **space**:
 │                             │    │ Auth Architecture            │
 │  Buffer → Working → Core    │    │ ├── OAuth2 migration [3]     │
 │    ↓         ↓        ↑     │    │ └── Token handling [2]       │
-│  evict    decay    permanent│    │ Deploy & Ops                 │
-│           only      + gate  │    │ ├── CI/CD procedures [3]     │
+│  evict     decay    gate    │    │ Deploy & Ops                 │
+│                             │    │ ├── CI/CD procedures [3]     │
 │                             │    │ └── Rollback lessons [2]     │
 └─────────────────────────────┘    │ User Preferences [6]         │
                                    └──────────────────────────────┘
@@ -115,24 +115,24 @@ Memory is organized along two dimensions — **time** and **space**:
 
 | Layer | Role | Behavior |
 |-------|------|----------|
-| **Buffer** | Short-term intake | All new memories land here. Unaccessed entries decay and get evicted |
-| **Working** | Active knowledge | Promoted via repeated access or lesson/procedure tags. Never deleted — importance decays but memory persists |
-| **Core** | Long-term identity | Promoted through sustained usage + LLM quality gate. Permanent |
+| **Buffer** | Short-term staging | All new memories enter here. Evicted when they fall below threshold |
+| **Working** | Active knowledge | Promoted by consolidation. Never deleted — importance decays at different rates by kind |
+| **Core** | Long-term identity | Promoted through LLM quality gate. Never deleted |
 
-**Space** — a self-organizing topic tree built from embedding vectors. Related memories cluster by semantic similarity, and an LLM names each cluster:
+**Space** — a self-organizing topic tree built from embedding vectors. Related memories cluster by semantic similarity, with LLM-generated names for each cluster:
 
-| Mechanism | Purpose |
-|-----------|---------|
-| **Vector clustering** | Groups semantically similar memories into topics by cosine similarity |
-| **Hierarchy** | Related topics nest under shared parents, forming a multi-level tree |
-| **LLM naming** | Automatically generates human-readable names for each cluster |
-| **Auto-rebuild** | Tree updates automatically when memories change — no manual maintenance |
+| Mechanism | Description |
+|-----------|-------------|
+| **Vector clustering** | Groups semantically similar memories into topics via cosine similarity |
+| **Hierarchy** | Related topics nest under shared parent nodes, forming a multi-level tree |
+| **LLM naming** | Generates human-readable names for each cluster automatically |
+| **Auto-rebuild** | Tree updates when memories change — no manual maintenance required |
 
-The problem topic trees solve: vector search requires you to guess the right query. Topic trees let the agent browse by subject — scan the directory first, then drill into the relevant branch.
+Topic trees address a fundamental limitation of vector search: it requires the right query to find the right memory. Topic trees allow the agent to browse by subject — scan the directory, then drill into the relevant branch.
 
 ## Session Recovery
 
-One call restores full context after a restart or context compaction:
+A single call restores full context, intended for session start or post-compaction recovery:
 
 ```
 GET /resume →
@@ -142,7 +142,7 @@ deploy: test → build → stop → start (procedural)
 LESSON: never force-push to main
 ...
 
-=== Recent (12h) ===
+=== Recent ===
 [02-27 14:15] switched auth to OAuth2
 [02-27 11:01] published API docs
 
@@ -156,20 +156,20 @@ kb3: "Memory Design" [8]
 deploy, git-push, database-migration
 ```
 
-Four sections, each serving a different purpose:
+Four sections, each serving a distinct purpose:
 
-| Section | What it gives you | Budget |
-|---------|-------------------|--------|
+| Section | Content | Budget |
+|---------|---------|--------|
 | **Core** | Full text of permanent rules and identity — never truncated | ~2k tokens |
-| **Recent** | Memories changed in the last 12 hours, for short-term continuity | ~1k tokens |
-| **Topics** | Named topic index — the table of contents for all your memories | Leaf list |
-| **Triggers** | Pre-action safety tags — auto-surface relevant lessons | Tag list |
+| **Recent** | Memories changed since last consolidation window, for short-term continuity | ~1k tokens |
+| **Topics** | Named topic index — structured directory of all memories | Leaf list |
+| **Triggers** | Pre-action safety tags for automatic lesson recall | Tag list |
 
-The agent reads the topic index, spots something relevant, and drills in with `POST /topic`. This avoids dumping the entire memory store into context.
+The agent reads the topic index, identifies relevant topics, and drills in via `POST /topic` on demand. This avoids loading the entire memory store into context.
 
 ## Search & Retrieval
 
-Hybrid retrieval: semantic embeddings + BM25 keyword search (with [jieba](https://github.com/messense/jieba-rs) for CJK). Results ranked by relevance, memory importance, and recency.
+Hybrid retrieval combining semantic embeddings and BM25 keyword search (with [jieba](https://github.com/messense/jieba-rs) for CJK tokenization). Results are ranked by relevance, memory importance, and recency.
 
 ```bash
 # Semantic search with budget control
@@ -186,32 +186,32 @@ curl -X POST http://localhost:3917/topic \
 
 ## Background Maintenance
 
-Fully autonomous. Activity-driven — skips cycles when there's been no write activity:
+Fully autonomous and activity-driven — cycles are skipped when there has been no write activity:
 
 ### Consolidation (every 30 minutes)
 
-Each cycle runs these steps in order:
+Each cycle executes the following steps in order:
 
 1. **Decay** — reduce importance of unaccessed memories
 2. **Dedup** — detect and merge near-identical memories (cosine > 0.78)
 3. **Triage** — LLM categorizes new Buffer memories for promotion
-4. **Gate** — LLM evaluates promotion candidates (batch, single call)
-5. **Reconcile** — LLM resolves ambiguous similar pairs, cached to avoid repeat calls
-6. **Topic tree rebuild** — re-cluster and name any new or dirty topics
+4. **Gate** — LLM evaluates promotion candidates (batched, single call)
+5. **Reconcile** — LLM resolves ambiguous similar pairs; results are cached to avoid redundant calls
+6. **Topic tree rebuild** — re-cluster and name new or changed topics
 
 ### Audit (every 12 hours)
 
-Full-store review by LLM:
+Full-store LLM review:
 
-- Promote under-valued memories, demote stale ones
+- Promote undervalued memories, demote stale ones
 - Merge duplicates that escaped real-time dedup
 - Adjust importance scores based on global context
 
-The audit sees all Core and Working memories at once, so it can catch cross-topic redundancy that per-memory heuristics miss.
+The audit examines all Core and Working memories simultaneously, enabling detection of cross-topic redundancy that per-memory processing cannot catch.
 
 ## Namespace Isolation
 
-One engram instance, multiple projects. Each namespace gets its own isolated memory space:
+A single engram instance supports multiple projects. Each namespace maintains an isolated memory space:
 
 ```bash
 # Project-specific memories
@@ -219,7 +219,7 @@ curl -X POST http://localhost:3917/memories \
   -H "X-Namespace: my-project" \
   -d '{"content": "API uses OAuth2 bearer tokens"}'
 
-# Cross-project knowledge lives in the default namespace
+# Cross-project knowledge in the default namespace
 curl -X POST http://localhost:3917/memories \
   -d '{"content": "Always use UTC for timestamps"}'
 ```
@@ -247,13 +247,13 @@ docker run -d --name engram \
 
 ### LLM Configuration
 
-engram works without an LLM — keyword search and heuristic lifecycle only. Add one to unlock smart features (triage, gate, merge, topic naming, audit):
+engram functions without an LLM — providing keyword search and rule-based lifecycle only. Adding an LLM enables intelligent features (triage, gate, merge, topic naming, audit):
 
 ```bash
 export ENGRAM_LLM_URL=https://api.openai.com/v1
 export ENGRAM_LLM_KEY=sk-...
 
-# Or any OpenAI-compatible API (Ollama, LM Studio, etc.)
+# Any OpenAI-compatible API (Ollama, LM Studio, etc.)
 export ENGRAM_LLM_URL=http://localhost:11434/v1
 
 # Anthropic native
@@ -261,7 +261,7 @@ export ENGRAM_LLM_PROVIDER=anthropic
 export ENGRAM_LLM_KEY=sk-ant-...
 ```
 
-Two-tier model configuration — use a strong model for judgment tasks (gate, audit) and a cheap model for text processing (merge, triage):
+Two-tier model configuration — strong model for judgment tasks, lightweight model for text processing:
 
 ```bash
 ENGRAM_GATE_MODEL=gpt-4o          # quality decisions
@@ -270,7 +270,7 @@ ENGRAM_LLM_MODEL=gpt-4o-mini     # text processing
 
 ### For AI Agents
 
-Paste this into your agent's system prompt or session:
+Add this to your agent's system prompt or session:
 
 ```
 Set up engram (persistent memory) by following the guide at:
@@ -279,7 +279,7 @@ https://raw.githubusercontent.com/kael-bit/engram-rs/main/docs/SETUP.md
 
 ## Integration
 
-Works with Claude Code, Cursor, Windsurf, OpenClaw, and any MCP-compatible tool.
+Compatible with Claude Code, Cursor, Windsurf, OpenClaw, and any MCP-compatible tool.
 
 17 MCP tools — see [MCP docs](docs/MCP.md). Full HTTP API — see [Setup guide](docs/SETUP.md).
 
@@ -294,7 +294,7 @@ npx engram-rs-mcp
 
 ### Web Dashboard
 
-Built-in web UI at `http://localhost:3917` — browse memories, view the topic tree, monitor LLM usage, inspect consolidation history.
+Built-in web UI at `http://localhost:3917` for browsing memories, viewing the topic tree, monitoring LLM usage, and inspecting consolidation history.
 
 ## Specs
 

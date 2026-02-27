@@ -6,7 +6,7 @@ use uuid::Uuid;
 /// Column list excluding the embedding blob. Used in "meta" queries to avoid
 /// deserializing large vectors when only scalar fields are needed.
 pub(super) const META_COLS: &str = "id, content, layer, importance, created_at, last_accessed, \
-    access_count, repetition_count, decay_rate, source, tags, namespace, kind, modified_at";
+    access_count, repetition_count, decay_rate, source, tags, namespace, kind, modified_at, modified_epoch";
 
 use super::*;
 
@@ -73,10 +73,10 @@ impl MemoryDB {
         let now = now_ms();
         let base_importance = input.importance.unwrap_or(0.5);
 
-        // All new memories enter Buffer. Triage promotes worthy ones to Working.
-        // Explicit layer only for admin/migration use.
-        let layer_val = input.layer.unwrap_or(1);
-        let layer: Layer = layer_val.try_into()?;
+        // All new memories enter Buffer — no exceptions.
+        // Promotion to Working/Core is handled by consolidation and gate.
+        let layer = Layer::Buffer;
+        let layer_val = layer as u8;
         let id = Uuid::new_v4().to_string();
         let source = input.source.unwrap_or_else(|| "api".into());
         let tags = input.tags.unwrap_or_default();
@@ -97,15 +97,21 @@ impl MemoryDB {
         let namespace = input.namespace.unwrap_or_else(|| "default".into());
         let kind = input.kind.unwrap_or_else(|| "semantic".into());
 
-        let decay = if kind == "procedural" { 0.01 } else { layer.default_decay() };
+        // Buffer decay: all kinds decay equally in Buffer (temporary staging area)
+        let decay = layer.default_decay();
 
         let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
+
+        // Read current epoch for modified_epoch stamping
+        let current_epoch: i64 = self.get_meta("consolidation_epoch")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
 
         self.conn()?.execute(
             "INSERT INTO memories \
              (id, content, layer, importance, created_at, last_accessed, \
-              access_count, decay_rate, source, tags, namespace, kind, modified_at) \
-             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11,?12)",
+              access_count, decay_rate, source, tags, namespace, kind, modified_at, modified_epoch) \
+             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11,?12,?13)",
             params![
                 id,
                 input.content,
@@ -119,6 +125,7 @@ impl MemoryDB {
                 namespace,
                 kind,
                 now,
+                current_epoch,
             ],
         )?;
 
@@ -152,6 +159,7 @@ impl MemoryDB {
             embedding: None,
             kind,
             modified_at: now,
+            modified_epoch: current_epoch,
         })
     }
 
@@ -161,6 +169,9 @@ impl MemoryDB {
         let conn = self.conn()?;
         conn.execute_batch("BEGIN")?;
         let mut results = Vec::with_capacity(inputs.len());
+        let current_epoch: i64 = self.get_meta("consolidation_epoch")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         let result = (|| -> Result<(), EngramError> {
             for input in inputs {
                 if let Err(e) = validate_input(&input) {
@@ -168,11 +179,9 @@ impl MemoryDB {
                     continue;
                 }
                 let now = now_ms();
-                let layer_val = input.layer.unwrap_or(1);
-                let layer: Layer = match layer_val.try_into() {
-                    Ok(l) => l,
-                    Err(_) => continue,
-                };
+                // All new memories enter Buffer
+                let layer = Layer::Buffer;
+                let layer_val = layer as u8;
                 let id = Uuid::new_v4().to_string();
                 let source = input.source.unwrap_or_else(|| "api".into());
                 let tags = input.tags.unwrap_or_default();
@@ -190,18 +199,19 @@ impl MemoryDB {
                 let namespace = input.namespace.unwrap_or_else(|| "default".into());
                 let kind = input.kind.unwrap_or_else(|| "semantic".into());
 
-                let decay = if kind == "procedural" { 0.01 } else { layer.default_decay() };
+                // Buffer decay: all kinds decay equally in Buffer
+                let decay = layer.default_decay();
 
                 let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into());
 
                 conn.execute(
                     "INSERT INTO memories \
                      (id, content, layer, importance, created_at, last_accessed, \
-                      access_count, decay_rate, source, tags, namespace, kind, modified_at) \
-                     VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11,?12)",
+                      access_count, decay_rate, source, tags, namespace, kind, modified_at, modified_epoch) \
+                     VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?11,?12,?13)",
                     params![
                         id, input.content, layer_val, importance, now, now,
-                        decay, source, tags_json, namespace, kind, now
+                        decay, source, tags_json, namespace, kind, now, current_epoch
                     ],
                 )?;
                 let processed = append_segmented(&input.content);
@@ -226,6 +236,7 @@ impl MemoryDB {
                     embedding: None,
                     kind,
                     modified_at: now,
+                    modified_epoch: current_epoch,
                 });
             }
             Ok(())
@@ -422,16 +433,32 @@ impl MemoryDB {
 
     /// Decay importance for memories not accessed recently.
     /// Returns the number of memories affected.
-    pub fn decay_importance(&self, idle_hours: f64, decay_amount: f64, floor: f64) -> Result<usize, EngramError> {
-        let cutoff = now_ms() - (idle_hours * 3_600_000.0) as i64;
-        // Only decay Buffer and Working — Core memories earned their spot
-        // and shouldn't lose importance from inactivity.
-        let n = self.conn()?.execute(
+    /// Decay importance per consolidation epoch (activity-based, not time-based).
+    /// Called once per consolidation cycle. Only runs when there's write activity,
+    /// so idle periods cause zero decay.
+    /// Decay amount varies by kind: episodic fastest, semantic medium, procedural slowest.
+    /// `cycle_start` is the timestamp when this consolidation cycle began —
+    /// memories accessed after this point are not decayed.
+    pub fn decay_importance(&self, cycle_start: i64, decay_amount: f64, floor: f64) -> Result<usize, EngramError> {
+        let conn = self.conn()?;
+        // Only decay Buffer and Working — Core memories earned their spot.
+        // episodic: full amount, semantic: 60%, procedural: 20%
+        let n_episodic = conn.execute(
             "UPDATE memories SET importance = MAX(?1, importance - ?2) \
-             WHERE last_accessed < ?3 AND importance > ?1 AND layer < 3",
-            params![floor, decay_amount, cutoff],
+             WHERE last_accessed < ?3 AND importance > ?1 AND layer < 3 AND kind = 'episodic'",
+            params![floor, decay_amount, cycle_start],
         )?;
-        Ok(n)
+        let n_semantic = conn.execute(
+            "UPDATE memories SET importance = MAX(?1, importance - ?2) \
+             WHERE last_accessed < ?3 AND importance > ?1 AND layer < 3 AND kind = 'semantic'",
+            params![floor, decay_amount * 0.6, cycle_start],
+        )?;
+        let n_procedural = conn.execute(
+            "UPDATE memories SET importance = MAX(?1, importance - ?2) \
+             WHERE last_accessed < ?3 AND importance > ?1 AND layer < 3 AND kind = 'procedural'",
+            params![floor, decay_amount * 0.2, cycle_start],
+        )?;
+        Ok(n_episodic + n_semantic + n_procedural)
     }
 
     /// Set access_count directly (used when merging memories to preserve history).
@@ -698,6 +725,36 @@ impl MemoryDB {
         Ok(rows)
     }
 
+    /// List memories modified at or after a given consolidation epoch.
+    pub fn list_by_epoch(
+        &self,
+        min_epoch: i64,
+        limit: usize,
+        ns: Option<&str>,
+    ) -> Result<Vec<Memory>, EngramError> {
+        let conn = self.conn()?;
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(min_epoch)];
+        let mut extra = String::new();
+        if let Some(n) = ns {
+            params_vec.push(Box::new(n.to_string()));
+            extra.push_str(&format!(" AND namespace = ?{}", params_vec.len()));
+        }
+        params_vec.push(Box::new(limit as i64));
+        let limit_idx = params_vec.len();
+
+        let sql = format!(
+            "SELECT {META_COLS} FROM memories WHERE modified_epoch >= ?1{extra} ORDER BY modified_at DESC LIMIT ?{limit_idx}"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(std::convert::AsRef::as_ref).collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), row_to_memory_meta)?
+            .filter_map(|r| r.map_err(|e| tracing::warn!("row parse: {e}")).ok())
+            .collect();
+        Ok(rows)
+    }
+
     /// List memories that have a specific tag (exact match).
     pub fn list_by_tag(&self, tag: &str, ns: Option<&str>) -> Result<Vec<Memory>, EngramError> {
         let conn = self.conn()?;
@@ -733,9 +790,25 @@ impl MemoryDB {
             return Ok(Some(m));
         }
 
+        // Kind-differentiated decay: episodic fastest, semantic medium, procedural slowest
+        let decay = match target {
+            Layer::Buffer => target.default_decay(),
+            Layer::Core => target.default_decay(),
+            Layer::Working => match m.kind.as_str() {
+                "episodic" => 1.0,
+                "procedural" => 0.1,
+                _ => 0.3, // semantic
+            },
+        };
+
+        let now = now_ms();
+        let current_epoch: i64 = self.get_meta("consolidation_epoch")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+
         self.conn()?.execute(
-            "UPDATE memories SET layer = ?1, decay_rate = ?2, last_accessed = ?3 WHERE id = ?4",
-            params![target as u8, target.default_decay(), now_ms(), id],
+            "UPDATE memories SET layer = ?1, decay_rate = ?2, last_accessed = ?3, modified_at = ?3, modified_epoch = ?5 WHERE id = ?4",
+            params![target as u8, decay, now, id, current_epoch],
         )?;
         self.get(id)
     }
@@ -747,9 +820,22 @@ impl MemoryDB {
         if (m.layer as u8) <= (target as u8) {
             return Ok(Some(m));
         }
+        let decay = match target {
+            Layer::Buffer => target.default_decay(),
+            Layer::Core => target.default_decay(),
+            Layer::Working => match m.kind.as_str() {
+                "episodic" => 1.0,
+                "procedural" => 0.1,
+                _ => 0.3,
+            },
+        };
+        let now = now_ms();
+        let current_epoch: i64 = self.get_meta("consolidation_epoch")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         self.conn()?.execute(
-            "UPDATE memories SET layer = ?1, decay_rate = ?2 WHERE id = ?3",
-            params![target as u8, target.default_decay(), id],
+            "UPDATE memories SET layer = ?1, decay_rate = ?2, modified_at = ?4, modified_epoch = ?5 WHERE id = ?3",
+            params![target as u8, decay, id, now, current_epoch],
         )?;
         // Invalidate resume compression cache on layer change
         let _ = self.clear_meta_prefix("resume_cache:");
@@ -911,9 +997,14 @@ impl MemoryDB {
         }
 
         if !set_clauses.is_empty() {
-            // Any real field change bumps modified_at
+            // Any real field change bumps modified_at and modified_epoch
             set_clauses.push("modified_at=?".into());
             values.push(Box::new(crate::db::now_ms()));
+            let current_epoch: i64 = self.get_meta("consolidation_epoch")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            set_clauses.push("modified_epoch=?".into());
+            values.push(Box::new(current_epoch));
             values.push(Box::new(id.to_string()));
             let sql = format!(
                 "UPDATE memories SET {} WHERE id=?",

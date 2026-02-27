@@ -128,7 +128,6 @@ async fn main() {
                         promote_threshold: None,
                         promote_min_importance: None,
                         decay_drop_threshold: None,
-                        buffer_ttl_secs: None,
                         working_age_promote_secs: None,
                     })
                 } else {

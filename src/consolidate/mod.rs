@@ -32,8 +32,6 @@ pub struct ConsolidateRequest {
     pub promote_threshold: Option<i64>,
     pub promote_min_importance: Option<f64>,
     pub decay_drop_threshold: Option<f64>,
-    /// Buffer entries older than this (seconds) get promoted or dropped.
-    pub buffer_ttl_secs: Option<i64>,
     /// Working entries older than this (seconds) with decent importance auto-promote to core.
     pub working_age_promote_secs: Option<i64>,
     /// Whether to merge similar memories within each layer via LLM.
@@ -143,6 +141,16 @@ pub async fn consolidate(
         ConsolidateResponse::default()
     });
 
+    // Read the current epoch (already incremented by consolidate_sync above)
+    let epoch: i64 = {
+        let db3 = db.clone();
+        tokio::task::spawn_blocking(move || {
+            db3.get_meta("consolidation_epoch")
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0)
+        }).await.unwrap_or(0)
+    };
+
     // LLM gate: review promotion candidates before moving to Core.
     // Behavior depends on ENGRAM_LLM_LEVEL:
     //   full  — always call LLM (original behavior)
@@ -201,12 +209,12 @@ pub async fn consolidate(
                         uncertain.iter().map(|(id, content, ac, rep, imp, tags)| {
                             (id.clone(), content.clone(), *ac, *rep, *imp, tags.clone())
                         }).collect();
-                    apply_batch_gate_results(&db, &ai, &batch_cands, &mut result).await;
+                    apply_batch_gate_results(&db, &ai, &batch_cands, &mut result, epoch).await;
                 }
             }
             _ => {
                 // "full" mode — all candidates go to LLM (batch)
-                apply_batch_gate_results(&db, &ai, &candidates, &mut result).await;
+                apply_batch_gate_results(&db, &ai, &candidates, &mut result, epoch).await;
             }
         }
     }
@@ -307,22 +315,28 @@ pub async fn consolidate(
 }
 
 /// Strip stale process tags that should not persist:
-/// - `gate-rejected` on Working memories where `last_accessed` is > 24 h ago
+/// - `gate-rejected` on Working memories where the rejection epoch is stale (>48 epochs ago)
 /// - `promotion` on anything already in Working or Core
 pub fn cleanup_stale_tags(db: &MemoryDB) {
-    let now = crate::db::now_ms();
-    let stale_cutoff = 24 * 3600 * 1000_i64;
+    let epoch: i64 = db.get_meta("consolidation_epoch")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    let stale_epoch_diff: i64 = 48; // same as first-rejection cooldown
     let mut cleaned = 0_usize;
 
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_default() {
-        if mem.tags.iter().any(|t| t == "gate-rejected")
-            && (now - mem.last_accessed) > stale_cutoff
-        {
-            let new_tags: Vec<String> = mem.tags.iter()
-                .filter(|t| t.as_str() != "gate-rejected")
-                .cloned().collect();
-            if db.update_fields(&mem.id, None, None, None, Some(&new_tags)).is_ok() {
-                cleaned += 1;
+        if mem.tags.iter().any(|t| t == "gate-rejected") {
+            // Check epoch tag; if missing (legacy), treat as stale
+            let rejected_epoch = mem.tags.iter()
+                .find_map(|t| t.strip_prefix("_gate_epoch:").and_then(|v| v.parse::<i64>().ok()))
+                .unwrap_or(0);
+            if epoch - rejected_epoch >= stale_epoch_diff {
+                let new_tags: Vec<String> = mem.tags.iter()
+                    .filter(|t| t.as_str() != "gate-rejected" && !t.starts_with("_gate_epoch:"))
+                    .cloned().collect();
+                if db.update_fields(&mem.id, None, None, None, Some(&new_tags)).is_ok() {
+                    cleaned += 1;
+                }
             }
         }
     }
@@ -345,41 +359,6 @@ pub fn cleanup_stale_tags(db: &MemoryDB) {
     }
 }
 
-/// Fix buffer memories stuck by ultra-low decay rates or abandoned with no access.
-pub fn fix_stuck_buffer(db: &MemoryDB) {
-    let now = crate::db::now_ms();
-    let two_days_ms = 48 * 3600 * 1000_i64;
-    let seven_days_ms = 7 * 24 * 3600 * 1000_i64;
-    let mut fixed = 0_usize;
-    let mut cleaned = 0_usize;
-
-    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_default() {
-        let age_ms = now - mem.created_at;
-
-        // Reset stuck decay rates (< 1.0 after 48h means it'll never leave naturally)
-        if age_ms > two_days_ms
-            && mem.decay_rate < 1.0
-            && db.update_decay_rate(&mem.id, 5.0).is_ok()
-        {
-            fixed += 1;
-        }
-
-        // Delete abandoned buffer entries (> 7 days, barely accessed, not protected)
-        if age_ms > seven_days_ms
-            && mem.access_count < 2
-            && mem.kind != "procedural"
-            && !mem.tags.iter().any(|t| t == "lesson")
-            && db.delete(&mem.id).unwrap_or(false)
-        {
-            cleaned += 1;
-        }
-    }
-
-    if fixed > 0 || cleaned > 0 {
-        info!(decay_reset = fixed, expired_deleted = cleaned, "buffer maintenance");
-    }
-}
-
 /// Dry-run consolidation: evaluates what would happen without writing anything.
 /// Returns counts and preview lists of memories that would be promoted, decayed, or demoted.
 pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> ConsolidateResponse {
@@ -388,8 +367,6 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
     let _promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
     let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
     let decay_threshold = req.and_then(|r| r.decay_drop_threshold).unwrap_or(0.01);
-    let buffer_ttl = req.and_then(|r| r.buffer_ttl_secs).unwrap_or(86400)
-        .saturating_mul(1000);
     let working_age = req.and_then(|r| r.working_age_promote_secs).unwrap_or(7 * 86400)
         .saturating_mul(1000);
 
@@ -397,7 +374,10 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
     let mut would_decay = Vec::new();
     let mut would_demote = Vec::new();
 
-    let lesson_cooldown_ms: i64 = 2 * 3600 * 1000;
+    let lesson_cooldown_epochs: i64 = 4;
+    let epoch: i64 = db.get_meta("consolidation_epoch")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
 
     // --- Demote session/ephemeral Core memories ---
     for mem in db.list_by_layer_meta(Layer::Core, 10000, 0).unwrap_or_default() {
@@ -437,33 +417,18 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
         let weight = crate::scoring::memory_weight(&mem);
         let is_lesson = mem.tags.iter().any(|t| t == "lesson");
         let is_procedural = mem.kind == "procedural";
-        let age = now - mem.created_at;
+        let birth_epoch = mem.tags.iter()
+            .find_map(|t| t.strip_prefix("_birth_epoch:").and_then(|v| v.parse::<i64>().ok()))
+            .unwrap_or(epoch); // no tag = just born
+        let epochs_alive = epoch - birth_epoch;
         let by_score = weight >= 0.4;
-        let by_kind = (is_lesson || is_procedural) && age > lesson_cooldown_ms;
+        let by_kind = (is_lesson || is_procedural) && epochs_alive >= lesson_cooldown_epochs;
         if by_score || by_kind {
             would_promote.push(DryRunEntry {
                 id: mem.id.clone(),
                 preview: truncate_chars(&mem.content, 100).to_string(),
             });
             promoted_ids.insert(mem.id.clone());
-        }
-    }
-
-    // --- Buffer TTL drops ---
-    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_default() {
-        let is_lesson = mem.tags.iter().any(|t| t == "lesson");
-        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson { continue; }
-        let age = now - mem.created_at;
-        if age > buffer_ttl {
-            let weight = crate::scoring::memory_weight(&mem);
-            let worth_keeping = weight >= 0.3
-                || mem.importance >= crate::thresholds::BUFFER_RESCUE_IMPORTANCE;
-            if !worth_keeping {
-                would_decay.push(DryRunEntry {
-                    id: mem.id.clone(),
-                    preview: truncate_chars(&mem.content, 100).to_string(),
-                });
-            }
         }
     }
 
@@ -474,9 +439,7 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
     if buffer_mems.len() > buffer_cap {
         let mut evictable: Vec<&Memory> = buffer_mems.iter()
             .filter(|m| {
-                m.kind != "procedural"
-                    && !m.tags.iter().any(|t| t == "lesson")
-                    && !promoted_ids.contains(&m.id)
+                !promoted_ids.contains(&m.id)
             })
             .collect();
         let overflow = buffer_mems.len().saturating_sub(buffer_cap);
@@ -500,8 +463,7 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
     // --- Decayed entries (Buffer only — Working is never deleted) ---
     for mem in db.get_decayed(decay_threshold).unwrap_or_default() {
         if mem.layer != Layer::Buffer { continue; }
-        let is_lesson = mem.tags.iter().any(|t| t == "lesson");
-        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson { continue; }
+        if promoted_ids.contains(&mem.id) { continue; }
         would_decay.push(DryRunEntry {
             id: mem.id.clone(),
             preview: truncate_chars(&mem.content, 100).to_string(),
@@ -526,9 +488,15 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
 
 pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_level: &str) -> ConsolidateResponse {
     cleanup_stale_tags(db);
-    fix_stuck_buffer(db);
 
     let now = crate::db::now_ms();
+
+    // Epoch counter: increments every consolidation cycle. Used for cooldowns
+    // instead of wall-clock time so idle periods don't count.
+    let epoch: i64 = db.get_meta("consolidation_epoch")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0) + 1;
+    db.set_meta("consolidation_epoch", &epoch.to_string()).ok();
 
     // --- Working layer quality rules (before main consolidation) ---
 
@@ -550,8 +518,6 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     let _promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
     let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
     let decay_threshold = req.and_then(|r| r.decay_drop_threshold).unwrap_or(0.01);
-    let buffer_ttl = req.and_then(|r| r.buffer_ttl_secs).unwrap_or(86400)
-        .saturating_mul(1000);
     let working_age = req.and_then(|r| r.working_age_promote_secs).unwrap_or(7 * 86400)
         .saturating_mul(1000);
 
@@ -666,12 +632,12 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     // Working -> Core: collect candidates for LLM gate review.
     // Reinforcement score: repetition weighs more because restating > incidental recall.
     // Session notes and ephemeral tags are always blocked.
-    // gate-rejected memories get escalating retry cooldowns:
-    //   1st rejection (gate-rejected): retry after 24h
-    //   2nd rejection (gate-rejected-2): retry after 72h
+    // gate-rejected memories get escalating retry cooldowns (epoch-based):
+    //   1st rejection (gate-rejected): retry after 48 epochs
+    //   2nd rejection (gate-rejected-2): retry after 144 epochs
     //   3rd rejection (gate-rejected-final): never retry, accept verdict
-    let gate_retry_ms: i64 = 24 * 3600 * 1000;
-    let gate_retry_2_ms: i64 = 72 * 3600 * 1000;
+    let gate_retry_epochs: i64 = 48;
+    let gate_retry_2_epochs: i64 = 144;
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list_by_layer_meta(Working) failed"); vec![] }) {
         if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral" || t == "auto-distilled" || t == "distilled") {
             continue;
@@ -680,19 +646,23 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
         if mem.tags.iter().any(|t| t == "gate-rejected-final") {
             continue;
         }
-        // _gate-pending: LLM error cooldown — skip for 2 hours after failure
-        if mem.tags.iter().any(|t| t == "_gate-pending") {
-            let pending_cooldown_ms: i64 = 2 * 3600 * 1000;
-            if now - mem.modified_at < pending_cooldown_ms {
+        // _gate-pending: LLM error cooldown — skip for 4 epochs after failure
+        if let Some(pending_epoch) = mem.tags.iter()
+            .find_map(|t| t.strip_prefix("_gate_pending_epoch:").and_then(|v| v.parse::<i64>().ok()))
+        {
+            if epoch - pending_epoch < 4 {
                 continue;
             }
             // Cooldown expired — remove the tag and proceed
             let cleaned: Vec<String> = mem.tags.iter()
-                .filter(|t| t.as_str() != "_gate-pending")
+                .filter(|t| !t.starts_with("_gate_pending_epoch:"))
                 .cloned().collect();
             let _ = db.update_fields(&mem.id, None, None, None, Some(&cleaned));
             debug!(id = %mem.id, "_gate-pending cooldown expired, retrying");
         }
+        // Parse the epoch when this memory was last gate-rejected
+        let rejected_epoch = mem.tags.iter()
+            .find_map(|t| t.strip_prefix("_gate_epoch:").and_then(|v| v.parse::<i64>().ok()));
         // Second rejection — longer cooldown
         let is_rejected_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
         let is_rejected_1 = mem.tags.iter().any(|t| t == "gate-rejected");
@@ -700,29 +670,31 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
             if llm_level == "auto" {
                 // Auto mode: third strike — auto-reject as final, skip LLM
                 let mut cleaned: Vec<String> = mem.tags.iter()
-                    .filter(|t| !t.starts_with("gate-rejected"))
+                    .filter(|t| !t.starts_with("gate-rejected") && !t.starts_with("_gate_epoch:"))
                     .cloned().collect();
                 cleaned.push("gate-rejected-final".into());
                 let _ = db.update_fields(&mem.id, None, None, None, Some(&cleaned));
                 info!(id = %mem.id, "auto-rejected for Core (heuristic: gate-rejected-2, third strike)");
                 continue;
             }
-            if now - mem.last_accessed < gate_retry_2_ms {
+            let rej_ep = rejected_epoch.unwrap_or(0);
+            if epoch - rej_ep < gate_retry_2_epochs {
                 continue;
             }
-            // 72h cooldown expired — remove tag for final attempt
+            // Cooldown expired — remove tag for final attempt
             let cleaned: Vec<String> = mem.tags.iter()
-                .filter(|t| t.as_str() != "gate-rejected-2")
+                .filter(|t| t.as_str() != "gate-rejected-2" && !t.starts_with("_gate_epoch:"))
                 .cloned().collect();
             let _ = db.update_fields(&mem.id, None, None, None, Some(&cleaned));
             info!(id = %mem.id, "gate-rejected-2 cooldown expired, final retry");
         } else if is_rejected_1 {
-            if now - mem.last_accessed < gate_retry_ms {
+            let rej_ep = rejected_epoch.unwrap_or(0);
+            if epoch - rej_ep < gate_retry_epochs {
                 continue;
             }
-            // 24h cooldown expired — remove tag and let it re-evaluate
+            // Cooldown expired — remove tag and let it re-evaluate
             let cleaned: Vec<String> = mem.tags.iter()
-                .filter(|t| t.as_str() != "gate-rejected")
+                .filter(|t| t.as_str() != "gate-rejected" && !t.starts_with("_gate_epoch:"))
                 .cloned().collect();
             let _ = db.update_fields(&mem.id, None, None, None, Some(&cleaned));
             info!(id = %mem.id, "gate-rejected cooldown expired, retrying promotion");
@@ -739,10 +711,10 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
         }
     }
 
-    // Buffer -> Working: weighted score OR lesson/procedural with cooldown.
+    // Buffer -> Working: weighted score OR lesson/procedural with epoch cooldown.
     // Lessons and procedurals are inherently worth keeping — if they survived
-    // initial dedup and 2+ hours in buffer, promote them.
-    let lesson_cooldown_ms: i64 = 2 * 3600 * 1000; // 2 hours
+    // initial dedup and 4+ consolidation epochs in buffer, promote them.
+    let lesson_cooldown_epochs: i64 = 4;
     for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list_by_layer_meta(Buffer) failed"); vec![] }) {
         // Distilled sessions already have their content in the project-status
         // summary — promoting them individually would be redundant.
@@ -751,54 +723,30 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
         let weight = crate::scoring::memory_weight(&mem);
         let is_lesson = mem.tags.iter().any(|t| t == "lesson");
         let is_procedural = mem.kind == "procedural";
-        let age = now - mem.created_at;
+
+        // For lesson/procedural cooldown: check _birth_epoch tag.
+        // If missing, tag it with current epoch and skip (first sighting).
+        let birth_epoch = mem.tags.iter()
+            .find_map(|t| t.strip_prefix("_birth_epoch:").and_then(|v| v.parse::<i64>().ok()));
+        let epochs_alive = match birth_epoch {
+            Some(be) => epoch - be,
+            None => {
+                // First consolidation cycle seeing this memory — tag it
+                if is_lesson || is_procedural {
+                    let mut tags = mem.tags.clone();
+                    tags.push(format!("_birth_epoch:{}", epoch));
+                    let _ = db.update_fields(&mem.id, None, None, None, Some(&tags));
+                }
+                0
+            }
+        };
 
         let by_score = weight >= 0.4;
-        let by_kind = (is_lesson || is_procedural) && age > lesson_cooldown_ms;
+        let by_kind = (is_lesson || is_procedural) && epochs_alive >= lesson_cooldown_epochs;
 
         if (by_score || by_kind) && db.promote(&mem.id, Layer::Working).is_ok() {
             promoted_ids.insert(mem.id.clone());
             promoted += 1;
-        }
-    }
-
-    // Buffer TTL — old L1 entries that weren't accessed enough get dropped.
-    // Only rescue to Working if accessed at least half the promote threshold,
-    // otherwise it wasn't important enough to keep.
-    // Procedural memories and lessons are exempt — they persist indefinitely.
-    // Lessons encode past mistakes; forgetting them defeats their purpose.
-    for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list_by_layer_meta(Buffer) failed"); vec![] }) {
-        let is_lesson = mem.tags.iter().any(|t| t == "lesson");
-        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson {
-            continue;
-        }
-        let age = now - mem.created_at;
-        if age > buffer_ttl {
-            let weight = crate::scoring::memory_weight(&mem);
-            // Rescue if: enough weight, OR importance is high enough
-            // that the content itself is valuable even without being recalled.
-            // This saves design decisions and architecture notes from silent death.
-            let worth_keeping = weight >= 0.3
-                || mem.importance >= crate::thresholds::BUFFER_RESCUE_IMPORTANCE;
-            if worth_keeping {
-                if db.promote(&mem.id, Layer::Working).is_ok() {
-                    promoted_ids.insert(mem.id.clone());
-                    promoted += 1;
-                }
-            } else {
-                // Safety net: memories never touched by any process
-                // (modified_at == created_at and no _triaged tag) get 48h
-                // instead of 24h, preventing data loss from triage failures.
-                let was_triaged = mem.tags.iter().any(|t| t == "_triaged")
-                    || mem.modified_at != mem.created_at;
-                let hard_cap = buffer_ttl * 2; // 48h
-                if !was_triaged && age <= hard_cap {
-                    debug!(id = %mem.id, "buffer TTL extended: never triaged");
-                } else if db.delete(&mem.id).unwrap_or(false) {
-                    dropped_ids.push(mem.id.clone());
-                    decayed += 1;
-                }
-            }
         }
     }
 
@@ -812,9 +760,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     if buffer_mems.len() > buffer_cap {
         let mut evictable: Vec<&Memory> = buffer_mems.iter()
             .filter(|m| {
-                m.kind != "procedural"
-                    && !m.tags.iter().any(|t| t == "lesson")
-                    && !promoted_ids.contains(&m.id)
+                !promoted_ids.contains(&m.id)
             })
             .collect();
         let overflow = buffer_mems.len().saturating_sub(buffer_cap);
@@ -847,8 +793,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     // Only Buffer entries can be evicted this way.
     for mem in db.get_decayed(decay_threshold).unwrap_or_else(|e| { warn!(error = %e, "get_decayed failed"); vec![] }) {
         if mem.layer != Layer::Buffer { continue; }
-        let is_lesson = mem.tags.iter().any(|t| t == "lesson");
-        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson {
+        if promoted_ids.contains(&mem.id) {
             continue;
         }
         if db.delete(&mem.id).unwrap_or(false) {
@@ -857,10 +802,10 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
         }
     }
 
-    // Importance decay — memories not accessed in 24h lose a bit of importance.
-    // Prevents everything from converging to 1.0 over time.
-    // Floor of 0.3 ensures nothing becomes invisible.
-    let importance_decayed = db.decay_importance(24.0, 0.05, 0.0).unwrap_or(0);
+    // Importance decay — epoch-based (per consolidation cycle, not per wall-clock time).
+    // Only runs when there's write activity, so idle periods cause zero decay.
+    // Memories accessed during this cycle are spared.
+    let importance_decayed = db.decay_importance(now, 0.005, 0.0).unwrap_or(0);
 
     if promoted > 0 || decayed > 0 || demoted > 0 || importance_decayed > 0 {
         info!(promoted, decayed, demoted, importance_decayed, "consolidation complete");
@@ -981,6 +926,7 @@ async fn apply_batch_gate_results(
     ai: &Option<AiConfig>,
     candidates: &[(String, String, i64, i64, f64, Vec<String>)],
     result: &mut ConsolidateResponse,
+    epoch: i64,
 ) {
     match ai {
         Some(cfg) => {
@@ -1017,10 +963,11 @@ async fn apply_batch_gate_results(
                                 debug!(id = %id, "promoted to Core");
                             }
                         } else {
-                            // Rejected — apply escalating tag
+                            // Rejected — apply escalating tag + epoch marker
                             result.gate_rejected += 1;
                             let db2 = db.clone();
                             let id2 = id.clone();
+                            let epoch2 = epoch;
                             let content_preview = candidates.iter()
                                 .find(|(cid, _, _, _, _, _)| *cid == id)
                                 .map(|(_, c, _, _, _, _)| truncate_chars(c, 50).to_string())
@@ -1028,7 +975,7 @@ async fn apply_batch_gate_results(
                             let _ = tokio::task::spawn_blocking(move || {
                                 if let Ok(Some(mem)) = db2.get(&id2) {
                                     let mut tags: Vec<String> = mem.tags.iter()
-                                        .filter(|t| !t.starts_with("gate-rejected"))
+                                        .filter(|t| !t.starts_with("gate-rejected") && !t.starts_with("_gate_epoch:"))
                                         .cloned().collect();
                                     let had_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
                                     let had_1 = mem.tags.iter().any(|t| t == "gate-rejected");
@@ -1040,6 +987,10 @@ async fn apply_batch_gate_results(
                                         "gate-rejected"
                                     };
                                     tags.push(new_tag.into());
+                                    // Record the epoch of rejection for cooldown tracking
+                                    if new_tag != "gate-rejected-final" {
+                                        tags.push(format!("_gate_epoch:{}", epoch2));
+                                    }
                                     let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
                                 }
                             }).await;
@@ -1048,17 +999,17 @@ async fn apply_batch_gate_results(
                     }
                 }
                 Err(e) => {
-                    // Batch LLM call failed — tag all candidates with _gate-pending
-                    // so they won't be retried next cycle (2h cooldown via modified_at)
-                    warn!(error = %e, count = candidates.len(), "batch gate LLM call failed, tagging _gate-pending");
+                    // Batch LLM call failed — tag all candidates with epoch-based pending marker
+                    warn!(error = %e, count = candidates.len(), "batch gate LLM call failed, tagging _gate_pending_epoch");
                     for (id, _, _, _, _, _) in candidates {
                         let db2 = db.clone();
                         let id2 = id.clone();
+                        let epoch2 = epoch;
                         let _ = tokio::task::spawn_blocking(move || {
                             if let Ok(Some(mem)) = db2.get(&id2) {
-                                if !mem.tags.iter().any(|t| t == "_gate-pending") {
+                                if !mem.tags.iter().any(|t| t.starts_with("_gate_pending_epoch:")) {
                                     let mut tags = mem.tags.clone();
-                                    tags.push("_gate-pending".into());
+                                    tags.push(format!("_gate_pending_epoch:{}", epoch2));
                                     let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
                                 }
                             }

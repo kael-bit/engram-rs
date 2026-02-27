@@ -45,7 +45,11 @@ pub fn memory_weight(mem: &Memory) -> f64 {
     let rep_bonus = (mem.repetition_count as f64 * 0.1).min(0.5);
     let access_bonus = ((1.0 + mem.access_count as f64).ln() * 0.1).min(0.3);
 
-    let kind_boost = if mem.kind == "procedural" { 1.3 } else { 1.0 };
+    let kind_boost = match mem.kind.as_str() {
+        "procedural" => 1.3,
+        "episodic" => 0.8,
+        _ => 1.0, // semantic and unknown
+    };
     let layer_boost = match mem.layer {
         Layer::Core => 1.2,
         Layer::Working => 1.0,

@@ -101,6 +101,9 @@ pub struct Memory {
     /// Not updated by touch/access — only by actual edits.
     #[serde(default)]
     pub modified_at: i64,
+    /// Consolidation epoch at last real modification. Used for epoch-based Recent queries.
+    #[serde(default)]
+    pub modified_epoch: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -486,7 +489,8 @@ CREATE TABLE IF NOT EXISTS memories (
     namespace TEXT NOT NULL DEFAULT 'default',
     embedding BLOB,
     kind TEXT NOT NULL DEFAULT 'semantic',
-    modified_at INTEGER NOT NULL DEFAULT 0
+    modified_at INTEGER NOT NULL DEFAULT 0,
+    modified_epoch INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_layer ON memories(layer);
@@ -801,6 +805,10 @@ impl MemoryDB {
             // Backfill: set modified_at = created_at for existing rows
             conn.execute("UPDATE memories SET modified_at = created_at WHERE modified_at = 0", [])?;
         }
+        if conn.prepare("SELECT modified_epoch FROM memories LIMIT 0").is_err() {
+            conn.execute("ALTER TABLE memories ADD COLUMN modified_epoch INTEGER NOT NULL DEFAULT 0", [])?;
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_modified_epoch ON memories(modified_epoch)", [])?;
+        }
         drop(conn);
         let db = Self { pool, vec_index: RwLock::new(vec::VecIndex::new()) };
         db.rebuild_fts()?;
@@ -878,6 +886,7 @@ fn row_to_memory_meta(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
         embedding: None,
         kind: row.get::<_, String>("kind").unwrap_or_else(|_| "semantic".into()),
         modified_at: row.get::<_, i64>("modified_at").unwrap_or(0),
+        modified_epoch: row.get::<_, i64>("modified_epoch").unwrap_or(0),
     })
 }
 
@@ -906,7 +915,7 @@ fn row_to_memory_impl(row: &rusqlite::Row, include_embedding: bool) -> rusqlite:
         embedding,
         kind: row.get::<_, String>("kind").unwrap_or_else(|_| "semantic".into()),
         modified_at: row.get::<_, i64>("modified_at").unwrap_or(0),
+        modified_epoch: row.get::<_, i64>("modified_epoch").unwrap_or(0),
     })
 }
-
 

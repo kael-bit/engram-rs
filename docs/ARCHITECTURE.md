@@ -16,13 +16,23 @@ Each memory has: `id` (UUID), `content` (≤8192 chars), `layer` (1/2/3), `impor
 
 ### Layers
 
-| Layer | Enum | Decay Rate | Score Bonus | Semantics |
-|-------|------|-----------|-------------|-----------|
-| **Buffer** | 1 | 5.0 | 0.9× | Intake. All new memories land here. TTL-based expiry (default 24h). |
-| **Working** | 2 | 1.0 | 1.0× | Active context. Proven useful but not yet permanent. |
-| **Core** | 3 | 0.05 | 1.1× | Permanent. Identity, lessons, constraints. Survives total context loss. |
+| Layer | Enum | Score Bonus | Semantics |
+|-------|------|-------------|-----------|
+| **Buffer** | 1 | 0.9× | Intake. All new memories land here via API. Evicted by epoch-based decay or capacity cap (200). |
+| **Working** | 2 | 1.0× | Active knowledge. Promoted from Buffer by consolidation. Never deleted — importance decays by kind. |
+| **Core** | 3 | 1.1× | Long-term identity. Promoted from Working through LLM gate. Never deleted. |
 
-**Kind:** `semantic` (default, subject to decay), `episodic` (events), `procedural` (workflows — **never decays, exempt from buffer TTL**).
+**Decay rates by kind** (epoch-based, per active consolidation cycle):
+
+| Kind | Decay per epoch | Use case |
+|------|----------------|----------|
+| `episodic` | −0.005 (full) | Events, experiences, time-bound context |
+| `semantic` | −0.003 (60%) | Knowledge, preferences, lessons (default) |
+| `procedural` | −0.001 (20%) | Workflows, instructions, how-to |
+
+Decay only happens during active consolidation — no decay while the agent is idle. Working and Core memories are never deleted regardless of importance. Buffer memories below `decay_drop_threshold` (0.01) are evicted.
+
+**Layer entry:** All API writes enter Buffer regardless of any `layer` parameter. Three layers each have a single entry point: Buffer ← API, Working ← consolidation promotion, Core ← LLM gate. The agent cannot specify which layer a memory goes to.
 
 ---
 
@@ -38,7 +48,7 @@ API POST /memories
 [Dedup Check] ─── duplicate found ──→ touch() + increment repetition_count → return existing
     │ no dup
     ▼
-[Insert into Buffer (layer=1)]
+[Insert into Buffer]
     │
     ▼
 [Async: generate embedding, index FTS, update vec index]
@@ -48,10 +58,10 @@ API POST /memories
     ╠══════════════════════════════════════════════════════════╣
     ║                                                          ║
     ║  1. cleanup_stale_tags()                                 ║
-    ║  2. fix_stuck_buffer()                                   ║
-    ║  3. Working quality cleanup (auto-extract demote, etc)   ║
+    ║  2. Buffer capacity cap                                   ║
+    ║  3. Working quality (never delete, never demote)           ║
     ║  4. Buffer → Working (mechanical: score ≥ 5 OR kind)     ║
-    ║  5. Buffer TTL expiry (24h default)                      ║
+    ║  5. Buffer capacity cap enforcement                      ║
     ║  6. Working → Core candidates collected                  ║
     ║  7. LLM Gate: review candidates → approve/reject         ║
     ║  8. Reconcile: LLM detects same-topic updates            ║
@@ -61,8 +71,8 @@ API POST /memories
     ║ 12. Merge: LLM combines near-duplicates (if enabled)     ║
     ║ 13. FTS repair                                           ║
     ║ 14. Core summary update                                  ║
-    ║ 15. Importance decay (−0.05/24h, floor 0.3)              ║
-    ║ 16. Drop fully-decayed memories                          ║
+    ║ 15. Importance decay (epoch-based, kind-differentiated)    ║
+    ║ 16. Drop fully-decayed buffer memories                   ║
     ╚══════════════════════════════════════════════════════════╝
 ```
 
@@ -70,7 +80,8 @@ API POST /memories
 
 On `POST /memories`, the API handler:
 
-1. Validates input (content length, tag count, layer range).
+1. Validates input (content length, tag count).
+2. **Layer override:** Ignores any `layer` parameter — all writes go to Buffer.
 2. **API-level semantic dedup** (`quick_semantic_dup`): if AI is configured, embeds content and
    checks cosine similarity against stored memories. Threshold depends on source:
    - Proxy extraction: `PROXY_DEDUP_SIM = 0.60`
@@ -95,8 +106,8 @@ In `consolidate_sync()`, two paths:
 - Promote if score ≥ `buffer_threshold` (default: `max(promote_threshold, 5)` = 5).
 
 **By kind (cooldown-gated):**
-- Lessons (`tag: lesson`) or procedurals (`kind: procedural`) auto-promote after 2 hours in buffer.
-- Distilled sessions are excluded.
+- Lessons (`tag: lesson`) or procedurals (`kind: procedural`) auto-promote after 4 consolidation
+  epochs in buffer (~2h of active consolidation). Distilled sessions excluded.
 
 ### 2.3 Buffer Triage (LLM)
 
@@ -106,23 +117,19 @@ After mechanical promotion, the LLM evaluates remaining buffer memories:
 - **Batch:** up to 20 per consolidation cycle, grouped by namespace.
 - **LLM call:** `gate` model, `TRIAGE_SYSTEM` prompt. Decides `promote` or `keep` per memory.
 - Promoted memories move to Working; can also set `kind: procedural`.
-- `keep` decisions add `_triaged` tag (affects buffer TTL safety net).
+- `keep` decisions add `_triaged` tag (prevents re-triage on next cycle).
 
-### 2.4 Buffer TTL & Expiry
+### 2.4 Buffer Eviction
 
-Default TTL: 24h (`buffer_ttl_secs = 86400`).
+Buffer eviction is epoch-based, consistent with the decay model — no wall-clock TTL.
 
-For expired buffer memories:
-1. Skip if procedural or lesson (immune).
-2. **Rescue** if `reinforcement_score ≥ buffer_threshold / 2` OR `importance ≥ BUFFER_RESCUE_IMPORTANCE (0.70)` → promote to Working.
-3. **Safety net:** If never triaged (`_triaged` tag absent AND `modified_at == created_at`), extend TTL to 48h (2× buffer_ttl).
-4. Otherwise: delete.
+**Eviction by decay:** Buffer memories decay through epoch-based importance reduction during active
+consolidation cycles. When importance falls below `decay_drop_threshold` (0.01), the memory is deleted.
+Idle periods cause zero decay, so memories survive agent downtime intact.
 
-**Buffer capacity cap** (default 200, env `ENGRAM_BUFFER_CAP`): FIFO eviction of oldest non-protected entries.
-
-**Stuck buffer fix** (`fix_stuck_buffer`):
-- Memories >48h with decay_rate <1.0: reset decay to 5.0.
-- Memories >7 days with access_count <2 and not procedural/lesson: delete.
+**Capacity cap** (default 200, env `ENGRAM_BUFFER_CAP`): when buffer exceeds cap, lowest-weight
+entries are evicted. This prevents unbounded growth when the agent writes faster than consolidation
+promotes.
 
 ### 2.5 Working → Core Promotion (LLM Gate)
 
@@ -131,30 +138,36 @@ For expired buffer memories:
 - Age > `working_age_promote_secs (default 7 days)` AND score > 0 AND importance ≥ 0.6.
 - Session notes, ephemeral, auto-distilled, and distilled memories are blocked.
 - `gate-rejected-final` memories never retry.
-- `gate-rejected` retries after 24h cooldown; `gate-rejected-2` after 72h.
+- `gate-rejected` retries after 48 consolidation epochs; `gate-rejected-2` after 144 epochs.
+  Epoch-based: idle time does not count toward cooldown.
 
 **LLM Gate** (`llm_promotion_gate`):
 - Model: `gate` tier.
-- Prompt: `GATE_SYSTEM` — litmus test: "if agent wakes with zero context, would this alone be useful?"
+- Prompt: `GATE_SYSTEM` — **whitelist approach**: only 4 categories are allowed into Core:
+  1. **LESSON** — hard-won insights from mistakes or experience
+  2. **IDENTITY** — who the user/agent is, preferences, constraints
+  3. **CONSTRAINT** — unconditional rules (if it has "for now" / "temporary", reject)
+  4. **DECISION RATIONALE** — why a permanent architectural/design choice was made
+- Everything outside these categories is rejected by default.
 - Context injected: high access count (≥30) or repetition count (≥2) noted.
 - Returns `approve` (with kind) or `reject`.
 - Rejection tagging escalates: `gate-rejected` → `gate-rejected-2` → `gate-rejected-final`.
 
-**Working quality rules** (run before main consolidation):
-- `auto-extract` tagged Working memories demoted to Buffer.
-- `gate-rejected` Working memories older than 7 days (by `modified_at`) deleted.
-- `gate-rejected` Working memories idle >7 days (by `last_accessed`) deleted.
+**Working layer protection** (run before main consolidation):
+- Working memories are never deleted or demoted. Gate-rejected Working memories only lose importance
+  through natural decay — they are not deleted, demoted, or removed on any schedule.
 
 ### 2.6 Demotion
 
 - Session notes (`source: session` or `tag: session`) in Core → demoted to Working.
 - `ephemeral` tagged Core memories → demoted to Working.
+- Working memories are never demoted to Buffer. Demotion only applies to Core → Working.
 - Audit can demote via LLM decision (see §5).
 
 ### 2.7 Importance Decay
 
-Every consolidation cycle: `decay_importance(24h, 0.05, floor=0.3)`.
-Memories not accessed in 24h lose 0.05 importance. Floor of 0.3 prevents invisibility.
+Every consolidation cycle (epoch-based, not time-based): `decay_importance(cycle_start, 0.005, floor=0.0)`.
+All kinds decay but at different rates: episodic ×1.0, semantic ×0.6, procedural ×0.2. Decay only happens during active consolidation cycles — idle periods cause zero decay. Floor of 0.0 — memories with high repetition or access stay discoverable even at zero importance.
 
 ---
 
@@ -164,23 +177,23 @@ Triggered by `POST /consolidate` or cron. Runs `consolidate()`:
 
 ### Phase 1: Synchronous (`consolidate_sync`)
 
-1. **Tag cleanup:** Remove stale `gate-rejected` tags from Working (>24h since access).
+1. **Tag cleanup:** Remove stale `gate-rejected` tags from Working after sufficient epochs without access.
    Remove orphaned `promotion` tags from Working/Core.
-2. **Stuck buffer fix:** Reset stuck decay rates, delete abandoned entries.
-3. **Working quality:** Demote `auto-extract`, delete old gate-rejected.
+2. **Buffer capacity cap:** Evict lowest-weight entries if >200 buffer entries.
+3. **Working quality:** Working memories are never deleted or demoted.
 4. **Core hygiene:** Demote session notes and ephemeral from Core.
 5. **Core overlap scan:** O(n²) pairwise cosine on Core embeddings. Flag pairs with
    similarity > `CORE_OVERLAP_SIM = 0.70`. Stored in `engram_meta` to avoid re-flagging.
 6. **Working → Core candidates:** Collect based on reinforcement score + importance.
 7. **Buffer → Working:** Mechanical promotion (score ≥ 5 or lesson/procedural after 2h).
-8. **Buffer TTL expiry:** Delete or rescue expired buffer memories.
+8. **Buffer capacity cap:** FIFO eviction if >200 entries.
 9. **Buffer capacity cap:** FIFO eviction if >200 entries.
-10. **Drop decayed:** Delete memories below `decay_drop_threshold = 0.01`.
-11. **Importance decay:** −0.05/24h, floor 0.3.
+10. **Drop decayed:** Delete Buffer memories below `decay_drop_threshold = 0.01`. Working/Core are never deleted.
+11. **Importance decay:** epoch-based, −0.005/cycle (episodic), floor 0.0.
 
 ### Phase 2: Async (LLM-dependent)
 
-12. **LLM Gate:** Review Working→Core candidates. Approve or reject with escalating cooldowns.
+12. **LLM Gate:** Review Working→Core candidates. Approve or reject with escalating epoch-based cooldowns.
 13. **Reconcile:** Detect same-topic updates across all layers (see §3.2).
 14. **Session distillation:** Synthesize 3+ session notes into project status snapshot (see §3.3).
 15. **Buffer dedup:** Cosine-based duplicate removal within buffer (no LLM).
@@ -213,11 +226,14 @@ Detects when a newer memory supersedes an older one on the same topic.
 1. Scan Working + Core memories with embeddings.
 2. Find pairs in similarity window: `RECONCILE_MIN_SIM (0.55) < sim < RECONCILE_MAX_SIM (0.78)`.
 3. Require time gap: newer must be ≥1h newer than older.
-4. LLM call (`merge` model) with `RECONCILE_PROMPT`:
-   - `update`: older is stale → delete older.
-   - `absorb`: newer contains all of older → delete older.
+4. **Single LLM call** (`merge` model) with `RECONCILE_PROMPT` — returns both decision and merged content:
+   - `update` + `merged_content`: older is stale → write merged content to newer, delete older.
+   - `absorb` + `merged_content`: overlap detected → write merged content to newer, delete older.
    - `keep_both`: different aspects → no action.
-5. Dedup key stored per pair to prevent re-evaluation.
+5. Merged content preserves ALL specific details from both entries (names, numbers, constraints,
+   reinforcement language). Falls back to newer's content if `merged_content` is empty.
+6. Winner inherits: max importance, summed access counts, union of tags.
+7. Dedup key stored per pair to prevent re-evaluation.
 
 ### 3.3 Session Distillation (`distill_sessions`)
 
@@ -306,7 +322,7 @@ The audit LLM has exactly three powers:
 | **Adjust** | `adjust` | Change importance score (0.0–1.0) |
 | **Merge** | `merge` | Combine 2+ memories into one |
 
-**Audit CANNOT delete memories.** Deletion only happens through natural lifecycle (TTL, decay).
+**Audit CANNOT delete memories.** Deletion only happens through natural lifecycle (epoch-based decay, capacity cap).
 Demote is restricted to one layer at a time (Core→Working or Working→Buffer, never Core→Buffer).
 
 ### 5.2 Audit Flow (`audit_memories` in `consolidate/audit.rs`)
@@ -395,6 +411,9 @@ consolidation completes → topiary trigger → same flow
 - **Startup:** If no `topiary_tree` in meta, immediately rebuilds
 - **Input:** All Core + Working + Buffer memories with embeddings
 - **Output:** Cached tree in `engram_meta`
+- **Safety net:** If any topic remains unnamed after LLM naming, the tree is not saved — the
+  previous cached tree is preserved instead. This prevents partially-named trees from replacing
+  good cached state.
 
 ### 6.5 Parameters
 
@@ -438,7 +457,7 @@ Every place the system calls an LLM, with model tier and purpose:
 | **Triage** | `gate` | `triage` | Evaluate buffer memories → promote/keep | `TRIAGE_SYSTEM` |
 | **Gate** | `gate` | `gate` | Approve/reject Working→Core promotion | `GATE_SYSTEM` |
 | **Merge** | `merge` | `merge` | Combine near-duplicate content | `MERGE_SYSTEM` |
-| **Reconcile** | `merge` | `reconcile` | Judge UPDATE/ABSORB/KEEP for related memories | `RECONCILE_PROMPT` |
+| **Reconcile** | `merge` | `reconcile` | Judge UPDATE/ABSORB/KEEP + merge content in one call | `RECONCILE_PROMPT` |
 | **Audit** | `audit` (→`gate`) | `audit` | Review all Core+Working, propose ops | `AUDIT_SYSTEM` |
 | **Expand** | `expand` | `query_expand` | Generate alternative search queries | `EXPAND_PROMPT` |
 | **Extract** | `extract` | `extract` | Extract memories from conversation text | `EXTRACT_SYSTEM_PROMPT` |
@@ -495,12 +514,12 @@ Triggers: git-push, deploy, memory-store, ...
 | Section | Content | Budget | Sort |
 |---------|---------|--------|------|
 | **Core** | Permanent rules/identity, full text | ~2k tokens | `importance × kind_boost × (1 + rep × 2.5)` |
-| **Recent** | Non-Core memories modified in last N hours | ~1k tokens | Time descending |
+| **Recent** | Non-Core memories modified in last N consolidation epochs | ~1k tokens | Time descending |
 | **Topics** | Flat leaf index from cached topiary tree | ~300-500 tokens | Member count descending |
 | **Triggers** | All `trigger:*` tags | ~100-200 tokens | Access count descending |
 
-**Core sorting:** `kind_boost` = 1.3 for procedural, 1.0 for others. Procedural memories naturally
-rank higher because they never decay AND get a 1.3× boost.
+**Core sorting:** `kind_boost` = 1.3 for procedural, 1.0 for semantic, 0.8 for episodic. Procedural memories naturally
+rank higher because they decay slowest AND get a 1.3× boost.
 
 **Topics:** Read from `topiary_tree` in `engram_meta`. If no tree cached, section is omitted.
 Agent can drill into any topic via `POST /topic {"ids": ["kb1", "kb3"]}`.
@@ -537,7 +556,7 @@ sorted by aggregate access count.
 | `SANDBOX_SAFETY_THRESHOLD` | 0.70 | Min safety score to execute audit ops |
 | `SANDBOX_RECENT_MOD_HOURS` | 24.0h | "Recently modified" guard in audit sandbox |
 | `SANDBOX_NEW_AGE_HOURS` | 48.0h | "New memory" protection in audit sandbox |
-| `BUFFER_RESCUE_IMPORTANCE` | 0.70 | Min importance to rescue expired buffer |
+| `BUFFER_CAP` | 200 (env) | Max buffer entries before capacity-based eviction |
 | `RESUME_HIGH_RELEVANCE` | 0.25 | Identity/constraint boost in resume |
 | `RESUME_LOW_RELEVANCE` | 0.10 | Lesson/procedural boost in resume |
 | `RESUME_CORE_THRESHOLD` | 0.35 | Min relevance to include Core in resume |
@@ -559,12 +578,12 @@ sorted by aggregate access count.
 |-----------|---------|-------------|
 | `promote_threshold` | 3 | Reinforcement score for Working→Core candidacy |
 | `promote_min_importance` | 0.6 | Min importance for any promotion |
-| `decay_drop_threshold` | 0.01 | Below this → delete |
-| `buffer_ttl_secs` | 86400 (24h) | Buffer expiry |
+| `decay_drop_threshold` | 0.01 | Below this → delete (Buffer only; Working/Core never deleted) |
+| `BUFFER_CAP` | 200 (env) | Max buffer entries before FIFO eviction |
 | `working_age_promote_secs` | 604800 (7d) | Age-based Working→Core candidacy |
 | `buffer_threshold` | max(promote_threshold, 5) = 5 | Reinforcement score for Buffer→Working |
 | `BUFFER_CAP` | 200 (env) | Max buffer entries before FIFO eviction |
-| `importance_decay` | 0.05/24h, floor 0.3 | Gradual importance reduction |
+| `importance_decay` | 0.005/epoch, floor 0.0 | Epoch-based importance reduction (per active consolidation cycle) |
 | `REPETITION_WEIGHT` | 2.5 | Repetition counts 2.5× more than access in reinforcement |
 
 ---
@@ -599,16 +618,17 @@ sorted by aggregate access count.
 1. **Memories only move up layers through LLM review** (triage or gate). Mechanical promotion
    exists for Buffer→Working only (high reinforcement score or lesson/procedural kind).
 2. **Audit cannot delete** — only schedule (promote/demote), adjust importance, or merge.
-   Natural lifecycle (TTL decay, Buffer expiry) handles cleanup.
+   Natural lifecycle (epoch-based decay, capacity cap) handles cleanup.
 3. **Demotions are one-layer-at-a-time** — Core→Working or Working→Buffer, never skip.
-4. **Procedural memories and lessons are protected** — exempt from buffer TTL, decay, and most cleanup.
+4. **Working memories are never deleted** — importance decays at different rates by kind, but memories
+   remain searchable even at zero importance. Only Buffer entries can be evicted.
 5. **Repetition > access for importance signal** — `REPETITION_WEIGHT = 2.5` means being restated
    counts 2.5× more than being recalled.
 6. **Session notes never promote to Core** — they're episodic by nature. Instead, they're distilled
    into project status snapshots that can promote normally.
 7. **All LLM decisions are logged** — component, model, token usage, and duration tracked in `llm_usage`.
-8. **Gate rejections escalate** — 3 chances with increasing cooldowns (24h, 72h, never), preventing
-   infinite retry loops while giving memories a fair hearing.
+8. **Gate rejections escalate** — 3 chances with increasing epoch-based cooldowns (48, 144, never),
+   preventing infinite retry loops while ensuring idle time doesn't auto-grant retries.
 9. **Resume doesn't touch memories** — only recall (query-driven) increments access counts.
 10. **Merge direction is always upward** — cross-layer merge result goes to the highest source layer.
 11. **Topiary is eventually consistent** — tree rebuilds are debounced and async. Resume reads a

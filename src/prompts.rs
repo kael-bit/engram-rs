@@ -116,7 +116,7 @@ You have three powers:
 2. **Adjust** (adjust): Change a memory's importance score
 3. **Merge**: Combine duplicate/overlapping memories
 
-You CANNOT delete memories. Deletion happens through natural lifecycle (Buffer TTL expiry).
+You CANNOT delete memories. Deletion happens through natural lifecycle (importance decay + capacity cap).
 
 Metadata per memory:
 - imp = importance (0-1)
@@ -300,25 +300,33 @@ pub fn triage_schema() -> serde_json::Value {
 // consolidate/mod.rs — promotion gate
 // ---------------------------------------------------------------------------
 
-pub const GATE_SYSTEM: &str = r#"Core is PERMANENT memory that survives total context loss. The litmus test: if the agent wakes up with zero context, would this memory alone be useful? If it only makes sense alongside the code/docs/conversation it came from, REJECT.
+pub const GATE_SYSTEM: &str = r#"Core is PERMANENT memory — it survives total context loss and never decays.
+Whitelist: ONLY these four categories may enter Core. Everything else → REJECT.
 
-APPROVE:
-- "never force-push to main" (lesson — prevents repeating a mistake)
-- "user prefers Chinese, hates verbose explanations" (identity/preference — shapes behavior)
-- "all public output must hide AI identity" (constraint — hard rule that never changes)
-- "we chose SQLite over Postgres for zero-dep deployment" (decision rationale — the WHY)
+1. LESSON — "never do X" / "always Y before Z"
+   A specific past mistake and how to avoid repeating it.
+   Must name the concrete mistake. Generic advice ("test before deploy") → REJECT.
 
-REJECT:
-- "Recall quality: 1) bilingual expansion 2) FTS gating 3) gate evidence" (changelog — lists WHAT was done)
-- "Fixed bug: triage didn't filter by namespace" (operational — belongs in git history)
-- "Session: refactored auth, deployed v0.7, 143 tests pass" (session log — ephemeral status)
-- "Improvement plan: add compression, fix lifecycle, batch ops" (plan — not a lesson)
-- "cosine threshold 0.78, buffer TTL 24h, promote at 5 accesses" (config values — will go stale)
-- "HNSW index replaces brute-force search" (implementation detail — in the code already)
+2. IDENTITY — who the user is, who the agent is, relationship dynamics
+   Preferences, personality traits, communication style, roles.
+   Must be about a person, not a system.
 
-The pattern: APPROVE captures WHY and NEVER and WHO. REJECT captures WHAT and WHEN and HOW MUCH.
-Numbered lists of changes (1) did X 2) did Y 3) did Z) are almost always changelogs → REJECT.
-If it reads like a commit message or progress report, REJECT."#;
+3. CONSTRAINT — a hard rule that applies permanently
+   Security policies, approval workflows, communication boundaries.
+   Must be unconditional. If it has "for now" / "until" / "currently" → REJECT.
+
+4. DECISION RATIONALE — why we chose X over Y
+   The reasoning behind a choice. Must contain the WHY.
+   The outcome alone ("we use SQLite") without reasoning → REJECT.
+
+Default: REJECT. When in doubt → REJECT.
+If it reads like a changelog, progress report, bug fix, config snapshot,
+step-by-step recipe, algorithm formula, or implementation detail → REJECT.
+
+Kind assignment (only when approving):
+- procedural: permanently true process with no end condition
+- semantic: fact about identity, preference, or constraint
+- episodic: time-bound decision or event that may lose relevance"#;
 
 pub fn gate_schema() -> serde_json::Value {
     serde_json::json!({
@@ -331,8 +339,8 @@ pub fn gate_schema() -> serde_json::Value {
             },
             "kind": {
                 "type": "string",
-                "enum": ["semantic", "procedural"],
-                "description": "Memory kind (only when approving)"
+                "enum": ["semantic", "procedural", "episodic"],
+                "description": "Memory kind (only when approving): procedural=permanent process, semantic=identity/preference/constraint, episodic=time-bound decision"
             }
         },
         "required": ["decision"]
@@ -350,7 +358,7 @@ pub fn gate_batch_schema() -> serde_json::Value {
                     "properties": {
                         "id": { "type": "string", "description": "Memory ID prefix (first 8 chars)" },
                         "decision": { "type": "string", "enum": ["approve", "reject"] },
-                        "kind": { "type": "string", "enum": ["semantic", "procedural"], "description": "Memory kind (only when approving)" }
+                        "kind": { "type": "string", "enum": ["semantic", "procedural", "episodic"], "description": "Memory kind (only when approving)" }
                     },
                     "required": ["id", "decision"]
                 }
@@ -376,9 +384,11 @@ pub const RECONCILE_PROMPT: &str = r#"You are comparing two memory entries about
 The NEWER entry was created after the OLDER one.
 
 Decide:
-- update: The newer entry is an updated version of the same information. The older one is now stale/outdated and should be removed.
-- absorb: The newer entry contains all useful info from the older one plus more. The older one is redundant.
-- keep_both: They cover genuinely different aspects or the older one has unique details not in the newer one."#;
+- update: The newer entry is an updated version of the same information. The older one is now stale/outdated.
+- absorb: The two entries overlap significantly and should be combined into one.
+- keep_both: They cover genuinely different aspects or the older one has unique details not in the newer one.
+
+If you choose "update" or "absorb", you MUST also provide "merged_content": a single merged text that preserves ALL specific details from BOTH entries — names, numbers, commands, constraints, lessons, reinforcement language. Never drop details. Same language as originals. 2-4 concise sentences."#;
 
 // ---------------------------------------------------------------------------
 // consolidate/facts.rs

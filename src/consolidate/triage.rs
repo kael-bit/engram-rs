@@ -205,8 +205,7 @@ pub(super) async fn triage_buffer(
             }
         }
 
-        // Mark KEEP decisions with _triaged tag so buffer TTL safety net
-        // knows triage has evaluated them (prevents 48h extension).
+        // Mark KEEP decisions with _triaged tag so we know triage has evaluated them.
         for d in &result.decisions {
             if d.action != "keep" { continue; }
             if let Some(mem) = candidates.iter().find(|m| m.id.starts_with(&d.id)) {

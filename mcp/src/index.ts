@@ -186,16 +186,16 @@ server.tool(
     "session notes. Use workspace tags to filter by current work context. " +
     "Compact mode (default) minimizes token usage.",
   {
-    hours: z.number().positive().optional().describe("Look back N hours for recent/sessions (default 12)"),
+    recent_epochs: z.number().int().positive().optional().describe("Number of consolidation epochs to look back for recent section (default 24). Epoch-based: only counts active consolidation cycles, not wall-clock time."),
     namespace: z.string().optional().describe("Filter by namespace (also includes \"default\" namespace automatically)"),
     workspace: z.string().optional().describe("Comma-separated workspace tags to filter core/working memories (e.g. 'engram,rust')"),
     compact: z.boolean().optional().describe("Compact output: content+tags only (default true)"),
     budget: z.number().optional().describe("Max chars across all sections (default 8000, 0=unlimited)"),
     limit: z.number().optional().describe("Max memories per layer (default 100)"),
   },
-  async ({ hours, namespace, workspace, compact, budget, limit }) => {
+  async ({ recent_epochs, namespace, workspace, compact, budget, limit }) => {
     const params = new URLSearchParams();
-    if (hours !== undefined) params.set("hours", String(hours));
+    if (recent_epochs !== undefined) params.set("recent_epochs", String(recent_epochs));
     if (namespace !== undefined) params.set("ns", namespace);
     if (workspace !== undefined) params.set("workspace", workspace);
     if (compact !== undefined) params.set("compact", String(compact));

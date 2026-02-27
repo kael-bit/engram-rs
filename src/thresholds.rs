@@ -57,5 +57,3 @@ pub const RESUME_LOW_RELEVANCE: f64 = 0.10;
 pub const RESUME_CORE_THRESHOLD: f64 = 0.35;
 pub const RESUME_WORKING_THRESHOLD: f64 = 0.20;
 
-/// Buffer TTL rescue: minimum importance to keep expired buffer memories
-pub const BUFFER_RESCUE_IMPORTANCE: f64 = 0.70;

@@ -204,17 +204,24 @@ async fn try_reconcile_pair(
                 "type": "string",
                 "enum": ["update", "absorb", "keep_both"],
                 "description": "How to reconcile the two memories"
+            },
+            "merged_content": {
+                "type": "string",
+                "description": "Merged text preserving ALL details from both entries. Required when decision is update or absorb."
             }
         },
         "required": ["decision"]
     });
 
     #[derive(Deserialize)]
-    struct ReconcileDecision { decision: String }
+    struct ReconcileDecision {
+        decision: String,
+        merged_content: Option<String>,
+    }
 
     let result: ReconcileDecision = match ai::llm_tool_call(
         cfg, "merge", prompts::RECONCILE_PROMPT, &user_msg,
-        "reconcile_decision", "Decide how to reconcile two memories",
+        "reconcile_decision", "Decide how to reconcile two memories and optionally merge them",
         schema,
     ).await {
         Ok(r) => {
@@ -243,6 +250,12 @@ async fn try_reconcile_pair(
     let imp = newer.importance.max(older.importance);
     let access = newer.access_count + older.access_count;
 
+    // Use LLM-merged content; fall back to newer's content if missing
+    let merged_content = result.merged_content
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| newer.content.clone());
+
     // Namespace merge direction: default is sticky. If the older (deleted) memory
     // is in "default" but newer (surviving) is in a project namespace, we must
     // move the survivor to "default" — never pull default into project scope.
@@ -255,7 +268,7 @@ async fn try_reconcile_pair(
         if let Some(layer) = promote_newer_to {
             db2.promote(&newer_id, layer)?;
         }
-        db2.update_fields(&newer_id, None, None, Some(imp), Some(&new_tags))?;
+        db2.update_fields(&newer_id, Some(&merged_content), None, Some(imp), Some(&new_tags))?;
         db2.set_access_count(&newer_id, access)?;
         if needs_ns_fix {
             db2.set_namespace(&newer_id, "default")?;

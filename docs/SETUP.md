@@ -190,11 +190,11 @@ You have persistent memory via engram MCP tools.
 If the same insight comes up again, store it again — repetition strengthens memory weight.
 
 **Storage modifiers (MCP tool parameters):**
-- Workflows/procedures → `kind="procedural"` (never decay). **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural — leave `kind` unset.
+- Workflows/procedures → `kind="procedural"`. **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural.
+- Events/decisions → `kind="episodic"`. Time-bound events: "decided to use X", "v1.0 released", "found bug in Y". These lose relevance as the situation evolves.
+- Facts/lessons → `kind="semantic"` (default). Identity, preferences, lessons, constraints.
 - Lessons → `tags=["lesson", "trigger:kebab-verb"]`
-- High-confidence knowledge (user corrections, explicit rules) → `layer=2` (direct to Working, skip Buffer)
-- Information that must survive more than a day (reminders, scheduled tasks, deadlines) → `layer=2`. Buffer decays fast; anything that needs to last should skip it.
-- Cross-project knowledge (identity, preferences) → `namespace="default"`
+- Cross-project knowledge → `namespace="default"`
 
 ### 3. Recalling Memories (Tools: `engram_recall` & `engram_triggers` & `engram_topic`)
 
@@ -252,27 +252,25 @@ You have persistent memory via engram at http://localhost:3917
 If the same insight comes up again, store it again — repetition strengthens memory weight.
 
 **Storage modifiers (HTTP JSON body / headers):**
-- Workflows/procedures → `"kind": "procedural"` (never decay). **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural — leave `kind` unset.
+- Workflows/procedures → `"kind": "procedural"`. **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural.
+- Events/decisions → `"kind": "episodic"`. Time-bound events: "decided to use X", "v1.0 released", "found bug in Y". These lose relevance as the situation evolves.
+- Facts/lessons → `"kind": "semantic"` (default). Identity, preferences, lessons, constraints.
 - Lessons → `"tags": ["lesson", "trigger:kebab-verb"]`
-- High-confidence knowledge (user corrections, explicit rules) → `"layer": 2` (direct to Working, skip Buffer)
-- Information that must survive more than a day (reminders, scheduled tasks, deadlines) → `"layer": 2`. Buffer decays fast; anything that needs to last should skip it.
-- Cross-project knowledge (identity, preferences) → `-H "X-Namespace: default"`
+- Cross-project knowledge → `-H "X-Namespace: default"`
 
 ```bash
 curl -sf -X POST http://localhost:3917/memories \
   -d '{"content": "...", "tags": ["topic"]}'
 
-# Procedures (never decay)
-curl -sf -X POST http://localhost:3917/memories \
-  -d '{"content": "deploy: test → build → stop → start", "tags": ["deploy"], "kind": "procedural"}'
-
+# Procedures
+'{"content": "deploy: test → build → stop → start", "tags": ["deploy"], "kind": "procedural"}'
 # Lessons with trigger
-curl -sf -X POST http://localhost:3917/memories \
-  -d '{"content": "LESSON: never force-push to main", "tags": ["lesson","trigger:git-push"]}'
-
-# High-confidence → direct to Working
-curl -sf -X POST http://localhost:3917/memories \
-  -d '{"content": "User timezone is US/Pacific", "tags": ["preference"], "layer": 2}'
+'{"content": "LESSON: never force-push to main", "tags": ["lesson","trigger:git-push"]}'
+# Events/decisions
+'{"content": "Decided to switch from Postgres to SQLite", "kind": "episodic"}'
+# Cross-project knowledge
+curl -sf -X POST http://localhost:3917/memories -H "X-Namespace: default" \
+  -d '{"content": "...", "tags": ["identity"]}'
 ```
 
 ### 3. Recalling Memories

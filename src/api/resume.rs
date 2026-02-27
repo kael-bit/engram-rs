@@ -13,10 +13,10 @@ use super::get_namespace;
 use super::topiary_api::build_topiary_resume_section;
 
 /// One-call session recovery.
-/// GET /resume?hours=4&workspace=engram,rust&limit=100
+/// GET /resume?recent_epochs=24&workspace=engram,rust&limit=100
 #[derive(Deserialize)]
 pub(super) struct ResumeQuery {
-    hours: Option<f64>,
+    recent_epochs: Option<i64>,
     ns: Option<String>,
     workspace: Option<String>,
     limit: Option<usize>,
@@ -30,12 +30,21 @@ pub(super) async fn do_resume(
     headers: axum::http::HeaderMap,
     Query(mut q): Query<ResumeQuery>,
 ) -> Result<Response, EngramError> {
-    let hours = q.hours.unwrap_or(12.0).clamp(0.0, 87_600.0);
     if q.ns.is_none() {
         q.ns = get_namespace(&headers);
     }
     let ns_filter = q.ns;
-    let since_ms = db::now_ms() - (hours * 3_600_000.0) as i64;
+    let recent_epochs = q.recent_epochs.unwrap_or(24);
+
+    // Epoch-based Recent: get current epoch, compute cutoff
+    let db_for_epoch = state.db.clone();
+    let epoch_cutoff = {
+        let current_epoch: i64 = db_for_epoch.get_meta("consolidation_epoch")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        (current_epoch - recent_epochs).max(0)
+    };
+
     let core_limit = q.limit.unwrap_or(100);
 
     // Parse workspace tags
@@ -83,9 +92,9 @@ pub(super) async fn do_resume(
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // === Recent section: non-Core memories modified/created in last N hours ===
+        // === Recent section: non-Core memories modified in recent epochs ===
         let all_recent: Vec<db::Memory> = d
-            .list_since_filtered(since_ms, 200, ns_filter.as_deref(), None, None, None)
+            .list_by_epoch(epoch_cutoff, 200, ns_filter.as_deref())
             .unwrap_or_default();
 
         let core_ids: std::collections::HashSet<String> = core.iter().map(|m| m.id.clone()).collect();
@@ -214,14 +223,13 @@ pub(super) async fn do_resume(
             "recent": to_json(&recent),
             "topics": topiary_section,
             "triggers": trigger_tags.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(),
-            "hours": hours,
+            "recent_epochs": recent_epochs,
             "core_count": core.len(),
             "recent_count": recent.len(),
         })).into_response())
     } else {
         // Text format: 4-section output
         let text = format_resume_text(
-            hours,
             &core,
             &recent,
             topiary_section.as_deref(),
@@ -239,7 +247,6 @@ pub(super) async fn do_resume(
 }
 
 fn format_resume_text(
-    hours: f64,
     core: &[db::Memory],
     recent: &[db::Memory],
     topiary_section: Option<&str>,
@@ -276,15 +283,14 @@ fn format_resume_text(
     // Non-Core memories, time descending, up to ~1k tokens (~4000 chars)
     let recent_budget = 4000.min(budget_left);
     if !recent.is_empty() {
-        lines.push(format!("=== Recent ({}h) ===", hours));
+        lines.push("=== Recent ===".to_string());
         let mut spent = 0usize;
         for m in recent {
-            let cost = char_cost(&m.content) + 20; // timestamp overhead
+            let cost = char_cost(&m.content) + 2;
             if spent + cost > recent_budget && spent > 0 {
                 break;
             }
-            let ts = format_timestamp(m.modified_at.max(m.created_at));
-            lines.push(format!("[{}] {}", ts, m.content));
+            lines.push(m.content.clone());
             spent += cost;
         }
         lines.push(String::new());
@@ -309,29 +315,4 @@ fn format_resume_text(
     lines.join("\n")
 }
 
-/// Format a millisecond timestamp to a compact "MM-DD HH:MM" UTC string.
-fn format_timestamp(ms: i64) -> String {
-    let secs = ms / 1000;
-    let days_since_epoch = secs / 86400;
-    let time_of_day = secs % 86400;
-    let h = time_of_day / 3600;
-    let m = (time_of_day % 3600) / 60;
-
-    let mut y = 1970i64;
-    let mut remaining = days_since_epoch;
-    loop {
-        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
-        if remaining < days_in_year { break; }
-        remaining -= days_in_year;
-        y += 1;
-    }
-    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-    let month_days: [i64; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut month = 0usize;
-    for (i, &d) in month_days.iter().enumerate() {
-        if remaining < d { month = i; break; }
-        remaining -= d;
-    }
-    let day = remaining + 1;
-    format!("{:02}-{:02} {:02}:{:02}", month + 1, day, h, m)
-}
+// (format_timestamp removed — Recent section no longer includes timestamps)
