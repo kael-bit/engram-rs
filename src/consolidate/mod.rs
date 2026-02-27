@@ -8,13 +8,6 @@ use crate::SharedDB;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-/// Repetition carries more weight than incidental recall hits.
-const REPETITION_WEIGHT: f64 = 2.5;
-
-fn reinforcement_score(mem: &Memory) -> f64 {
-    mem.access_count as f64 + mem.repetition_count as f64 * REPETITION_WEIGHT
-}
-
 mod audit;
 mod cluster;
 mod distill;
@@ -202,163 +195,18 @@ pub async fn consolidate(
                         uncertain.push(cand);
                     }
                 }
-                // Send uncertain to LLM
+                // Send uncertain to LLM (batch)
                 if !uncertain.is_empty() {
-                    match &ai {
-                        Some(cfg) => {
-                            for (id, content, access_count, rep_count, _importance, _tags) in uncertain {
-                                match llm_promotion_gate(cfg, content, *access_count, *rep_count).await {
-                                    Ok((true, kind, usage, model, duration_ms)) => {
-                                        if let Some(ref u) = usage {
-                                            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                                            let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
-                                        }
-                                        let db2 = db.clone();
-                                        let id2 = id.clone();
-                                        let promoted = tokio::task::spawn_blocking(move || -> bool {
-                                            if db2.promote(&id2, Layer::Core).is_ok() {
-                                                if let Some(k) = kind {
-                                                    if let Ok(Some(mem)) = db2.get(&id2) {
-                                                        if mem.kind == "semantic" {
-                                                            let _ = db2.update_kind(&id2, &k);
-                                                        }
-                                                    }
-                                                }
-                                                true
-                                            } else {
-                                                false
-                                            }
-                                        }).await.unwrap_or(false);
-                                        if promoted {
-                                            result.promoted_ids.push(id.clone());
-                                            result.promoted += 1;
-                                            debug!(id = %id, "promoted to Core");
-                                        }
-                                    }
-                                    Ok((false, _, usage, model, duration_ms)) => {
-                                        if let Some(ref u) = usage {
-                                            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                                            let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
-                                        }
-                                        result.gate_rejected += 1;
-                                        let db2 = db.clone();
-                                        let id2 = id.clone();
-                                        let _ = tokio::task::spawn_blocking(move || {
-                                            if let Ok(Some(mem)) = db2.get(&id2) {
-                                                let mut tags: Vec<String> = mem.tags.iter()
-                                                    .filter(|t| !t.starts_with("gate-rejected"))
-                                                    .cloned().collect();
-                                                let had_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
-                                                let had_1 = mem.tags.iter().any(|t| t == "gate-rejected");
-                                                let new_tag = if had_2 {
-                                                    "gate-rejected-final"
-                                                } else if had_1 {
-                                                    "gate-rejected-2"
-                                                } else {
-                                                    "gate-rejected"
-                                                };
-                                                tags.push(new_tag.into());
-                                                let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
-                                            }
-                                        }).await;
-                                        info!(id = %id, content = %truncate_chars(content, 50), "gate rejected promotion to Core");
-                                    }
-                                    Err(e) => {
-                                        warn!(id = %id, error = %e, "LLM gate failed, skipping");
-                                    }
-                                }
-                            }
-                        }
-                        None => {
-                            // No AI config — promote all uncertain candidates (backward compat)
-                            let db2 = db.clone();
-                            let cands: Vec<String> = uncertain.iter().map(|(id, _, _, _, _, _)| id.clone()).collect();
-                            let promoted_ids: Vec<String> = tokio::task::spawn_blocking(move || {
-                                cands.into_iter().filter(|id| db2.promote(id, Layer::Core).is_ok()).collect::<Vec<_>>()
-                            }).await.unwrap_or_default();
-                            result.promoted += promoted_ids.len();
-                            result.promoted_ids.extend(promoted_ids);
-                        }
-                    }
+                    let batch_cands: Vec<(String, String, i64, i64, f64, Vec<String>)> =
+                        uncertain.iter().map(|(id, content, ac, rep, imp, tags)| {
+                            (id.clone(), content.clone(), *ac, *rep, *imp, tags.clone())
+                        }).collect();
+                    apply_batch_gate_results(&db, &ai, &batch_cands, &mut result).await;
                 }
             }
             _ => {
-                // "full" mode — original behavior: always call LLM
-                match &ai {
-                    Some(cfg) => {
-                        for (id, content, access_count, rep_count, _importance, _tags) in &candidates {
-                            match llm_promotion_gate(cfg, content, *access_count, *rep_count).await {
-                                Ok((true, kind, usage, model, duration_ms)) => {
-                                    if let Some(ref u) = usage {
-                                        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                                        let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
-                                    }
-                                    let db2 = db.clone();
-                                    let id2 = id.clone();
-                                    let promoted = tokio::task::spawn_blocking(move || -> bool {
-                                        if db2.promote(&id2, Layer::Core).is_ok() {
-                                            if let Some(k) = kind {
-                                                if let Ok(Some(mem)) = db2.get(&id2) {
-                                                    if mem.kind == "semantic" {
-                                                        let _ = db2.update_kind(&id2, &k);
-                                                    }
-                                                }
-                                            }
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    }).await.unwrap_or(false);
-                                    if promoted {
-                                        result.promoted_ids.push(id.clone());
-                                        result.promoted += 1;
-                                        debug!(id = %id, "promoted to Core");
-                                    }
-                                }
-                                Ok((false, _, usage, model, duration_ms)) => {
-                                    if let Some(ref u) = usage {
-                                        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                                        let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
-                                    }
-                                    result.gate_rejected += 1;
-                                    let db2 = db.clone();
-                                    let id2 = id.clone();
-                                    let _ = tokio::task::spawn_blocking(move || {
-                                        if let Ok(Some(mem)) = db2.get(&id2) {
-                                            let mut tags: Vec<String> = mem.tags.iter()
-                                                .filter(|t| !t.starts_with("gate-rejected"))
-                                                .cloned().collect();
-                                            let had_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
-                                            let had_1 = mem.tags.iter().any(|t| t == "gate-rejected");
-                                            let new_tag = if had_2 {
-                                                "gate-rejected-final"
-                                            } else if had_1 {
-                                                "gate-rejected-2"
-                                            } else {
-                                                "gate-rejected"
-                                            };
-                                            tags.push(new_tag.into());
-                                            let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
-                                        }
-                                    }).await;
-                                    info!(id = %id, content = %truncate_chars(content, 50), "gate rejected promotion to Core");
-                                }
-                                Err(e) => {
-                                    warn!(id = %id, error = %e, "LLM gate failed, skipping");
-                                }
-                            }
-                        }
-                    }
-                    None => {
-                        let db2 = db.clone();
-                        let cands: Vec<String> = candidates.iter().map(|(id, _, _, _, _, _)| id.clone()).collect();
-                        let promoted_ids: Vec<String> = tokio::task::spawn_blocking(move || {
-                            cands.into_iter().filter(|id| db2.promote(id, Layer::Core).is_ok()).collect::<Vec<_>>()
-                        }).await.unwrap_or_default();
-                        result.promoted += promoted_ids.len();
-                        result.promoted_ids.extend(promoted_ids);
-                    }
-                }
+                // "full" mode — all candidates go to LLM (batch)
+                apply_batch_gate_results(&db, &ai, &candidates, &mut result).await;
             }
         }
     }
@@ -543,7 +391,7 @@ pub fn fix_stuck_buffer(db: &MemoryDB) {
 pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> ConsolidateResponse {
     let now = crate::db::now_ms();
 
-    let promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
+    let _promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
     let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
     let decay_threshold = req.and_then(|r| r.decay_drop_threshold).unwrap_or(0.01);
     let buffer_ttl = req.and_then(|r| r.buffer_ttl_secs).unwrap_or(86400)
@@ -555,7 +403,6 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
     let mut would_decay = Vec::new();
     let mut would_demote = Vec::new();
 
-    let buffer_threshold = promote_threshold.max(5) as f64;
     let lesson_cooldown_ms: i64 = 2 * 3600 * 1000;
 
     // --- Demote session/ephemeral Core memories ---
@@ -568,15 +415,8 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
         }
     }
 
-    // --- Demote auto-extract Working memories ---
-    for m in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_default() {
-        if m.tags.iter().any(|t| t == "auto-extract") {
-            would_demote.push(DryRunEntry {
-                id: m.id.clone(),
-                preview: truncate_chars(&m.content, 100).to_string(),
-            });
-        }
-    }
+    // --- Auto-extract Working memories: no longer demoted ---
+    // Working memories never go back to Buffer.
 
     // --- Working -> Core promotion candidates ---
     let mut promoted_ids: HashSet<String> = HashSet::new();
@@ -585,9 +425,9 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
             continue;
         }
         if mem.tags.iter().any(|t| t == "gate-rejected-final") { continue; }
-        let score = reinforcement_score(&mem);
-        let by_score = score >= promote_threshold as f64 && mem.importance >= promote_min_imp;
-        let by_age = (now - mem.created_at) > working_age && score > 0.0 && mem.importance >= promote_min_imp;
+        let weight = crate::scoring::memory_weight(&mem);
+        let by_score = weight >= 0.8 && mem.importance >= promote_min_imp;
+        let by_age = (now - mem.created_at) > working_age && weight > 0.0 && mem.importance >= promote_min_imp;
         if by_score || by_age {
             would_promote.push(DryRunEntry {
                 id: mem.id.clone(),
@@ -600,11 +440,11 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
     // --- Buffer -> Working promotions ---
     for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_default() {
         if mem.tags.iter().any(|t| t == "distilled") { continue; }
-        let score = reinforcement_score(&mem);
+        let weight = crate::scoring::memory_weight(&mem);
         let is_lesson = mem.tags.iter().any(|t| t == "lesson");
         let is_procedural = mem.kind == "procedural";
         let age = now - mem.created_at;
-        let by_score = score >= buffer_threshold;
+        let by_score = weight >= 0.4;
         let by_kind = (is_lesson || is_procedural) && age > lesson_cooldown_ms;
         if by_score || by_kind {
             would_promote.push(DryRunEntry {
@@ -621,8 +461,8 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
         if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson { continue; }
         let age = now - mem.created_at;
         if age > buffer_ttl {
-            let rescue_score = reinforcement_score(&mem);
-            let worth_keeping = rescue_score >= buffer_threshold / 2.0
+            let weight = crate::scoring::memory_weight(&mem);
+            let worth_keeping = weight >= 0.3
                 || mem.importance >= crate::thresholds::BUFFER_RESCUE_IMPORTANCE;
             if !worth_keeping {
                 would_decay.push(DryRunEntry {
@@ -648,7 +488,9 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
         let overflow = buffer_mems.len().saturating_sub(buffer_cap);
         if overflow > 0 && !evictable.is_empty() {
             evictable.sort_by(|a, b| {
-                a.importance.partial_cmp(&b.importance).unwrap_or(std::cmp::Ordering::Equal)
+                crate::scoring::memory_weight(a)
+                    .partial_cmp(&crate::scoring::memory_weight(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
                     .then_with(|| a.created_at.cmp(&b.created_at))
             });
             let to_drop = overflow.min(evictable.len());
@@ -661,8 +503,9 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
         }
     }
 
-    // --- Decayed entries ---
+    // --- Decayed entries (Buffer only — Working is never deleted) ---
     for mem in db.get_decayed(decay_threshold).unwrap_or_default() {
+        if mem.layer != Layer::Buffer { continue; }
         let is_lesson = mem.tags.iter().any(|t| t == "lesson");
         if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson { continue; }
         would_decay.push(DryRunEntry {
@@ -695,40 +538,22 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
 
     // --- Working layer quality rules (before main consolidation) ---
 
-    // Rule 1: Demote auto-extracted Working memories to Buffer.
-    // Proxy extraction is shut down; these are legacy noise.
-    let mut auto_extract_demoted = 0usize;
-    for m in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_default() {
-        if m.tags.iter().any(|t| t == "auto-extract") {
-            if db.demote(&m.id, Layer::Buffer).is_ok() {
-                auto_extract_demoted += 1;
-                info!(id = %crate::util::short_id(&m.id), "demoted auto-extract from Working to Buffer");
-            }
-        }
+    // Rule 1: auto-extract Working memories — legacy proxy extraction noise.
+    // Just tag them so they're deprioritized, but don't demote to Buffer.
+    // Working memories never go back to Buffer.
+    let auto_extract_tagged = 0usize;
+    // (Keeping the counter for the info! log below, but no longer demoting.)
+
+    // Rule 2: gate-rejected Working memories stay in Working.
+    // Working memories are never deleted — they just lose importance over time.
+    // The gate-rejected tags prevent them from being re-evaluated for Core promotion.
+    let gate_rejected_cleaned = 0usize;
+
+    if auto_extract_tagged > 0 || gate_rejected_cleaned > 0 {
+        info!(auto_extract_tagged, gate_rejected_cleaned, "Working quality cleanup");
     }
 
-    // Rule 2: Delete gate-rejected Working memories older than 7 days (by modified_at).
-    // The Core promotion gate already judged these unworthy; they shouldn't linger.
-    let mut gate_rejected_cleaned = 0usize;
-    {
-        let seven_days_ms = 7 * 24 * 3600 * 1000_i64;
-        for m in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_default() {
-            if m.tags.iter().any(|t| t == "gate-rejected")
-                && (now - m.modified_at) > seven_days_ms
-            {
-                if db.delete(&m.id).unwrap_or(false) {
-                    gate_rejected_cleaned += 1;
-                    info!(id = %crate::util::short_id(&m.id), "deleted stale gate-rejected Working memory");
-                }
-            }
-        }
-    }
-
-    if auto_extract_demoted > 0 || gate_rejected_cleaned > 0 {
-        info!(auto_extract_demoted, gate_rejected_cleaned, "Working quality cleanup");
-    }
-
-    let promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
+    let _promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
     let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
     let decay_threshold = req.and_then(|r| r.decay_drop_threshold).unwrap_or(0.01);
     let buffer_ttl = req.and_then(|r| r.buffer_ttl_secs).unwrap_or(86400)
@@ -861,6 +686,19 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
         if mem.tags.iter().any(|t| t == "gate-rejected-final") {
             continue;
         }
+        // _gate-pending: LLM error cooldown — skip for 2 hours after failure
+        if mem.tags.iter().any(|t| t == "_gate-pending") {
+            let pending_cooldown_ms: i64 = 2 * 3600 * 1000;
+            if now - mem.modified_at < pending_cooldown_ms {
+                continue;
+            }
+            // Cooldown expired — remove the tag and proceed
+            let cleaned: Vec<String> = mem.tags.iter()
+                .filter(|t| t.as_str() != "_gate-pending")
+                .cloned().collect();
+            let _ = db.update_fields(&mem.id, None, None, None, Some(&cleaned));
+            debug!(id = %mem.id, "_gate-pending cooldown expired, retrying");
+        }
         // Second rejection — longer cooldown
         let is_rejected_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
         let is_rejected_1 = mem.tags.iter().any(|t| t == "gate-rejected");
@@ -895,11 +733,11 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
             let _ = db.update_fields(&mem.id, None, None, None, Some(&cleaned));
             info!(id = %mem.id, "gate-rejected cooldown expired, retrying promotion");
         }
-        let score = reinforcement_score(&mem);
-        let by_score = score >= promote_threshold as f64
+        let weight = crate::scoring::memory_weight(&mem);
+        let by_score = weight >= 0.8
             && mem.importance >= promote_min_imp;
         let by_age = (now - mem.created_at) > working_age
-            && score > 0.0
+            && weight > 0.0
             && mem.importance >= promote_min_imp;
 
         if by_score || by_age {
@@ -910,19 +748,18 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     // Buffer -> Working: weighted score OR lesson/procedural with cooldown.
     // Lessons and procedurals are inherently worth keeping — if they survived
     // initial dedup and 2+ hours in buffer, promote them.
-    let buffer_threshold = promote_threshold.max(5) as f64;
     let lesson_cooldown_ms: i64 = 2 * 3600 * 1000; // 2 hours
     for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list_by_layer_meta(Buffer) failed"); vec![] }) {
         // Distilled sessions already have their content in the project-status
         // summary — promoting them individually would be redundant.
         if mem.tags.iter().any(|t| t == "distilled") { continue; }
 
-        let score = reinforcement_score(&mem);
+        let weight = crate::scoring::memory_weight(&mem);
         let is_lesson = mem.tags.iter().any(|t| t == "lesson");
         let is_procedural = mem.kind == "procedural";
         let age = now - mem.created_at;
 
-        let by_score = score >= buffer_threshold;
+        let by_score = weight >= 0.4;
         let by_kind = (is_lesson || is_procedural) && age > lesson_cooldown_ms;
 
         if (by_score || by_kind) && db.promote(&mem.id, Layer::Working).is_ok() {
@@ -943,11 +780,11 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
         }
         let age = now - mem.created_at;
         if age > buffer_ttl {
-            let rescue_score = reinforcement_score(&mem);
-            // Rescue if: enough access/repetition, OR importance is high enough
+            let weight = crate::scoring::memory_weight(&mem);
+            // Rescue if: enough weight, OR importance is high enough
             // that the content itself is valuable even without being recalled.
             // This saves design decisions and architecture notes from silent death.
-            let worth_keeping = rescue_score >= buffer_threshold / 2.0
+            let worth_keeping = weight >= 0.3
                 || mem.importance >= crate::thresholds::BUFFER_RESCUE_IMPORTANCE;
             if worth_keeping {
                 if db.promote(&mem.id, Layer::Working).is_ok() {
@@ -988,9 +825,11 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
             .collect();
         let overflow = buffer_mems.len().saturating_sub(buffer_cap);
         if overflow > 0 && !evictable.is_empty() {
-            // Lowest importance first; ties broken by oldest first
+            // Lowest weight first; ties broken by oldest first
             evictable.sort_by(|a, b| {
-                a.importance.partial_cmp(&b.importance).unwrap_or(std::cmp::Ordering::Equal)
+                crate::scoring::memory_weight(a)
+                    .partial_cmp(&crate::scoring::memory_weight(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
                     .then_with(|| a.created_at.cmp(&b.created_at))
             });
             let to_drop = overflow.min(evictable.len());
@@ -1005,30 +844,15 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
         }
     }
 
-    // Working gate-rejected TTL: memories that received final rejection
-    // (gate-rejected-final) or were rejected and idle expire after 7 days.
-    // gate-rejected / gate-rejected-2 still have retry chances, so only
-    // expire them if not accessed recently.
-    let gate_rejected_ttl = 7 * 86_400 * 1000; // 7 days in ms
-    for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list working for gate-rejected TTL failed"); vec![] }) {
-        let is_any_rejected = mem.tags.iter().any(|t| t.starts_with("gate-rejected"));
-        if !is_any_rejected { continue; }
-        if promoted_ids.contains(&mem.id) || mem.kind == "procedural" { continue; }
-        if mem.tags.iter().any(|t| t == "lesson") { continue; }
-        let since_access = now - mem.last_accessed;
-        if since_access > gate_rejected_ttl
-            && db.delete(&mem.id).unwrap_or(false) {
-                dropped_ids.push(mem.id.clone());
-                decayed += 1;
-                info!(id = %mem.id, content = %truncate_chars(&mem.content, 50),
-                    days_since_access = since_access / 86_400_000,
-                    "gate-rejected Working memory expired");
-        }
-    }
+    // Working gate-rejected: memories with final rejection just stay in Working
+    // with low importance — they're deprioritized but never deleted.
+    // Working memories are never deleted by the system.
 
-    // Drop decayed Buffer/Working entries — but skip anything we just promoted,
-    // procedural memories, or lessons (they don't decay).
+    // Drop decayed Buffer entries — Working memories are never deleted by decay,
+    // they just lose importance (降权) and become less visible in resume/recall.
+    // Only Buffer entries can be evicted this way.
     for mem in db.get_decayed(decay_threshold).unwrap_or_else(|e| { warn!(error = %e, "get_decayed failed"); vec![] }) {
+        if mem.layer != Layer::Buffer { continue; }
         let is_lesson = mem.tags.iter().any(|t| t == "lesson");
         if promoted_ids.contains(&mem.id) || mem.kind == "procedural" || is_lesson {
             continue;
@@ -1042,7 +866,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     // Importance decay — memories not accessed in 24h lose a bit of importance.
     // Prevents everything from converging to 1.0 over time.
     // Floor of 0.3 ensures nothing becomes invisible.
-    let importance_decayed = db.decay_importance(24.0, 0.05, 0.3).unwrap_or(0);
+    let importance_decayed = db.decay_importance(24.0, 0.05, 0.0).unwrap_or(0);
 
     if promoted > 0 || decayed > 0 || demoted > 0 || importance_decayed > 0 {
         info!(promoted, decayed, demoted, importance_decayed, "consolidation complete");
@@ -1053,7 +877,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     ConsolidateResponse {
         promoted,
         decayed: decayed + gate_rejected_cleaned,
-        demoted: demoted + auto_extract_demoted,
+        demoted: demoted + auto_extract_tagged,
         merged: 0,
         importance_decayed,
         gate_rejected: 0,
@@ -1082,6 +906,80 @@ pub struct GateResult {
     pub kind: Option<String>,
 }
 
+/// Batch gate result: array of per-candidate decisions.
+#[derive(Debug, Deserialize)]
+struct GateBatchResult {
+    decisions: Vec<GateBatchDecision>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GateBatchDecision {
+    id: String,
+    decision: String,
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+/// Batch-review multiple gate candidates in a single LLM call.
+/// Returns Vec of (full_id, approved, kind, usage, model, duration_ms).
+/// Usage/model/duration are from the single call and shared across all results.
+async fn llm_promotion_gate_batch(
+    cfg: &AiConfig,
+    candidates: &[(String, String, i64, i64, f64, Vec<String>)],
+) -> Result<(Vec<(String, bool, Option<String>)>, Option<ai::Usage>, String, u64), EngramError> {
+    if candidates.is_empty() {
+        return Ok((vec![], None, String::new(), 0));
+    }
+
+    // Build a single user message listing all candidates
+    let mut user_msg = String::with_capacity(candidates.len() * 400);
+    user_msg.push_str("Review each memory below and decide whether to promote it to Core.\n\n");
+
+    for (id, content, ac, rep, _imp, _tags) in candidates {
+        let short = &id[..id.len().min(8)];
+        let truncated = truncate_chars(content, 300);
+        let mut context_parts = Vec::new();
+        if *ac >= 30 {
+            context_parts.push(format!("recalled {} times", ac));
+        }
+        if *rep >= 2 {
+            context_parts.push(format!("restated {} times", rep));
+        }
+        let ctx = if context_parts.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", context_parts.join("; "))
+        };
+        user_msg.push_str(&format!("[{}] (ac={}, rep={}){}  {}\n\n", short, ac, rep, ctx, truncated));
+    }
+
+    let schema = prompts::gate_batch_schema();
+
+    let tcr: ai::ToolCallResult<GateBatchResult> = ai::llm_tool_call(
+        cfg, "gate", prompts::GATE_SYSTEM, &user_msg,
+        "gate_decisions", "Decide whether to promote each memory to Core",
+        schema,
+    ).await?;
+
+    // Map LLM decisions back to full IDs
+    let mut results = Vec::with_capacity(candidates.len());
+    for (full_id, _content, _ac, _rep, _imp, _tags) in candidates {
+        let short = &full_id[..full_id.len().min(8)];
+        if let Some(d) = tcr.value.decisions.iter().find(|d| d.id == short) {
+            let approved = d.decision == "approve";
+            let kind = if approved { d.kind.clone().or(Some("semantic".into())) } else { None };
+            results.push((full_id.clone(), approved, kind));
+        } else {
+            // LLM didn't return a decision for this ID — treat as reject
+            warn!(id = %full_id, "gate batch: LLM omitted decision, treating as reject");
+            results.push((full_id.clone(), false, None));
+        }
+    }
+
+    Ok((results, tcr.usage, tcr.model, tcr.duration_ms))
+}
+
+#[allow(dead_code)]
 async fn llm_promotion_gate(cfg: &AiConfig, content: &str, access_count: i64, rep_count: i64) -> Result<(bool, Option<String>, Option<ai::Usage>, String, u64), EngramError> {
     let truncated = truncate_chars(content, 500);
 
@@ -1110,6 +1008,113 @@ async fn llm_promotion_gate(cfg: &AiConfig, content: &str, access_count: i64, re
     let approved = tcr.value.decision == "approve";
     let kind = if approved { tcr.value.kind.or(Some("semantic".into())) } else { None };
     Ok((approved, kind, tcr.usage, tcr.model, tcr.duration_ms))
+}
+
+/// Apply batch gate results: calls `llm_promotion_gate_batch`, handles
+/// approve/reject/error for all candidates, and updates `result` in place.
+/// Falls back to promoting all when no AI config is available.
+async fn apply_batch_gate_results(
+    db: &SharedDB,
+    ai: &Option<AiConfig>,
+    candidates: &[(String, String, i64, i64, f64, Vec<String>)],
+    result: &mut ConsolidateResponse,
+) {
+    match ai {
+        Some(cfg) => {
+            match llm_promotion_gate_batch(cfg, candidates).await {
+                Ok((decisions, usage, model, duration_ms)) => {
+                    // Log the single LLM call
+                    if let Some(ref u) = usage {
+                        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                        let _ = db.log_llm_call("gate", &model, u.prompt_tokens, u.completion_tokens, cached, duration_ms);
+                    }
+                    // Process each decision
+                    for (id, approved, kind) in decisions {
+                        if approved {
+                            let db2 = db.clone();
+                            let id2 = id.clone();
+                            let kind2 = kind.clone();
+                            let promoted = tokio::task::spawn_blocking(move || -> bool {
+                                if db2.promote(&id2, Layer::Core).is_ok() {
+                                    if let Some(k) = kind2 {
+                                        if let Ok(Some(mem)) = db2.get(&id2) {
+                                            if mem.kind == "semantic" {
+                                                let _ = db2.update_kind(&id2, &k);
+                                            }
+                                        }
+                                    }
+                                    true
+                                } else {
+                                    false
+                                }
+                            }).await.unwrap_or(false);
+                            if promoted {
+                                result.promoted_ids.push(id.clone());
+                                result.promoted += 1;
+                                debug!(id = %id, "promoted to Core");
+                            }
+                        } else {
+                            // Rejected — apply escalating tag
+                            result.gate_rejected += 1;
+                            let db2 = db.clone();
+                            let id2 = id.clone();
+                            let content_preview = candidates.iter()
+                                .find(|(cid, _, _, _, _, _)| *cid == id)
+                                .map(|(_, c, _, _, _, _)| truncate_chars(c, 50).to_string())
+                                .unwrap_or_default();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                if let Ok(Some(mem)) = db2.get(&id2) {
+                                    let mut tags: Vec<String> = mem.tags.iter()
+                                        .filter(|t| !t.starts_with("gate-rejected"))
+                                        .cloned().collect();
+                                    let had_2 = mem.tags.iter().any(|t| t == "gate-rejected-2");
+                                    let had_1 = mem.tags.iter().any(|t| t == "gate-rejected");
+                                    let new_tag = if had_2 {
+                                        "gate-rejected-final"
+                                    } else if had_1 {
+                                        "gate-rejected-2"
+                                    } else {
+                                        "gate-rejected"
+                                    };
+                                    tags.push(new_tag.into());
+                                    let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
+                                }
+                            }).await;
+                            info!(id = %id, content = %content_preview, "gate rejected promotion to Core");
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Batch LLM call failed — tag all candidates with _gate-pending
+                    // so they won't be retried next cycle (2h cooldown via modified_at)
+                    warn!(error = %e, count = candidates.len(), "batch gate LLM call failed, tagging _gate-pending");
+                    for (id, _, _, _, _, _) in candidates {
+                        let db2 = db.clone();
+                        let id2 = id.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            if let Ok(Some(mem)) = db2.get(&id2) {
+                                if !mem.tags.iter().any(|t| t == "_gate-pending") {
+                                    let mut tags = mem.tags.clone();
+                                    tags.push("_gate-pending".into());
+                                    let _ = db2.update_fields(&id2, None, None, None, Some(&tags));
+                                }
+                            }
+                        }).await;
+                    }
+                }
+            }
+        }
+        None => {
+            // No AI config — promote all candidates directly (backward compat)
+            let db2 = db.clone();
+            let cands: Vec<String> = candidates.iter().map(|(id, _, _, _, _, _)| id.clone()).collect();
+            let promoted_ids: Vec<String> = tokio::task::spawn_blocking(move || {
+                cands.into_iter().filter(|id| db2.promote(id, Layer::Core).is_ok()).collect::<Vec<_>>()
+            }).await.unwrap_or_default();
+            result.promoted += promoted_ids.len();
+            result.promoted_ids.extend(promoted_ids);
+        }
+    }
 }
 
 pub fn layer_label(l: Layer) -> &'static str {

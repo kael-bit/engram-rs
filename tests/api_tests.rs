@@ -17,6 +17,7 @@ fn test_state(api_key: Option<&str>) -> AppState {
         proxy: None,
         started_at: std::time::Instant::now(),
         last_proxy_turn: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        last_activity: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
         topiary_trigger: None,
     }
 }

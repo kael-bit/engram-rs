@@ -8,10 +8,8 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
 
 // scoring weights — should add up to 1.0
-// relevance is king: a perfectly relevant low-importance memory
-// beats a vaguely related high-importance one
-const WEIGHT_RELEVANCE: f64 = 0.6;
-const WEIGHT_IMPORTANCE: f64 = 0.2;
+const WEIGHT_RELEVANCE: f64 = 0.5;
+const WEIGHT_WEIGHT: f64 = 0.3;
 const WEIGHT_RECENCY: f64 = 0.2;
 
 /// Default minimum cosine similarity to include a result.
@@ -116,19 +114,20 @@ pub fn recency_score(last_accessed: i64, decay_rate: f64) -> f64 {
     (-rate * hours / 168.0).exp()
 }
 
+/// Simplified scoring fallback — used when only importance (not full Memory) is available.
+/// For full scoring, prefer `crate::scoring::memory_weight(&mem)`.
 pub fn score_combined(importance: f64, relevance: f64, last_accessed: i64) -> f64 {
     let now = crate::db::now_ms();
     let age_hours = ((now - last_accessed) as f64 / 3_600_000.0).max(0.0);
     // simplified recency for rescore — uses default decay
     let recency = (-0.1 * age_hours).exp();
-    WEIGHT_IMPORTANCE * importance + WEIGHT_RECENCY * recency + WEIGHT_RELEVANCE * relevance
+    WEIGHT_WEIGHT * importance + WEIGHT_RECENCY * recency + WEIGHT_RELEVANCE * relevance
 }
 
 pub fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {
     let recency = recency_score(mem.last_accessed, mem.decay_rate);
-    let bonus = mem.layer.score_bonus();
-    let mut score =
-        (WEIGHT_IMPORTANCE * mem.importance + WEIGHT_RECENCY * recency + WEIGHT_RELEVANCE * relevance) * bonus;
+    let weight = crate::scoring::memory_weight(mem);
+    let mut score = 0.5 * relevance + 0.3 * weight + 0.2 * recency;
 
     // Cap at 1.0 — scores above 1 confuse callers and threshold logic
     score = score.min(1.0);

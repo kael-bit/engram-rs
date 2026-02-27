@@ -115,8 +115,8 @@ fn promote_high_access_working() {
     let now = engram::db::now_ms();
     // working memory with enough accesses and importance → should be a candidate
     let good = mem_with_ts("promote-me", Layer::Working, 0.8, 5, now - 1000, now);
-    // working memory with low access → should not be a candidate
-    let meh = mem_with_ts("leave-me", Layer::Working, 0.8, 1, now - 1000, now);
+    // working memory with low importance → weight below 0.8 threshold, should not be a candidate
+    let meh = mem_with_ts("leave-me", Layer::Working, 0.5, 1, now - 1000, now);
     db.import(&[good, meh]).unwrap();
 
     let result = consolidate_sync(&db, None, "full");
@@ -158,10 +158,10 @@ fn drop_expired_low_importance_buffer() {
     let three_days_ago = now - 3 * 86_400_000;
     // old buffer, never accessed → should be dropped after TTL + hard_cap
     let expendable = mem_with_ts("bye", Layer::Buffer, 0.2, 0, three_days_ago, three_days_ago);
-    // old buffer, accessed enough (≥ rescue threshold of 2) → rescued to working
+    // old buffer, accessed enough → weight exceeds rescue threshold, rescued to working
     let valuable = mem_with_ts("save-me", Layer::Buffer, 0.5, 3, three_days_ago, three_days_ago);
-    // old buffer, accessed once → below rescue threshold, dropped
-    let barely = mem_with_ts("not-enough", Layer::Buffer, 0.5, 1, three_days_ago, three_days_ago);
+    // old buffer, low importance barely accessed → below rescue threshold, dropped
+    let barely = mem_with_ts("not-enough", Layer::Buffer, 0.2, 1, three_days_ago, three_days_ago);
     db.import(&[expendable, valuable, barely]).unwrap();
 
     let _result = consolidate_sync(&db, None, "full");
@@ -188,9 +188,9 @@ fn nothing_to_do() {
 fn buffer_promoted_by_access() {
     let db = test_db();
     let now = engram::db::now_ms();
-    // Buffer memory with enough accesses (≥5) should promote to Working
-    let accessed = mem_with_ts("recalled", Layer::Buffer, 0.1, 6, now - 1000, now);
-    // Buffer with only 3 accesses — not enough, stays in Buffer
+    // Buffer memory with enough importance+access (weight ≥ 0.4) should promote to Working
+    let accessed = mem_with_ts("recalled", Layer::Buffer, 0.5, 6, now - 1000, now);
+    // Buffer with low importance and few accesses — weight below threshold, stays in Buffer
     let not_enough = mem_with_ts("still-young", Layer::Buffer, 0.1, 3, now - 1000, now);
     db.import(&[accessed, not_enough]).unwrap();
 
@@ -206,9 +206,9 @@ fn buffer_promoted_by_access() {
 fn buffer_ttl_accessed_enough_promotes() {
     let db = test_db();
     let three_days_ago = engram::db::now_ms() - 3 * 86_400_000;
-    // Old buffer with 3 accesses (≥ rescue threshold of 2) — should rescue to Working
-    let accessed = mem_with_ts("rescued", Layer::Buffer, 0.1, 3, three_days_ago, three_days_ago);
-    // Old buffer with 1 access — below rescue threshold, should be dropped
+    // Old buffer with enough importance+access (weight ≥ rescue threshold) — should rescue to Working
+    let accessed = mem_with_ts("rescued", Layer::Buffer, 0.5, 3, three_days_ago, three_days_ago);
+    // Old buffer with low importance — below rescue threshold, should be dropped
     let barely = mem_with_ts("barely", Layer::Buffer, 0.1, 1, three_days_ago, three_days_ago);
     db.import(&[accessed, barely]).unwrap();
 
@@ -268,8 +268,8 @@ fn lesson_tag_survives_buffer_ttl() {
     let mut lesson = mem_with_ts("never-force-push", Layer::Buffer, 0.5, 0, two_days_ago, two_days_ago);
     lesson.tags = vec!["lesson".into(), "trigger:git-push".into()];
 
-    // Regular buffer — same age, same accesses, should be dropped
-    let regular = mem_with_ts("some-note", Layer::Buffer, 0.5, 0, two_days_ago, two_days_ago);
+    // Regular buffer — same age, low importance, zero accesses, should be dropped
+    let regular = mem_with_ts("some-note", Layer::Buffer, 0.2, 0, two_days_ago, two_days_ago);
 
     db.import(&[lesson, regular]).unwrap();
 
@@ -524,7 +524,8 @@ fn buffer_cap_evicts_oldest() {
 
     for i in 0..8 {
         let input = MemoryInput::new(format!("buffer item {i}"))
-            .layer(1); // 1 = Buffer
+            .layer(1) // 1 = Buffer
+            .importance(0.2); // low importance so they don't auto-promote
         db.insert(input).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(5));
     }

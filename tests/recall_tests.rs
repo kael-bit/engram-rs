@@ -970,10 +970,10 @@ fn score_memory_layer_bonus() {
     let scored_buffer = score_memory(&mem_buffer, 0.7);
     let scored_core = score_memory(&mem_core, 0.7);
 
-    // Buffer bonus=0.9, Core bonus=1.1 → Core should score higher
+    // Buffer layer_boost=0.8, Core layer_boost=1.2 → Core should score higher
     assert!(
         scored_core.score > scored_buffer.score,
-        "Core (bonus=1.1) should outscore Buffer (bonus=0.9): core={} vs buffer={}",
+        "Core (layer_boost=1.2) should outscore Buffer (layer_boost=0.8): core={} vs buffer={}",
         scored_core.score, scored_buffer.score
     );
 }
@@ -1002,21 +1002,24 @@ fn score_memory_weight_distribution() {
     let mem_high_rel = make_memory(Layer::Working, 0.1, 0.0, now); // importance=0.1, decay=0→recency=1.0
     let mem_high_imp = make_memory(Layer::Working, 0.9, 0.0, now); // importance=0.9, decay=0→recency=1.0
 
-    // high relevance (0.9) + low importance (0.1): 0.6*0.9 + 0.2*0.1 + 0.2*1.0 = 0.54 + 0.02 + 0.2 = 0.76
+    // New formula: 0.5*relevance + 0.3*memory_weight(mem) + 0.2*recency
+    // memory_weight(high_rel) = (0.1 + 0 + ln(2)*0.1) * 1.0 * 1.0 ≈ 0.1693
+    // high relevance (0.9) + low weight: 0.5*0.9 + 0.3*0.1693 + 0.2*1.0 ≈ 0.701
     let scored_high_rel = score_memory(&mem_high_rel, 0.9);
-    // low relevance (0.1) + high importance (0.9): 0.6*0.1 + 0.2*0.9 + 0.2*1.0 = 0.06 + 0.18 + 0.2 = 0.44
+    // memory_weight(high_imp) = (0.9 + 0 + ln(2)*0.1) * 1.0 * 1.0 ≈ 0.9693
+    // low relevance (0.1) + high weight: 0.5*0.1 + 0.3*0.9693 + 0.2*1.0 ≈ 0.541
     let scored_high_imp = score_memory(&mem_high_imp, 0.1);
 
     assert!(
         scored_high_rel.score > scored_high_imp.score,
-        "high relevance (weight=0.6) should beat high importance (weight=0.2): \
+        "high relevance (weight=0.5) should beat high importance (weight=0.3): \
          high_rel={} vs high_imp={}",
         scored_high_rel.score, scored_high_imp.score
     );
 
-    // Verify approximate values (Working layer bonus = 1.0, so no distortion)
-    let expected_high_rel = 0.76; // (0.6*0.9 + 0.2*0.1 + 0.2*1.0) * 1.0
-    let expected_high_imp = 0.44; // (0.6*0.1 + 0.2*0.9 + 0.2*1.0) * 1.0
+    // Verify approximate values (Working layer boost = 1.0, so no distortion)
+    let expected_high_rel = 0.701; // 0.5*0.9 + 0.3*0.1693 + 0.2*1.0
+    let expected_high_imp = 0.541; // 0.5*0.1 + 0.3*0.9693 + 0.2*1.0
     assert!(
         (scored_high_rel.score - expected_high_rel).abs() < 0.01,
         "expected ≈{expected_high_rel}, got {}", scored_high_rel.score

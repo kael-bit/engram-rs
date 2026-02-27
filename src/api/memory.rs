@@ -98,6 +98,7 @@ pub(super) async fn create_memory(
                                     existing_id = %mem.id, rep = mem.repetition_count,
                                     "semantic dedup: LLM-merged content + reinforced"
                                 );
+                                state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
                                 return Ok((StatusCode::OK, Json(mem)));
                             }
                         }
@@ -106,6 +107,7 @@ pub(super) async fn create_memory(
                             existing_id = %existing.id, rep = existing.repetition_count,
                             "semantic dedup: reinforced (no new info)"
                         );
+                        state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
                         return Ok((StatusCode::OK, Json(existing)));
                     }
                     Ok((None, pre_emb)) => {
@@ -153,6 +155,7 @@ pub(super) async fn create_memory(
         }
     }
 
+    state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
     Ok((StatusCode::CREATED, Json(mem)))
 }
 
@@ -220,6 +223,7 @@ pub(super) async fn batch_create(
     }
 
     let inserted = results.len();
+    state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
     Ok(Json(serde_json::json!({
         "inserted": inserted,
         "requested": count,
@@ -269,6 +273,7 @@ pub(super) async fn update_memory(
     })
     .await??;
 
+    state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
     mem.ok_or(EngramError::NotFound).map(Json)
 }
 
@@ -287,6 +292,7 @@ pub(super) async fn delete_memory(
         if let Some(ref tx) = state.topiary_trigger {
             let _ = tx.send(());
         }
+        state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
         Ok(Json(serde_json::json!({"ok": true})))
     } else {
         Err(EngramError::NotFound)
@@ -324,6 +330,7 @@ pub(super) async fn batch_delete(
         if let Some(ref tx) = state.topiary_trigger {
             let _ = tx.send(());
         }
+        state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
     }
 
     Ok(Json(serde_json::json!({"deleted": deleted})))

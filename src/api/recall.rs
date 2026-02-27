@@ -7,6 +7,7 @@ use tracing::{debug, warn};
 
 use crate::error::EngramError;
 use crate::extract::LenientJson;
+use crate::scoring::MemoryResult;
 use crate::{ai, db, recall, AppState};
 use super::{blocking, get_namespace};
 
@@ -128,6 +129,14 @@ pub(super) async fn get_triggers(
         db.list_filtered(500, 0, ns.as_deref(), None, Some(&tag), None)
     }).await?.unwrap_or_default();
 
+    // Sort triggers by unified weight (most important first)
+    let mut memories = memories;
+    memories.sort_by(|a, b| {
+        crate::scoring::memory_weight(b)
+            .partial_cmp(&crate::scoring::memory_weight(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     // touch each trigger memory so it reinforces over time
     if !memories.is_empty() {
         let ids: Vec<String> = memories.iter().map(|m| m.id.clone()).collect();
@@ -142,7 +151,9 @@ pub(super) async fn get_triggers(
     Ok(Json(serde_json::json!({
         "action": action,
         "count": memories.len(),
-        "memories": memories,
+        "memories": memories.iter()
+            .map(|m| MemoryResult::from_memory(m, crate::scoring::memory_weight(m)))
+            .collect::<Vec<_>>(),
     })))
 }
 
@@ -150,7 +161,7 @@ pub(super) async fn do_recall(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     LenientJson(mut req): LenientJson<recall::RecallRequest>,
-) -> Result<Json<recall::RecallResponse>, EngramError> {
+) -> Result<Json<serde_json::Value>, EngramError> {
     if req.query.is_empty() {
         return Err(EngramError::EmptyQuery);
     }
@@ -290,5 +301,25 @@ pub(super) async fn do_recall(
         result.expanded_queries = Some(eq);
     }
 
-    Ok(Json(result))
+    // Map to clean API response
+    let memories: Vec<MemoryResult> = result.memories.iter()
+        .map(|sm| MemoryResult::from_memory(&sm.memory, sm.score))
+        .collect();
+
+    let mut resp = serde_json::json!({
+        "memories": memories,
+        "query": query_text,
+        "total": result.total,
+    });
+
+    if let Some(ref eq) = result.expanded_queries {
+        resp["expanded_queries"] = serde_json::json!(eq);
+    }
+    if let Some(ref fc) = result.fact_chains {
+        if !fc.is_empty() {
+            resp["fact_chains"] = serde_json::json!(fc);
+        }
+    }
+
+    Ok(Json(resp))
 }

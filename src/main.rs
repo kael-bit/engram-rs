@@ -92,6 +92,7 @@ async fn main() {
         proxy: proxy_cfg,
         started_at: std::time::Instant::now(),
         last_proxy_turn: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        last_activity: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(db::now_ms())),
         topiary_trigger: Some(topiary_tx),
     };
     let app = api::router(state.clone());
@@ -111,7 +112,16 @@ async fn main() {
             let interval = std::time::Duration::from_secs(consolidate_mins.saturating_mul(60));
             // wait a bit before first run so startup isn't slowed
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            let mut last_consolidation_ts: i64 = db::now_ms();
             loop {
+                // Skip consolidation if no write activity since last run
+                let last_act = bg_state.last_activity.load(std::sync::atomic::Ordering::Relaxed);
+                if last_act <= last_consolidation_ts {
+                    debug!("consolidation skipped: no activity since last run");
+                    tokio::time::sleep(interval).await;
+                    continue;
+                }
+
                 let req = if auto_merge {
                     Some(consolidate::ConsolidateRequest {
                         merge: Some(true),
@@ -149,6 +159,7 @@ async fn main() {
                 } else {
                     debug!("auto-consolidate: no changes");
                 }
+                last_consolidation_ts = db::now_ms();
                 tokio::time::sleep(interval).await;
             }
         });
@@ -164,6 +175,7 @@ async fn main() {
         if let Some(ref ai) = state.ai {
             let audit_db = state.db.clone();
             let audit_ai = ai.clone();
+            let audit_last_activity = state.last_activity.clone();
             tokio::spawn(async move {
                 let interval_secs = audit_hours.saturating_mul(3600);
                 let interval = std::time::Duration::from_secs(interval_secs);
@@ -184,7 +196,16 @@ async fn main() {
                     tokio::time::sleep(std::time::Duration::from_secs(300)).await;
                 }
 
+                let mut last_audit_ts: i64 = engram::db::now_ms();
                 loop {
+                    // Skip audit if no write activity since last run
+                    let last_act = audit_last_activity.load(std::sync::atomic::Ordering::Relaxed);
+                    if last_act <= last_audit_ts {
+                        debug!("audit skipped: no activity since last run");
+                        tokio::time::sleep(interval).await;
+                        continue;
+                    }
+
                     match consolidate::sandbox_audit(&audit_ai, &audit_db, true).await {
                         Ok(r) if r.applied > 0 => {
                             info!(
@@ -211,6 +232,7 @@ async fn main() {
                     if let Err(e) = audit_db.set_meta("last_audit_ms", &engram::db::now_ms().to_string()) {
                         warn!("failed to update last_audit_ms: {e}");
                     }
+                    last_audit_ts = engram::db::now_ms();
                     tokio::time::sleep(interval).await;
                 }
             });

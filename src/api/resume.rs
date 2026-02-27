@@ -167,13 +167,11 @@ pub(super) async fn do_resume(
             .take(core_limit)
             .collect();
 
-        // Sort core by: importance × kind_boost × (1 + repetition_count × 2.5)
+        // Sort core by unified memory_weight
         core.sort_by(|a, b| {
-            let score = |m: &db::Memory| -> f64 {
-                let kind_boost = if m.kind == "procedural" { 1.3 } else { 1.0 };
-                m.importance * kind_boost * (1.0 + m.repetition_count as f64 * 2.5)
-            };
-            score(b).partial_cmp(&score(a)).unwrap_or(std::cmp::Ordering::Equal)
+            crate::scoring::memory_weight(b)
+                .partial_cmp(&crate::scoring::memory_weight(a))
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // === Recent section: non-Core memories modified/created in last N hours ===

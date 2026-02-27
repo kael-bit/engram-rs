@@ -339,6 +339,27 @@ pub fn gate_schema() -> serde_json::Value {
     })
 }
 
+pub fn gate_batch_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "decisions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Memory ID prefix (first 8 chars)" },
+                        "decision": { "type": "string", "enum": ["approve", "reject"] },
+                        "kind": { "type": "string", "enum": ["semantic", "procedural"], "description": "Memory kind (only when approving)" }
+                    },
+                    "required": ["id", "decision"]
+                }
+            }
+        },
+        "required": ["decisions"]
+    })
+}
+
 // ---------------------------------------------------------------------------
 // consolidate/merge.rs
 // ---------------------------------------------------------------------------

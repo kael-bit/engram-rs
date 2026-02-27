@@ -101,8 +101,9 @@ pub(super) async fn triage_buffer(
             .into_iter()
             .filter(|m| {
                 let dominated = m.tags.iter().any(|t| t == "distilled" || t == "ephemeral");
+                let already_triaged = m.tags.iter().any(|t| t == "_triaged");
                 let old_enough = (now - m.created_at) > min_age_ms;
-                !dominated && old_enough && !promoted_set.contains(&m.id)
+                !dominated && !already_triaged && old_enough && !promoted_set.contains(&m.id)
             })
             .collect()
     }).await.unwrap_or_default();

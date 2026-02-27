@@ -9,6 +9,7 @@ pub mod extract;
 pub mod prompts;
 pub mod proxy;
 pub mod recall;
+pub mod scoring;
 pub mod thresholds;
 pub mod topiary;
 pub mod util;
@@ -42,6 +43,7 @@ pub struct AppState {
     pub proxy: Option<proxy::ProxyConfig>,
     pub started_at: std::time::Instant,
     pub last_proxy_turn: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    pub last_activity: std::sync::Arc<std::sync::atomic::AtomicI64>,
     pub topiary_trigger: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
 

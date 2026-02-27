@@ -75,14 +75,6 @@ impl Layer {
             Layer::Core => 0.05,
         }
     }
-
-    pub fn score_bonus(self) -> f64 {
-        match self {
-            Layer::Buffer => 0.9,
-            Layer::Working => 1.0,
-            Layer::Core => 1.1,
-        }
-    }
 }
 
 
