@@ -110,7 +110,7 @@ server.tool(
   "engram_recall",
   "Hybrid semantic + keyword search with budget-aware retrieval. " +
     "Fast by default (~30ms cached, ~1s first query). " +
-    "Optional rerank/expand add LLM calls (+2-4s each) — only use when needed.",
+    "Optional expand adds LLM query expansion (+1-2s) — only use for short/vague queries.",
   {
     query: z.string().describe("Search query"),
     budget_tokens: z.number().int().positive().optional().describe("Max token budget"),
@@ -120,7 +120,6 @@ server.tool(
     since: z.number().int().optional().describe("Only memories created after this unix ms timestamp"),
     until: z.number().int().optional().describe("Only memories created before this unix ms timestamp"),
     sort_by: z.enum(["score", "recent", "accessed"]).optional().describe("Sort order (default: score)"),
-    rerank: z.boolean().optional().describe("Re-rank via LLM (+2-4s). Use only when result ordering is critical"),
     expand: z.boolean().optional().describe("LLM query expansion (+1-2s). Use for short/vague queries like single words"),
     source: z.string().optional().describe("Filter by source (e.g. session, extract, api)"),
     tags: z.array(z.string()).optional().describe("Filter by tags (must have ALL specified)"),
@@ -128,7 +127,7 @@ server.tool(
     min_score: z.number().min(0).max(1).optional().describe("Drop results below this score (0-1)"),
     dry: z.boolean().optional().describe("Skip touch/reinforcement on results (for background queries)"),
   },
-  async ({ query, budget_tokens, layers, min_importance, limit, since, until, sort_by, rerank, expand, source, tags, namespace, min_score, dry }) => {
+  async ({ query, budget_tokens, layers, min_importance, limit, since, until, sort_by, expand, source, tags, namespace, min_score, dry }) => {
     const body: Record<string, unknown> = { query };
     if (budget_tokens !== undefined) body.budget_tokens = budget_tokens;
     if (layers !== undefined) body.layers = layers;
@@ -137,7 +136,6 @@ server.tool(
     if (since !== undefined) body.since = since;
     if (until !== undefined) body.until = until;
     if (sort_by !== undefined) body.sort_by = sort_by;
-    if (rerank !== undefined) body.rerank = rerank;
     if (expand !== undefined) body.expand = expand;
     if (source !== undefined) body.source = source;
     if (tags !== undefined) body.tags = tags;
