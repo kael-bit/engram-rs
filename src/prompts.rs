@@ -391,6 +391,16 @@ Decide:
 pub const INSERT_MERGE_PROMPT: &str = r#"Merge two versions of the same memory into one. Preserve ALL specific details from BOTH versions — names, numbers, commands, constraints. Output ONLY the merged text, nothing else. Keep the same language as the input. Be concise; don't add commentary or explanation. Keep it to 2-3 concise sentences if possible."#;
 
 // ---------------------------------------------------------------------------
+// consolidate/distill.rs — session note distillation
+// ---------------------------------------------------------------------------
+
+pub const DISTILL_SYSTEM_PROMPT: &str = "You synthesize session notes into a concise project status snapshot.\n\
+Focus on: what exists now, current version/state, key capabilities, what's in progress.\n\
+Skip: lessons learned, past bugs, how things were built.\n\
+Output a single paragraph, 2-4 sentences, under 250 chars. Same language as input.\n\
+No preamble, no markdown headers — just the status text.";
+
+// ---------------------------------------------------------------------------
 // topiary/naming.rs — topic naming
 // ---------------------------------------------------------------------------
 

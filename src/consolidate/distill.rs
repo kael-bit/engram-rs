@@ -1,5 +1,6 @@
 use crate::ai::{self, AiConfig};
 use crate::db::{Layer, Memory};
+use crate::prompts;
 use crate::SharedDB;
 use crate::util::truncate_chars;
 use tracing::{info, warn};
@@ -52,17 +53,12 @@ async fn distill_one_ns(
         format!("- {}", truncate_chars(&m.content, 300))
     }).collect::<Vec<_>>().join("\n");
 
-    let system = "You synthesize session notes into a concise project status snapshot.\n\
-        Focus on: what exists now, current version/state, key capabilities, what's in progress.\n\
-        Skip: lessons learned, past bugs, how things were built.\n\
-        Output a single paragraph, 2-4 sentences, under 250 chars. Same language as input.\n\
-        No preamble, no markdown headers — just the status text.";
     let user = format!(
         "Distill these {} session notes into a project status snapshot:\n\n{}",
         to_distill.len(), text
     );
 
-    let summary = match ai::llm_chat_as(cfg, "gate", system, &user).await {
+    let summary = match ai::llm_chat_as(cfg, "gate", prompts::DISTILL_SYSTEM_PROMPT, &user).await {
         Ok(r) => {
             if let Some(ref u) = r.usage {
                 let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
