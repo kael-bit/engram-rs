@@ -26,6 +26,8 @@ jobs:
             os: macos-latest
             name: engram-macos-aarch64
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -47,11 +49,11 @@ jobs:
             cp target/${{ matrix.target }}/release/engram ${{ matrix.name }}
           fi
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
         with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.name }}
+          files: ${{ matrix.name }}
 
   docker:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -86,24 +88,3 @@ jobs:
             ghcr.io/${{ github.repository }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            artifacts/engram-linux-x86_64/engram-linux-x86_64
-            artifacts/engram-windows-x86_64.exe/engram-windows-x86_64.exe
-            artifacts/engram-macos-x86_64/engram-macos-x86_64
-            artifacts/engram-macos-aarch64/engram-macos-aarch64
