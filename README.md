@@ -6,6 +6,8 @@ Persistent memory for AI agents. Store, forget, and recall — like a brain.
   <img src="docs/engram-quickstart.gif" alt="engram demo — store, context reset, recall" width="720">
 </p>
 
+[中文](README_CN.md)
+
 ## Why?
 
 Most agent memory is just a vector database. Everything stays forever, retrieval is dumb similarity search, and there's no concept of what matters or how things relate.
