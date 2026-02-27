@@ -1,13 +1,7 @@
 use tracing::{debug, info, warn};
 
-use crate::{ai, db, error::EngramError, util::truncate_chars, AppState};
+use crate::{ai, db, error::EngramError, prompts, thresholds, util::truncate_chars, AppState};
 use super::stats::{bump_extracted, persist_proxy_counters};
-
-/// Minimum importance for proxy-extracted memories to be stored.
-const PROXY_MIN_IMPORTANCE: f64 = 0.5;
-
-/// Jaccard similarity threshold for proxy dedup (more aggressive than insert dedup).
-const PROXY_DEDUP_THRESHOLD: f64 = 0.5;
 
 pub(crate) async fn extract_from_context(state: AppState, context: &str) {
     let Some(ref ai_cfg) = state.ai else {
@@ -45,7 +39,7 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
         format!("\n\n=== ALREADY IN MEMORY (do NOT extract anything that overlaps with these) ===\n{}\n", lines.join("\n"))
     };
 
-    let system = EXTRACT_SYSTEM_PROMPT;
+    let system = prompts::PROXY_EXTRACT_SYSTEM;
 
     let user = format!(
         "Extract memories from this conversation window. Call with empty items if nothing qualifies.{existing_knowledge}\n\n\
@@ -53,36 +47,7 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
         context.matches("User: ").count()
     );
 
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "items": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "content": {
-                            "type": "string",
-                            "description": "One sentence, concrete, under 150 chars"
-                        },
-                        "tags": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "1-4 relevant tags"
-                        },
-                        "kind": {
-                            "type": "string",
-                            "enum": ["semantic", "episodic", "procedural"],
-                            "description": "semantic=facts/decisions/lessons/preferences (most memories are this). episodic=specific dated events. procedural=reusable step-by-step workflows ONLY (e.g. 'deploy: test→build→stop→copy→start'). Code changes, prompt edits, bug fixes are NOT procedural — they are semantic."
-                        }
-                    },
-                    "required": ["content", "tags", "kind"]
-                },
-                "maxItems": 3
-            }
-        },
-        "required": ["items"]
-    });
+    let schema = prompts::proxy_extract_schema();
 
     #[derive(serde::Deserialize)]
     struct ExtractResult {
@@ -130,7 +95,7 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
             continue;
         }
 
-        if entry.importance.unwrap_or(PROXY_MIN_IMPORTANCE) < PROXY_MIN_IMPORTANCE {
+        if entry.importance.unwrap_or(thresholds::PROXY_MIN_IMPORTANCE) < thresholds::PROXY_MIN_IMPORTANCE {
             debug!("proxy: importance filter skip ({:.2}): {}",
                 entry.importance.unwrap_or(0.0), truncate_chars(&entry.content, 60));
             continue;
@@ -143,7 +108,7 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
         }
 
         if batch_contents.iter().any(|prev| {
-            crate::db::jaccard_similar(prev, &entry.content, PROXY_DEDUP_THRESHOLD)
+            crate::db::jaccard_similar(prev, &entry.content, thresholds::PROXY_DEDUP_THRESHOLD)
         }) {
             info!("proxy: dedup/intra-batch skip: {}", truncate_chars(&entry.content, 60));
             continue;
@@ -156,7 +121,7 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
                     let db = state.db.clone();
                     let c = entry.content.clone();
                     tokio::task::spawn_blocking(move || {
-                        if db.is_near_duplicate_with(&c, PROXY_DEDUP_THRESHOLD) { Some(String::new()) } else { None }
+                        if db.is_near_duplicate_with(&c, thresholds::PROXY_DEDUP_THRESHOLD) { Some(String::new()) } else { None }
                     }).await.unwrap_or(None)
                 }
             };
@@ -223,26 +188,6 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
         debug!("proxy: all extractions were duplicates");
     }
 }
-
-const EXTRACT_SYSTEM_PROMPT: &str = "You extract long-term memories from a multi-turn conversation between a user and their AI assistant.\n\
-    Most windows produce nothing — that's fine. But don't miss real signals.\n\n\
-    EXTRACT:\n\
-    - Decisions: 'we chose X over Y', 'switching to native binaries'\n\
-    - Constraints: 'no Docker', 'code must look human-written', 'never mention X in public'\n\
-    - Lessons: mistakes pointed out, corrections, 'don't do X again', 'X was wrong because Y'\n\
-    - User feedback that shapes behavior: criticism, preferences, rules stated in frustration\n\
-      (e.g. 'you're too expensive, use haiku for this' → extract the model routing decision)\n\
-    - Infrastructure/tooling changes that persist\n\
-    - Gotchas discovered through experience\n\n\
-    Extract from EITHER side — user corrections AND assistant realizations both count.\n\
-    User anger often contains the most important signals.\n\n\
-    NEVER extract:\n\
-    - Routine code changes, refactors, test results\n\
-    - Bug fixes (unless there's a reusable lesson)\n\
-    - The assistant explaining how things work (teaching ≠ memory)\n\
-    - Anything already in ALREADY IN MEMORY below\n\n\
-    LANGUAGE: Match the user's language.\n\n\
-    DEDUP: Skip if it overlaps with ALREADY IN MEMORY.";
 
 #[derive(serde::Deserialize)]
 struct ExtractionEntry {

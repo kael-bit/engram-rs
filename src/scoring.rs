@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use crate::db::{Layer, Memory};
+use crate::thresholds;
 
 /// Clean API response for a single memory — used at the HTTP boundary only.
 /// Internal types (`ScoredMemory`, `RecallResponse`) remain unchanged.
@@ -42,18 +43,18 @@ impl MemoryResult {
 /// Unified memory weight — used across all ranking contexts.
 /// Combines decayable importance with permanent reinforcement signals.
 pub fn memory_weight(mem: &Memory) -> f64 {
-    let rep_bonus = (mem.repetition_count as f64 * 0.1).min(0.5);
-    let access_bonus = ((1.0 + mem.access_count as f64).ln() * 0.1).min(0.3);
+    let rep_bonus = (mem.repetition_count as f64 * thresholds::REP_BONUS_SCALE).min(thresholds::REP_BONUS_CAP);
+    let access_bonus = ((1.0 + mem.access_count as f64).ln() * thresholds::ACCESS_BONUS_SCALE).min(thresholds::ACCESS_BONUS_CAP);
 
     let kind_boost = match mem.kind.as_str() {
-        "procedural" => 1.3,
-        "episodic" => 0.8,
+        "procedural" => thresholds::KIND_BOOST_PROCEDURAL,
+        "episodic" => thresholds::KIND_BOOST_EPISODIC,
         _ => 1.0, // semantic and unknown
     };
     let layer_boost = match mem.layer {
-        Layer::Core => 1.2,
+        Layer::Core => thresholds::LAYER_BOOST_CORE,
         Layer::Working => 1.0,
-        Layer::Buffer => 0.8,
+        Layer::Buffer => thresholds::LAYER_BOOST_BUFFER,
     };
 
     (mem.importance + rep_bonus + access_bonus) * kind_boost * layer_boost

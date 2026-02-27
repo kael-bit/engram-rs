@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use hnsw_rs::prelude::*;
 
 use super::*;
+use crate::thresholds;
 
 /// Sort scored results by similarity descending, then truncate to limit.
 fn top_k(scored: &mut Vec<(String, f64)>, limit: usize) {
@@ -20,9 +21,6 @@ pub struct VecEntry {
     pub namespace: String,
 }
 
-const HNSW_MAX_NB_CONN: usize = 16;
-const HNSW_EF_CONSTRUCTION: usize = 200;
-const HNSW_MAX_LAYER: usize = 16;
 fn hnsw_ef_search() -> usize {
     static VAL: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
         std::env::var("ENGRAM_HNSW_EF_SEARCH")
@@ -30,9 +28,6 @@ fn hnsw_ef_search() -> usize {
     });
     *VAL
 }
-const HNSW_INITIAL_CAPACITY: usize = 10_000;
-/// Over-fetch factor when filtering HNSW results by namespace.
-const NS_OVERFETCH: usize = 5;
 
 /// Combined vector index: HashMap for ID lookups + HNSW for ANN search.
 pub struct VecIndex {
@@ -44,7 +39,7 @@ pub struct VecIndex {
 
 impl VecIndex {
     pub(crate) fn new() -> Self {
-        Self::with_capacity(HNSW_INITIAL_CAPACITY)
+        Self::with_capacity(thresholds::HNSW_INITIAL_CAPACITY)
     }
 
     pub(crate) fn with_capacity(capacity: usize) -> Self {
@@ -52,10 +47,10 @@ impl VecIndex {
         Self {
             entries: HashMap::new(),
             hnsw: Hnsw::<f32, DistCosine>::new(
-                HNSW_MAX_NB_CONN,
+                thresholds::HNSW_MAX_NB_CONN,
                 cap,
-                HNSW_MAX_LAYER,
-                HNSW_EF_CONSTRUCTION,
+                thresholds::HNSW_MAX_LAYER,
+                thresholds::HNSW_EF_CONSTRUCTION,
                 DistCosine,
             ),
             id_to_idx: HashMap::new(),
@@ -138,10 +133,10 @@ impl VecIndex {
     fn rebuild_hnsw(&mut self) {
         let cap = self.entries.len().max(1000);
         self.hnsw = Hnsw::<f32, DistCosine>::new(
-            HNSW_MAX_NB_CONN,
+            thresholds::HNSW_MAX_NB_CONN,
             cap,
-            HNSW_MAX_LAYER,
-            HNSW_EF_CONSTRUCTION,
+            thresholds::HNSW_MAX_LAYER,
+            thresholds::HNSW_EF_CONSTRUCTION,
             DistCosine,
         );
         self.id_to_idx.clear();
@@ -300,11 +295,10 @@ impl MemoryDB {
             id_emb_pairs.into_iter().collect();
         let ids: Vec<&str> = id_to_emb.keys().map(|s| s.as_str()).collect();
 
-        // Fetch metadata (no embedding blob) in batches of 500 to avoid SQLite variable limits
-        const BATCH_SIZE: usize = 500;
+        // Fetch metadata (no embedding blob) in batches to avoid SQLite variable limits
         let mut result = Vec::with_capacity(ids.len());
 
-        for chunk in ids.chunks(BATCH_SIZE) {
+        for chunk in ids.chunks(thresholds::HNSW_BATCH_SIZE) {
             let placeholders = chunk.iter().enumerate()
                 .map(|(i, _)| format!("?{}", i + 1))
                 .collect::<Vec<_>>()
@@ -363,7 +357,7 @@ impl MemoryDB {
                 }
 
                 // With namespace filter: over-fetch from HNSW, then filter
-                let fetch = limit * NS_OVERFETCH;
+                let fetch = limit * thresholds::NS_OVERFETCH;
                 let candidates = idx.search_hnsw(query_emb, fetch);
                 let mut scored: Vec<(String, f64)> = candidates
                     .into_iter()

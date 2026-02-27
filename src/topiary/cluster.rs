@@ -1,6 +1,7 @@
 //! K-means clustering, split/merge passes, hierarchy building.
 
 use super::{cosine_similarity, mean_vector, Entry, TopicNode, TopicTree};
+use crate::thresholds;
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
 use rand::{RngExt, SeedableRng};
@@ -162,8 +163,6 @@ fn split_recursive(
     next_id: &mut u32,
     depth: usize,
 ) -> Vec<TopicNode> {
-    const MAX_DEPTH: usize = 64;
-
     if !node.is_leaf() {
         let old_children = std::mem::take(&mut node.children);
         for child in old_children {
@@ -174,18 +173,18 @@ fn split_recursive(
         return vec![node];
     }
 
-    if depth >= MAX_DEPTH {
+    if depth >= thresholds::TOPIARY_SPLIT_MAX_DEPTH {
         return vec![node];
     }
 
     let need_split = if node.members.len() <= 2 {
         false
     } else if node.members.len() > max_size {
-        internal_similarity(&node, all_entries) < 0.50
+        internal_similarity(&node, all_entries) < thresholds::TOPIARY_SPLIT_LARGE
     } else if node.members.len() >= 5 {
-        internal_similarity(&node, all_entries) < 0.40
+        internal_similarity(&node, all_entries) < thresholds::TOPIARY_SPLIT_MEDIUM
     } else {
-        internal_similarity(&node, all_entries) < 0.35
+        internal_similarity(&node, all_entries) < thresholds::TOPIARY_SPLIT_SMALL
     };
 
     if !need_split {
@@ -423,10 +422,7 @@ pub(super) fn kmeans_vectors(vectors: &[&[f32]], k: usize) -> Vec<usize> {
 // ── Hierarchy subdivision ─────────────────────────────────
 
 fn subdivide(node: &mut TopicNode, next_id: &mut u32, depth: usize) {
-    const MAX_DEPTH: usize = 3;
-    const MAX_CHILDREN: usize = 8;
-
-    if depth >= MAX_DEPTH || node.children.len() <= MAX_CHILDREN {
+    if depth >= thresholds::TOPIARY_HIERARCHY_MAX_DEPTH || node.children.len() <= thresholds::TOPIARY_HIERARCHY_MAX_CHILDREN {
         return;
     }
 

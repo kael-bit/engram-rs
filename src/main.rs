@@ -5,7 +5,7 @@ use engram::{ai, api, consolidate, db, proxy, topiary, AppState, EmbedCache, Emb
 
 use clap::Parser;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -165,79 +165,9 @@ async fn main() {
         info!(every_mins = consolidate_mins, auto_merge = auto_merge, "background consolidation enabled");
     }
 
-    // Background audit — runs every ENGRAM_AUDIT_HOURS (default 12, 0 = disabled)
-    let audit_hours: u64 = std::env::var("ENGRAM_AUDIT_HOURS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(12);
-    if audit_hours > 0 {
-        if let Some(ref ai) = state.ai {
-            let audit_db = state.db.clone();
-            let audit_ai = ai.clone();
-            let audit_last_activity = state.last_activity.clone();
-            tokio::spawn(async move {
-                let interval_secs = audit_hours.saturating_mul(3600);
-                let interval = std::time::Duration::from_secs(interval_secs);
-
-                // Check when audit last ran (survives restarts)
-                let last_run: i64 = audit_db.get_meta("last_audit_ms")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-                let now_ms = engram::db::now_ms();
-                let elapsed_ms = now_ms - last_run;
-                let remaining_ms = (interval_secs as i64 * 1000) - elapsed_ms;
-
-                if remaining_ms > 300_000 {
-                    // Haven't reached the interval yet — sleep until it's due
-                    tokio::time::sleep(std::time::Duration::from_millis(remaining_ms as u64)).await;
-                } else {
-                    // Overdue or first run — wait 5 min then go
-                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                }
-
-                let mut last_audit_ts: i64 = engram::db::now_ms();
-                loop {
-                    // Skip audit if no write activity since last run
-                    let last_act = audit_last_activity.load(std::sync::atomic::Ordering::Relaxed);
-                    if last_act <= last_audit_ts {
-                        debug!("audit skipped: no activity since last run");
-                        tokio::time::sleep(interval).await;
-                        continue;
-                    }
-
-                    match consolidate::sandbox_audit(&audit_ai, &audit_db, true).await {
-                        Ok(r) if r.applied > 0 => {
-                            info!(
-                                reviewed = r.total_reviewed,
-                                proposed = r.ops_proposed,
-                                applied = r.applied,
-                                skipped = r.skipped,
-                                score = format!("{:.0}%", r.score * 100.0),
-                                "auto-audit"
-                            );
-                        }
-                        Ok(r) if !r.safe_to_apply && r.ops_proposed > 0 => {
-                            warn!(
-                                proposed = r.ops_proposed,
-                                score = format!("{:.0}%", r.score * 100.0),
-                                "auto-audit: score below threshold, nothing applied"
-                            );
-                        }
-                        Ok(_) => { /* no changes or no ops, stay quiet */ }
-                        Err(e) => {
-                            warn!("auto-audit failed: {e}");
-                        }
-                    }
-                    if let Err(e) = audit_db.set_meta("last_audit_ms", &engram::db::now_ms().to_string()) {
-                        warn!("failed to update last_audit_ms: {e}");
-                    }
-                    last_audit_ts = engram::db::now_ms();
-                    tokio::time::sleep(interval).await;
-                }
-            });
-            info!(every_hours = audit_hours, model = %ai.model_for("gate"), "background audit enabled");
-        }
-    }
+    // Background topic distillation — piggybacks on consolidation epochs.
+    // No separate timer: distill_topics is called during consolidation when
+    // topics get bloated. POST /audit still available for manual trigger.
 
     // Flush proxy conversation window with debounce.
     // Instead of a fixed clock, wait for 30s of silence after the last turn.

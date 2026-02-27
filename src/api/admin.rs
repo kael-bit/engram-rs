@@ -38,22 +38,12 @@ pub(super) async fn do_consolidate(
     Ok(Json(result))
 }
 
-/// LLM-powered memory audit. Runs sandbox grading first — only applies ops
-/// that score above the safety threshold. Bad ops are automatically skipped.
+/// Topic-scoped distillation. Finds bloated topics and condenses overlapping memories.
 pub(super) async fn do_audit(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let ai = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
-    let result = consolidate::sandbox_audit(ai, &state.db, true).await?;
-    Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
-}
-
-/// Audit sandbox: dry-run audit that grades proposed operations without applying them.
-pub(super) async fn do_audit_sandbox(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, EngramError> {
-    let ai = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
-    let result = consolidate::sandbox_audit(ai, &state.db, false).await?;
+    let result = consolidate::distill_topics(ai, &state.db).await?;
     Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
 }
 

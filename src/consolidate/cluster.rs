@@ -1,19 +1,13 @@
 //! Semantic clustering of memories by combined similarity (cosine + tag Jaccard).
 //!
 //! Groups memories that are semantically related using single-linkage clustering.
-//! Clusters are capped at MAX_CLUSTER_SIZE to prevent chain drift (A≈B, B≈C but A≠C).
+//! Clusters are capped at thresholds::MAX_CLUSTER_SIZE to prevent chain drift (A≈B, B≈C but A≠C).
 //! Oversized clusters are split by picking the two most distant members as seeds.
 
 use crate::ai::cosine_similarity;
 use crate::db::Memory;
+use crate::thresholds;
 use std::collections::{HashMap, HashSet};
-
-/// Weight for cosine similarity in the combined clustering score.
-const COSINE_WEIGHT: f64 = 0.7;
-/// Weight for tag Jaccard similarity in the combined clustering score.
-const TAG_WEIGHT: f64 = 0.3;
-/// Maximum memories per cluster. Prevents chain drift in single-linkage.
-const MAX_CLUSTER_SIZE: usize = 10;
 
 /// A cluster of semantically related memories.
 #[derive(Debug, Clone)]
@@ -49,7 +43,7 @@ pub fn tag_jaccard(tags_a: &[String], tags_b: &[String]) -> f64 {
 pub fn combined_similarity(emb_a: &[f32], emb_b: &[f32], tags_a: &[String], tags_b: &[String]) -> f64 {
     let cosine = cosine_similarity(emb_a, emb_b);
     let jaccard = tag_jaccard(tags_a, tags_b);
-    cosine * COSINE_WEIGHT + jaccard * TAG_WEIGHT
+    cosine * thresholds::CLUSTER_COSINE_WEIGHT + jaccard * thresholds::CLUSTER_TAG_WEIGHT
 }
 
 /// Cluster memories by combined similarity (cosine + tag Jaccard) using
@@ -57,7 +51,7 @@ pub fn combined_similarity(emb_a: &[f32], emb_b: &[f32], tags_a: &[String], tags
 ///
 /// Two memories are linked if `cosine * 0.7 + tag_jaccard * 0.3 > threshold`.
 /// Memories without embeddings are grouped into a single "unclustered" group.
-/// Clusters exceeding MAX_CLUSTER_SIZE are split to prevent chain drift.
+/// Clusters exceeding thresholds::MAX_CLUSTER_SIZE are split to prevent chain drift.
 ///
 /// # Arguments
 /// * `memories` - All memories to cluster
@@ -136,7 +130,7 @@ pub fn cluster_memories(
     let mut clusters: Vec<MemoryCluster> = Vec::new();
 
     for (_root, indices) in &groups {
-        if indices.len() <= MAX_CLUSTER_SIZE {
+        if indices.len() <= thresholds::MAX_CLUSTER_SIZE {
             // Small enough — build directly
             let cluster_mems: Vec<Memory> = indices.iter().map(|&i| with_emb[i].clone()).collect();
             let index_set: HashSet<usize> = indices.iter().cloned().collect();
@@ -280,7 +274,7 @@ fn split_oversized(
     // Recursively split if still oversized
     let mut result = Vec::new();
     for group in [group_a, group_b] {
-        if group.len() > MAX_CLUSTER_SIZE {
+        if group.len() > thresholds::MAX_CLUSTER_SIZE {
             result.extend(split_oversized(&group, with_emb, emb_map, sim_pairs));
         } else {
             let cluster_mems: Vec<Memory> = group.iter().map(|&i| with_emb[i].clone()).collect();

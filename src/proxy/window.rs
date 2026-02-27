@@ -1,13 +1,8 @@
 use tracing::warn;
 
-use crate::{error::EngramError, util::truncate_chars, AppState};
+use crate::{error::EngramError, thresholds, util::truncate_chars, AppState};
 use super::extract::extract_from_context;
 use super::parse::extract_message_content;
-
-const WINDOW_MAX_TURNS: usize = 8;
-const WINDOW_MAX_CHARS: usize = 16000;
-// Debounce: don't flush until this many seconds of quiet after last turn.
-const FLUSH_QUIET_SECS: i64 = 30;
 
 /// Parse a single exchange from raw request/response bytes, add to the sliding window.
 /// When window is full, flush and extract memories from the accumulated context.
@@ -47,8 +42,8 @@ pub(crate) async fn buffer_exchange(state: AppState, req_raw: Vec<u8>, res_raw: 
     let turn_c = turn.clone();
     let should_flush = tokio::task::spawn_blocking(move || -> Result<Option<String>, EngramError> {
         db.save_proxy_turn(&sk, &turn_c)?;
-        if db.proxy_session_should_flush(&sk, WINDOW_MAX_TURNS, WINDOW_MAX_CHARS)
-            && db.proxy_session_quiet_for(&sk, FLUSH_QUIET_SECS)
+        if db.proxy_session_should_flush(&sk, thresholds::PROXY_WINDOW_MAX_TURNS, thresholds::PROXY_WINDOW_MAX_CHARS)
+            && db.proxy_session_quiet_for(&sk, thresholds::PROXY_FLUSH_QUIET_SECS)
         {
             let ctx = db.drain_proxy_session(&sk)?;
             if !ctx.is_empty() {

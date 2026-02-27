@@ -11,7 +11,6 @@ fn basic_crud() {
     let mem = db
         .insert(MemoryInput {
             content: "test memory".into(),
-            layer: Some(2),
             importance: Some(0.8),
             source: None,
             tags: Some(vec!["test".into()]),
@@ -19,7 +18,8 @@ fn basic_crud() {
         })
         .unwrap();
 
-    assert_eq!(mem.layer, Layer::Working);
+    // All inserts go to Buffer (promotion is via consolidation)
+    assert_eq!(mem.layer, Layer::Buffer);
     assert!((mem.importance - 0.8).abs() < f64::EPSILON);
     assert_eq!(mem.tags, vec!["test"]);
 
@@ -119,7 +119,6 @@ fn promote_moves_layer_up() {
     let mem = db
         .insert(MemoryInput {
             content: "promotable".into(),
-            layer: Some(1),
             importance: Some(0.9),
             ..Default::default()
         })
@@ -132,21 +131,18 @@ fn promote_moves_layer_up() {
 #[test]
 fn stats() {
     let db = test_db();
-    let entries = [
-        ("buffer entry alpha", 1),
-        ("buffer entry beta zeta", 1),
-        ("working entry gamma delta", 2),
-        ("core entry epsilon theta", 3),
-    ];
-    for (content, layer) in entries {
+    // All inserts go to Buffer regardless of layer param
+    for content in ["entry alpha", "entry beta", "entry gamma", "entry delta"] {
         db.insert(MemoryInput {
             content: content.into(),
-            layer: Some(layer),
-            importance: None,
             ..Default::default()
         })
         .unwrap();
     }
+    // Promote two to Working, one to Core
+    let all = db.list_all(100, 0).unwrap();
+    db.promote(&all[2].id, Layer::Working).unwrap();
+    db.promote(&all[3].id, Layer::Core).unwrap();
 
     let s = db.stats();
     assert_eq!(s.total, 4);
@@ -161,7 +157,6 @@ fn partial_update() {
     let mem = db
         .insert(MemoryInput {
             content: "original".into(),
-            layer: Some(1),
             importance: Some(0.5),
             ..Default::default()
         })
@@ -211,19 +206,20 @@ fn list_filtered_by_ns_layer_tag() {
         tags: Some(vec!["cold".into()]),
         ..Default::default()
     }).unwrap();
-    db.insert(MemoryInput {
-        content: "gamma in ns-a layer 2".into(),
+    let gamma = db.insert(MemoryInput {
+        content: "gamma in ns-a promoted".into(),
         namespace: Some("ns-a".into()),
-        layer: Some(2),
         tags: Some(vec!["hot".into()]),
         ..Default::default()
     }).unwrap();
+    // Promote gamma to Working for layer filter tests
+    db.promote(&gamma.id, Layer::Working).unwrap();
 
     // namespace filter
     let nsa = db.list_filtered(10, 0, Some("ns-a"), None, None, None).unwrap();
     assert_eq!(nsa.len(), 2);
 
-    // namespace + layer
+    // namespace + layer (Working)
     let nsa_l2 = db.list_filtered(10, 0, Some("ns-a"), Some(2), None, None).unwrap();
     assert_eq!(nsa_l2.len(), 1);
     assert!(nsa_l2[0].content.contains("gamma"));
@@ -297,7 +293,6 @@ fn dedup_merges_similar() {
     let original = db
         .insert(MemoryInput {
             content: "engram project uses Rust SQLite FTS5 for memory storage and retrieval system".into(),
-            layer: Some(1),
             importance: Some(0.5),
             source: None,
             tags: Some(vec!["habit".into()]),
@@ -309,7 +304,6 @@ fn dedup_merges_similar() {
     let deduped = db
         .insert(MemoryInput {
             content: "engram project uses Rust SQLite FTS5 for memory storage and search system".into(),
-            layer: Some(2),
             importance: Some(0.7),
             source: None,
             tags: Some(vec!["preference".into()]),
@@ -324,8 +318,8 @@ fn dedup_merges_similar() {
     // Should merge tags
     assert!(deduped.tags.contains(&"habit".into()));
     assert!(deduped.tags.contains(&"preference".into()));
-    // Should be promoted to higher layer
-    assert_eq!(deduped.layer, Layer::Working);
+    // Layer stays Buffer (promotion is via consolidation, not insert)
+    assert_eq!(deduped.layer, Layer::Buffer);
     // Total count should still be 1
     assert_eq!(db.stats().total, 1);
 }
@@ -336,7 +330,6 @@ fn cjk_dedup_catches_similar_chinese() {
     let original = db
         .insert(MemoryInput {
             content: "今天下午学习了如何使用向量数据库进行语义搜索和检索任务".into(),
-            layer: Some(1),
             importance: Some(0.5),
             source: None,
             tags: Some(vec!["学习".into()]),
@@ -348,7 +341,6 @@ fn cjk_dedup_catches_similar_chinese() {
     let result = db
         .insert(MemoryInput {
             content: "今天下午学习了如何使用向量数据库进行语义搜索和检索工作".into(),
-            layer: Some(2),
             importance: Some(0.7),
             ..Default::default()
         })
@@ -374,7 +366,6 @@ fn update_fields_all_at_once() {
     let mem = db
         .insert(MemoryInput {
             content: "before update".into(),
-            layer: Some(1),
             importance: Some(0.3),
             source: None,
             tags: Some(vec!["old".into()]),
@@ -772,9 +763,9 @@ fn importance_based_layer_routing() {
     }).unwrap();
     assert_eq!(lesson.layer, Layer::Buffer);
 
-    // Explicit layer override still works (for admin/migration)
+    // Layer field in input is ignored — all inserts go to Buffer
     let explicit = db.insert(MemoryInput { content: "admin override".into(), layer: Some(3), ..Default::default() }).unwrap();
-    assert_eq!(explicit.layer, Layer::Core);
+    assert_eq!(explicit.layer, Layer::Buffer);
 }
 
 #[test]
@@ -800,14 +791,12 @@ fn batch_insert_importance_routing() {
         MemoryInput { importance: Some(0.95), ..MemoryInput::new("explicit remember") },
         MemoryInput { importance: Some(0.75), ..MemoryInput::new("significant fact") },
         MemoryInput { importance: Some(0.3), ..MemoryInput::new("transient note") },
-        MemoryInput { layer: Some(2), importance: Some(0.3), ..MemoryInput::new("explicit layer override") },
+        MemoryInput { importance: Some(0.3), ..MemoryInput::new("explicit layer override") },
     ];
     let results = db.insert_batch(inputs).unwrap();
     assert_eq!(results.len(), 4);
-    assert_eq!(results[0].layer, Layer::Buffer);     // importance ≥ 0.9 → still Buffer (triage promotes)
-    assert_eq!(results[1].layer, Layer::Buffer);     // importance < 0.9 → Buffer
-    assert_eq!(results[2].layer, Layer::Buffer);     // low importance → Buffer
-    assert_eq!(results[3].layer, Layer::Working);    // explicit layer=2 still works
+    // All batch inserts go to Buffer — layer field is ignored
+    assert!(results.iter().all(|r| r.layer == Layer::Buffer));
 }
 
 #[test]
@@ -818,10 +807,11 @@ fn test_procedural_low_decay() {
             .kind("procedural")
     ).unwrap();
     assert_eq!(mem.kind, "procedural");
-    assert!((mem.decay_rate - 0.01).abs() < f64::EPSILON);
+    // All Buffer entries get Buffer decay rate (epoch-based decay handles kind differences)
+    assert!((mem.decay_rate - Layer::Buffer.default_decay()).abs() < f64::EPSILON);
 
     let got = db.get(&mem.id).unwrap().unwrap();
-    assert!((got.decay_rate - 0.01).abs() < f64::EPSILON);
+    assert!((got.decay_rate - Layer::Buffer.default_decay()).abs() < f64::EPSILON);
     assert_eq!(got.kind, "procedural");
 }
 
@@ -919,8 +909,10 @@ fn list_filtered_by_layer() {
     let db = test_db();
     db.insert(MemoryInput::new("buf1")).unwrap();
     db.insert(MemoryInput::new("buf2")).unwrap();
-    let w = db.insert(MemoryInput::new("working1").layer(2)).unwrap();
-    db.insert(MemoryInput::new("core1").layer(3)).unwrap();
+    let w = db.insert(MemoryInput::new("working1")).unwrap();
+    db.promote(&w.id, Layer::Working).unwrap();
+    let c = db.insert(MemoryInput::new("core1")).unwrap();
+    db.promote(&c.id, Layer::Core).unwrap();
 
     let all = db.list_filtered(100, 0, None, None, None, None).unwrap();
     assert_eq!(all.len(), 4);
@@ -968,10 +960,11 @@ fn list_filtered_by_namespace() {
 fn list_filtered_combined() {
     let db = test_db();
     db.insert(MemoryInput::new("a-buf").namespace("a")).unwrap();
-    db.insert(MemoryInput::new("a-working").namespace("a").layer(2).tags(vec!["lesson".into()])).unwrap();
+    let aw = db.insert(MemoryInput::new("a-working").namespace("a").tags(vec!["lesson".into()])).unwrap();
+    db.promote(&aw.id, Layer::Working).unwrap();
     db.insert(MemoryInput::new("b-buf").namespace("b").tags(vec!["lesson".into()])).unwrap();
 
-    // namespace=a AND layer=2
+    // namespace=a AND layer=2 (Working)
     let r = db.list_filtered(100, 0, Some("a"), Some(2), None, None).unwrap();
     assert_eq!(r.len(), 1);
     assert!(r[0].content.contains("a-working"));
@@ -1028,8 +1021,11 @@ fn list_since_filtered_with_min_importance() {
 #[test]
 fn demote_core_to_working() {
     let db = test_db();
-    let mem = db.insert(MemoryInput::new("core memory").layer(3)).unwrap();
-    assert_eq!(mem.layer, Layer::Core);
+    let mem = db.insert(MemoryInput::new("core memory")).unwrap();
+    // Promote to Core first (insert always goes to Buffer)
+    db.promote(&mem.id, Layer::Core).unwrap();
+    let core = db.get(&mem.id).unwrap().unwrap();
+    assert_eq!(core.layer, Layer::Core);
 
     let demoted = db.demote(&mem.id, Layer::Working).unwrap();
     assert!(demoted.is_some());

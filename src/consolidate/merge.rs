@@ -197,21 +197,7 @@ async fn try_reconcile_pair(
         truncate_chars(&newer.content, 400),
     );
 
-    let schema = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "decision": {
-                "type": "string",
-                "enum": ["update", "absorb", "keep_both"],
-                "description": "How to reconcile the two memories"
-            },
-            "merged_content": {
-                "type": "string",
-                "description": "Merged text preserving ALL details from both entries. Required when decision is update or absorb."
-            }
-        },
-        "required": ["decision"]
-    });
+    let schema = prompts::reconcile_schema();
 
     #[derive(Deserialize)]
     struct ReconcileDecision {

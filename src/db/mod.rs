@@ -33,10 +33,7 @@ pub type PooledConn = r2d2::PooledConnection<SqliteConnectionManager>;
 use crate::error::EngramError;
 
 
-const MAX_CONTENT_LEN: usize = 8192;
-const MAX_SOURCE_LEN: usize = 64;
-const MAX_TAGS: usize = 20;
-const MAX_TAG_LEN: usize = 32;
+use crate::thresholds;
 
 
 /// Buffer → Working → Core, each with different decay and recall bonus.
@@ -233,7 +230,6 @@ pub struct ScoredMemory {
     pub recency: f64,
 }
 
-const MAX_FACT_FIELD_LEN: usize = 512;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fact {
@@ -280,13 +276,13 @@ fn validate_fact_input(input: &FactInput) -> Result<(), EngramError> {
     if input.subject.trim().is_empty() || input.predicate.trim().is_empty() || input.object.trim().is_empty() {
         return Err(EngramError::Validation("fact subject/predicate/object must not be empty".into()));
     }
-    if input.subject.chars().count() > MAX_FACT_FIELD_LEN {
+    if input.subject.chars().count() > thresholds::MAX_FACT_FIELD_LEN {
         return Err(EngramError::Validation("fact subject too long".into()));
     }
-    if input.predicate.chars().count() > MAX_FACT_FIELD_LEN {
+    if input.predicate.chars().count() > thresholds::MAX_FACT_FIELD_LEN {
         return Err(EngramError::Validation("fact predicate too long".into()));
     }
-    if input.object.chars().count() > MAX_FACT_FIELD_LEN {
+    if input.object.chars().count() > thresholds::MAX_FACT_FIELD_LEN {
         return Err(EngramError::Validation("fact object too long".into()));
     }
     Ok(())
@@ -357,7 +353,7 @@ fn validate_input(input: &MemoryInput) -> Result<(), EngramError> {
     if content.is_empty() {
         return Err(EngramError::EmptyContent);
     }
-    if content.chars().count() > MAX_CONTENT_LEN {
+    if content.chars().count() > thresholds::MAX_CONTENT_LEN {
         return Err(EngramError::ContentTooLong);
     }
     if let Some(l) = input.layer {
@@ -366,16 +362,18 @@ fn validate_input(input: &MemoryInput) -> Result<(), EngramError> {
         }
     }
     if let Some(ref src) = input.source {
-        if src.len() > MAX_SOURCE_LEN {
+        if src.len() > thresholds::MAX_SOURCE_LEN {
             return Err(EngramError::Validation("source too long".into()));
         }
     }
     if let Some(ref tags) = input.tags {
-        if tags.len() > MAX_TAGS {
-            return Err(EngramError::Validation(format!("too many tags (max {MAX_TAGS})")));
+        if tags.len() > thresholds::MAX_TAGS {
+            let max = thresholds::MAX_TAGS;
+            return Err(EngramError::Validation(format!("too many tags (max {max})")));
         }
-        if let Some(t) = tags.iter().find(|t| t.chars().count() > MAX_TAG_LEN) {
-            return Err(EngramError::Validation(format!("tag '{}' too long (max {MAX_TAG_LEN})", t)));
+        if let Some(t) = tags.iter().find(|t| t.chars().count() > thresholds::MAX_TAG_LEN) {
+            let max = thresholds::MAX_TAG_LEN;
+            return Err(EngramError::Validation(format!("tag '{}' too long (max {max})", t)));
         }
     }
     Ok(())

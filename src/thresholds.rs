@@ -1,7 +1,12 @@
-/// Cosine similarity thresholds for deduplication across components.
-///
-/// Higher = stricter (only very similar items match).
-/// The hierarchy: proxy (loose) < insert (moderate) < distill/triage (tight) < merge (tightest)
+//! Centralised thresholds, weights, and tuning constants.
+//!
+//! Every magic number that controls engram's behavior lives here so it can
+//! be audited and tuned in one place.  The rest of the codebase imports from
+//! `crate::thresholds`.
+
+// ── Cosine similarity ──────────────────────────────────────────────────────
+// Higher = stricter (only very similar items match).
+// Hierarchy: proxy (loose) < insert (moderate) < triage (tight) < merge (tightest)
 
 /// Proxy extraction: aggressive dedup to avoid flooding buffer
 pub const PROXY_DEDUP_SIM: f64 = 0.60;
@@ -22,10 +27,6 @@ pub const RECALL_DEDUP_SIM: f64 = MERGE_SIM;
 pub const RECONCILE_MIN_SIM: f64 = 0.55;
 pub const RECONCILE_MAX_SIM: f64 = MERGE_SIM;
 
-/// Audit: similarity range for suggesting merges to the LLM auditor
-pub const AUDIT_MERGE_MIN_SIM: f64 = 0.65;
-pub const AUDIT_MERGE_MAX_SIM: f64 = MERGE_SIM;
-
 /// Core overlap detection during consolidation
 pub const CORE_OVERLAP_SIM: f64 = 0.70;
 
@@ -38,22 +39,174 @@ pub const INSERT_MERGE_SIM: f64 = 0.80;
 pub const DEDUP_COSINE_SIM: f64 = 0.85;
 
 /// Jaccard pre-filter: only compute cosine for candidates above this.
-/// Low enough to let through semantically similar but textually different
-/// content, while still filtering obvious non-matches.
 pub const DEDUP_JACCARD_PREFILTER: f64 = 0.5;
 
-/// Sandbox audit: minimum safety score to auto-apply operations
-pub const SANDBOX_SAFETY_THRESHOLD: f64 = 0.70;
+// ── Resume ─────────────────────────────────────────────────────────────────
 
-/// Sandbox: memories modified within this many hours are "recently modified"
-pub const SANDBOX_RECENT_MOD_HOURS: f64 = 24.0;
-
-/// Sandbox: memories younger than this are "new" (protected from deletion)
-pub const SANDBOX_NEW_AGE_HOURS: f64 = 48.0;
-
-/// Resume: relevance thresholds for compact mode filtering
+/// Compact mode relevance thresholds
 pub const RESUME_HIGH_RELEVANCE: f64 = 0.25;
 pub const RESUME_LOW_RELEVANCE: f64 = 0.10;
 pub const RESUME_CORE_THRESHOLD: f64 = 0.35;
 pub const RESUME_WORKING_THRESHOLD: f64 = 0.20;
 
+/// Default recent_epochs for resume Recent section
+pub const RESUME_DEFAULT_RECENT_EPOCHS: i64 = 24;
+
+// ── Recall scoring ─────────────────────────────────────────────────────────
+// Must sum to 1.0.
+
+pub const RECALL_WEIGHT_RELEVANCE: f64 = 0.5;
+pub const RECALL_WEIGHT_WEIGHT: f64 = 0.3;
+pub const RECALL_WEIGHT_RECENCY: f64 = 0.2;
+
+/// Default minimum cosine similarity to include a recall result.
+pub const RECALL_SIM_FLOOR: f64 = 0.3;
+
+/// Below this relevance, auto-expand the query via LLM.
+pub const AUTO_EXPAND_THRESHOLD: f64 = 0.25;
+
+// ── Memory weight / scoring ────────────────────────────────────────────────
+
+/// Repetition bonus: scale × count, capped at cap.
+pub const REP_BONUS_SCALE: f64 = 0.1;
+pub const REP_BONUS_CAP: f64 = 0.5;
+
+/// Access bonus: scale × ln(1 + count), capped at cap.
+pub const ACCESS_BONUS_SCALE: f64 = 0.1;
+pub const ACCESS_BONUS_CAP: f64 = 0.3;
+
+/// Kind boost multipliers (semantic is always 1.0).
+pub const KIND_BOOST_PROCEDURAL: f64 = 1.3;
+pub const KIND_BOOST_EPISODIC: f64 = 0.8;
+
+/// Layer boost multipliers (Working is always 1.0).
+pub const LAYER_BOOST_CORE: f64 = 1.2;
+pub const LAYER_BOOST_BUFFER: f64 = 0.8;
+
+// ── Decay ──────────────────────────────────────────────────────────────────
+
+/// Base decay amount per consolidation epoch (episodic rate).
+/// Semantic decays at 60% of this, procedural at 20%.
+pub const DECAY_BASE_AMOUNT: f64 = 0.005;
+pub const DECAY_SEMANTIC_RATIO: f64 = 0.6;
+pub const DECAY_PROCEDURAL_RATIO: f64 = 0.2;
+
+/// Importance floor — memories never decay below this.
+pub const DECAY_FLOOR: f64 = 0.0;
+
+// ── Consolidation ──────────────────────────────────────────────────────────
+
+/// Buffer capacity cap. Excess entries are evicted (lowest weight first).
+pub const BUFFER_CAP_DEFAULT: usize = 200;
+
+/// Score thresholds for Buffer→Working promotion.
+pub const BUFFER_PROMOTE_SCORE: f64 = 0.4;
+
+/// Score + importance thresholds for Working→Core gate candidacy.
+pub const WORKING_GATE_SCORE: f64 = 0.8;
+
+/// Gate cooldown: epochs before retrying a rejected memory.
+pub const GATE_RETRY_EPOCHS: i64 = 48;
+/// Gate cooldown: epochs before retrying a twice-rejected memory.
+pub const GATE_RETRY_2_EPOCHS: i64 = 144;
+/// Gate pending cooldown: skip for this many epochs after LLM failure.
+pub const GATE_PENDING_COOLDOWN_EPOCHS: i64 = 4;
+
+/// Lesson/procedural auto-promote cooldown in epochs.
+pub const LESSON_PROMOTE_COOLDOWN_EPOCHS: i64 = 4;
+
+/// Stale gate-rejection cleanup: remove tag after this many epochs.
+pub const GATE_STALE_EPOCH_DIFF: i64 = 48;
+
+// ── Clustering (consolidate/cluster.rs) ────────────────────────────────────
+
+/// Weight for cosine similarity in the combined clustering score.
+pub const CLUSTER_COSINE_WEIGHT: f64 = 0.7;
+/// Weight for tag Jaccard similarity in the combined clustering score.
+pub const CLUSTER_TAG_WEIGHT: f64 = 0.3;
+/// Maximum memories per cluster. Prevents chain drift in single-linkage.
+pub const MAX_CLUSTER_SIZE: usize = 10;
+
+// ── Distillation (consolidate/audit.rs) ────────────────────────────────────
+
+/// Minimum leaf members before distillation kicks in.
+pub const DISTILL_THRESHOLD: usize = 10;
+/// Maximum topics to distill per consolidation cycle.
+pub const DISTILL_MAX_PER_CYCLE: usize = 2;
+
+// ── Topiary ────────────────────────────────────────────────────────────────
+
+/// Cosine threshold for assigning an entry to a topic cluster.
+pub const TOPIARY_ASSIGN_THRESHOLD: f32 = 0.30;
+/// Cosine threshold for merging two topic clusters.
+pub const TOPIARY_MERGE_THRESHOLD: f32 = 0.55;
+/// Minimum internal similarity for new topic nodes (default).
+pub const TOPIARY_MIN_INTERNAL_SIM: f32 = 0.35;
+
+/// Maximum leaf topics in the tree (pruning budget).
+pub const TOPIARY_LEAF_BUDGET: usize = 256;
+
+/// Absorb small children: cosine threshold and size limit.
+pub const TOPIARY_ABSORB_THRESHOLD: f32 = 0.40;
+pub const TOPIARY_ABSORB_SMALL_SIZE: usize = 2;
+
+/// Tiered split thresholds: large (>max_size), medium (5-8), small (3-4).
+pub const TOPIARY_SPLIT_LARGE: f32 = 0.50;
+pub const TOPIARY_SPLIT_MEDIUM: f32 = 0.40;
+pub const TOPIARY_SPLIT_SMALL: f32 = 0.35;
+
+/// Split recursion depth limit in split_pass.
+pub const TOPIARY_SPLIT_MAX_DEPTH: usize = 64;
+/// Hierarchy subdivision: max depth and max children per node.
+pub const TOPIARY_HIERARCHY_MAX_DEPTH: usize = 3;
+pub const TOPIARY_HIERARCHY_MAX_CHILDREN: usize = 8;
+
+/// Topiary worker debounce after trigger (milliseconds).
+pub const TOPIARY_DEBOUNCE_MS: u64 = 5_000;
+
+/// Naming batch size (topics per LLM call).
+pub const TOPIARY_NAMING_BATCH_SIZE: usize = 30;
+
+// ── Proxy ──────────────────────────────────────────────────────────────────
+
+/// Minimum importance for proxy-extracted memories to be stored.
+pub const PROXY_MIN_IMPORTANCE: f64 = 0.5;
+/// Jaccard similarity threshold for proxy dedup.
+pub const PROXY_DEDUP_THRESHOLD: f64 = 0.5;
+
+/// Sliding window limits for proxy conversation buffering.
+pub const PROXY_WINDOW_MAX_TURNS: usize = 8;
+pub const PROXY_WINDOW_MAX_CHARS: usize = 16000;
+/// Debounce: don't flush until this many seconds of quiet.
+pub const PROXY_FLUSH_QUIET_SECS: i64 = 30;
+
+// ── Embed queue (lib.rs) ───────────────────────────────────────────────────
+
+/// Maximum embeddings per batch.
+pub const EMBED_BATCH_SIZE: usize = 50;
+/// Window between batches (ms).
+pub const EMBED_WINDOW_MS: u64 = 500;
+
+// ── DB limits (db/mod.rs) ──────────────────────────────────────────────────
+
+/// Max content length before truncation.
+pub const MAX_CONTENT_LEN: usize = 8192;
+/// Max source field length.
+pub const MAX_SOURCE_LEN: usize = 64;
+/// Max number of tags per memory.
+pub const MAX_TAGS: usize = 20;
+/// Max length per tag.
+pub const MAX_TAG_LEN: usize = 32;
+/// Max fact field length.
+pub const MAX_FACT_FIELD_LEN: usize = 512;
+
+// ── HNSW vector index (db/vec.rs) ──────────────────────────────────────────
+
+pub const HNSW_MAX_NB_CONN: usize = 16;
+pub const HNSW_EF_CONSTRUCTION: usize = 200;
+pub const HNSW_MAX_LAYER: usize = 16;
+pub const HNSW_INITIAL_CAPACITY: usize = 10_000;
+/// Overfetch factor for namespace-filtered search.
+pub const NS_OVERFETCH: usize = 5;
+/// Batch size for vector store rebuild.
+pub const HNSW_BATCH_SIZE: usize = 500;

@@ -31,7 +31,6 @@ fn test_db_with_data() -> MemoryDB {
     let db = MemoryDB::open(":memory:").expect("in-memory db");
     db.insert(MemoryInput {
         content: "very important fact about rust".into(),
-        layer: Some(3),
         importance: Some(0.95),
         ..Default::default()
     }).unwrap();
@@ -43,7 +42,6 @@ fn test_db_with_data() -> MemoryDB {
     }).unwrap();
     db.insert(MemoryInput {
         content: "medium importance work log about rust compiler".into(),
-        layer: Some(2),
         importance: Some(0.5),
         ..Default::default()
     }).unwrap();
@@ -151,6 +149,7 @@ fn time_filter_since() {
         embedding: None,
         kind: "semantic".into(),
         modified_at: now - 86_400_000,
+        modified_epoch: 0,
     };
     let recent = Memory {
         id: "new-one".into(),
@@ -168,6 +167,7 @@ fn time_filter_since() {
         embedding: None,
         kind: "semantic".into(),
         modified_at: now - 1000,
+        modified_epoch: 0,
     };
     db.import(&[old, recent]).unwrap();
 
@@ -195,13 +195,11 @@ fn filter_by_source() {
     let db = MemoryDB::open(":memory:").expect("in-memory db");
     db.insert(MemoryInput {
         content: "from the API".into(),
-        layer: Some(3), importance: Some(0.9),
         source: Some("api".into()), tags: None,
         ..Default::default()
     }).unwrap();
     db.insert(MemoryInput {
         content: "from a session".into(),
-        layer: Some(2), importance: Some(0.7),
         source: Some("session".into()), tags: None,
         ..Default::default()
     }).unwrap();
@@ -226,13 +224,11 @@ fn filter_by_tags() {
     let db = MemoryDB::open(":memory:").expect("in-memory db");
     db.insert(MemoryInput {
         content: "rust project details".into(),
-        layer: Some(3), importance: Some(0.9),
         source: None, tags: Some(vec!["rust".into(), "engram".into()]),
     ..Default::default()
     }).unwrap();
     db.insert(MemoryInput {
         content: "python script notes".into(),
-        layer: Some(2), importance: Some(0.7),
         source: None, tags: Some(vec!["python".into()]),
     ..Default::default()
     }).unwrap();
@@ -427,14 +423,14 @@ fn layer_filter() {
     let db = MemoryDB::open(":memory:").expect("in-memory db");
     db.insert(MemoryInput {
         content: "buffer thought about testing".into(),
-        layer: Some(1),
         ..Default::default()
     }).unwrap();
-    db.insert(MemoryInput {
+    let core = db.insert(MemoryInput {
         content: "core fact about testing".into(),
-        layer: Some(3),
         ..Default::default()
     }).unwrap();
+    // Promote to Core for layer filter test
+    db.promote(&core.id, Layer::Core).unwrap();
 
     let req = RecallRequest {
         query: "testing".into(),
@@ -811,6 +807,7 @@ fn make_memory(layer: Layer, importance: f64, decay_rate: f64, last_accessed: i6
         embedding: None,
         kind: "semantic".into(),
         modified_at: now,
+        modified_epoch: 0,
     }
 }
 

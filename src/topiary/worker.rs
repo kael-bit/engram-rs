@@ -9,6 +9,7 @@ use tracing::{debug, info, warn};
 use super::{Entry, TopicNode, TopicTree};
 use crate::ai::AiConfig;
 use crate::db::{Layer, MemoryDB};
+use crate::thresholds;
 
 /// Spawn the topiary background worker.
 ///
@@ -20,7 +21,7 @@ pub fn spawn_worker(
     mut trigger_rx: mpsc::UnboundedReceiver<()>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        const DEBOUNCE_MS: u64 = 5_000;
+        let debounce_ms = thresholds::TOPIARY_DEBOUNCE_MS;
 
         // On startup, check if a cached tree exists. If not, trigger immediate rebuild.
         {
@@ -49,7 +50,7 @@ pub fn spawn_worker(
 
             // Phase 2: debounce — drain any signals in next 5 seconds
             let deadline = tokio::time::Instant::now()
-                + std::time::Duration::from_millis(DEBOUNCE_MS);
+                + std::time::Duration::from_millis(debounce_ms);
             loop {
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 if remaining.is_zero() {
@@ -100,7 +101,7 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
     let entry_count = entries.len();
 
     // Step 2: Build topic tree
-    let mut tree = TopicTree::new(0.30, 0.55);
+    let mut tree = TopicTree::new(thresholds::TOPIARY_ASSIGN_THRESHOLD, thresholds::TOPIARY_MERGE_THRESHOLD);
     for (i, entry) in entries.iter().enumerate() {
         tree.insert(i, &entry.embedding);
     }

@@ -7,6 +7,7 @@ use super::{Entry, TopicNode};
 use crate::ai::{self, AiConfig};
 use crate::db::MemoryDB;
 use crate::prompts;
+use crate::thresholds;
 
 /// Stats from a naming run.
 pub struct NamingStats {
@@ -22,7 +23,7 @@ pub async fn name_tree(
     cfg: &AiConfig,
     db: &MemoryDB,
 ) -> NamingStats {
-    const BATCH_SIZE: usize = 30;
+    let batch_size = thresholds::TOPIARY_NAMING_BATCH_SIZE;
 
     let mut dirty_leaves: Vec<(String, usize, Vec<String>)> = Vec::new();
     for root in roots.iter() {
@@ -39,7 +40,7 @@ pub async fn name_tree(
         };
     }
 
-    let num_batches = (dirty_count + BATCH_SIZE - 1) / BATCH_SIZE;
+    let num_batches = (dirty_count + batch_size - 1) / batch_size;
     info!(
         dirty = dirty_count,
         batches = num_batches,
@@ -54,7 +55,7 @@ pub async fn name_tree(
     let mut all_names: HashMap<String, String> = HashMap::new();
     let mut llm_calls = 0;
 
-    for (batch_idx, chunk) in dirty_leaves.chunks(BATCH_SIZE).enumerate() {
+    for (batch_idx, chunk) in dirty_leaves.chunks(batch_size).enumerate() {
         let mut prompt = String::new();
 
         let context_names: Vec<&str> = existing_names

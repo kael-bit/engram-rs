@@ -8,11 +8,8 @@ use tracing::{debug, warn};
 use crate::error::EngramError;
 use crate::extract::LenientJson;
 use crate::scoring::MemoryResult;
-use crate::{ai, db, recall, AppState};
+use crate::{ai, db, recall, thresholds, AppState};
 use super::{blocking, get_namespace};
-
-/// Below this relevance, auto-expand the query via LLM.
-const AUTO_EXPAND_THRESHOLD: f64 = 0.25;
 
 /// Simple keyword search — lighter than /recall, no scoring or budget logic.
 #[derive(Deserialize)]
@@ -249,7 +246,7 @@ pub(super) async fn do_recall(
     let auto_expanded;
     if explicit_expand.is_none()
         && state.ai.as_ref().is_some_and(super::super::ai::AiConfig::has_llm)
-        && result.memories.first().is_none_or(|m| m.relevance < AUTO_EXPAND_THRESHOLD)
+        && result.memories.first().is_none_or(|m| m.relevance < thresholds::AUTO_EXPAND_THRESHOLD)
     {
         if let Some(ref cfg) = state.ai {
             let (eq, meta) = ai::expand_query(cfg, &query_text).await;

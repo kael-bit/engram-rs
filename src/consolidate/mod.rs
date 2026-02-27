@@ -3,6 +3,7 @@ use crate::ai::{self, AiConfig};
 use crate::db::{Layer, Memory, MemoryDB};
 use crate::error::EngramError;
 use crate::prompts;
+use crate::thresholds;
 use crate::util::truncate_chars;
 use crate::SharedDB;
 use serde::{Deserialize, Serialize};
@@ -12,14 +13,12 @@ mod audit;
 mod cluster;
 mod distill;
 mod merge;
-mod sandbox;
 mod triage;
 
-pub use audit::{audit_memories, AuditOp, AuditResult, RawAuditOp, AuditToolResponse, audit_tool_schema, resolve_audit_ops};
+pub use audit::{distill_topics, AuditResult, DistillResult};
 pub use cluster::{cluster_memories, batch_clusters, MemoryCluster};
 #[doc(hidden)]
 pub use cluster::{tag_jaccard, combined_similarity, generate_label};
-pub use sandbox::{sandbox_audit, SandboxResult, Grade, OpGrade, RuleChecker};
 pub use merge::{find_clusters, reconcile_pair_key};
 pub use triage::dedup_buffer;
 
@@ -321,7 +320,7 @@ pub fn cleanup_stale_tags(db: &MemoryDB) {
     let epoch: i64 = db.get_meta("consolidation_epoch")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0);
-    let stale_epoch_diff: i64 = 48; // same as first-rejection cooldown
+    let stale_epoch_diff: i64 = thresholds::GATE_STALE_EPOCH_DIFF; // same as first-rejection cooldown
     let mut cleaned = 0_usize;
 
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_default() {
@@ -374,7 +373,7 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
     let mut would_decay = Vec::new();
     let mut would_demote = Vec::new();
 
-    let lesson_cooldown_epochs: i64 = 4;
+    let lesson_cooldown_epochs: i64 = thresholds::LESSON_PROMOTE_COOLDOWN_EPOCHS;
     let epoch: i64 = db.get_meta("consolidation_epoch")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0);
@@ -400,7 +399,7 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
         }
         if mem.tags.iter().any(|t| t == "gate-rejected-final") { continue; }
         let weight = crate::scoring::memory_weight(&mem);
-        let by_score = weight >= 0.8 && mem.importance >= promote_min_imp;
+        let by_score = weight >= thresholds::WORKING_GATE_SCORE && mem.importance >= promote_min_imp;
         let by_age = (now - mem.created_at) > working_age && weight > 0.0 && mem.importance >= promote_min_imp;
         if by_score || by_age {
             would_promote.push(DryRunEntry {
@@ -421,7 +420,7 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
             .find_map(|t| t.strip_prefix("_birth_epoch:").and_then(|v| v.parse::<i64>().ok()))
             .unwrap_or(epoch); // no tag = just born
         let epochs_alive = epoch - birth_epoch;
-        let by_score = weight >= 0.4;
+        let by_score = weight >= thresholds::BUFFER_PROMOTE_SCORE;
         let by_kind = (is_lesson || is_procedural) && epochs_alive >= lesson_cooldown_epochs;
         if by_score || by_kind {
             would_promote.push(DryRunEntry {
@@ -434,7 +433,7 @@ pub fn consolidate_dry_run(db: &MemoryDB, req: Option<&ConsolidateRequest>) -> C
 
     // --- Buffer capacity cap evictions ---
     let buffer_cap: usize = std::env::var("ENGRAM_BUFFER_CAP")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(thresholds::BUFFER_CAP_DEFAULT);
     let buffer_mems: Vec<Memory> = db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_default();
     if buffer_mems.len() > buffer_cap {
         let mut evictable: Vec<&Memory> = buffer_mems.iter()
@@ -636,8 +635,8 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     //   1st rejection (gate-rejected): retry after 48 epochs
     //   2nd rejection (gate-rejected-2): retry after 144 epochs
     //   3rd rejection (gate-rejected-final): never retry, accept verdict
-    let gate_retry_epochs: i64 = 48;
-    let gate_retry_2_epochs: i64 = 144;
+    let gate_retry_epochs: i64 = thresholds::GATE_RETRY_EPOCHS;
+    let gate_retry_2_epochs: i64 = thresholds::GATE_RETRY_2_EPOCHS;
     for mem in db.list_by_layer_meta(Layer::Working, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list_by_layer_meta(Working) failed"); vec![] }) {
         if is_session(&mem) || mem.tags.iter().any(|t| t == "ephemeral" || t == "auto-distilled" || t == "distilled") {
             continue;
@@ -650,7 +649,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
         if let Some(pending_epoch) = mem.tags.iter()
             .find_map(|t| t.strip_prefix("_gate_pending_epoch:").and_then(|v| v.parse::<i64>().ok()))
         {
-            if epoch - pending_epoch < 4 {
+            if epoch - pending_epoch < thresholds::GATE_PENDING_COOLDOWN_EPOCHS {
                 continue;
             }
             // Cooldown expired — remove the tag and proceed
@@ -714,7 +713,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     // Buffer -> Working: weighted score OR lesson/procedural with epoch cooldown.
     // Lessons and procedurals are inherently worth keeping — if they survived
     // initial dedup and 4+ consolidation epochs in buffer, promote them.
-    let lesson_cooldown_epochs: i64 = 4;
+    let lesson_cooldown_epochs: i64 = thresholds::LESSON_PROMOTE_COOLDOWN_EPOCHS;
     for mem in db.list_by_layer_meta(Layer::Buffer, 10000, 0).unwrap_or_else(|e| { warn!(error = %e, "list_by_layer_meta(Buffer) failed"); vec![] }) {
         // Distilled sessions already have their content in the project-status
         // summary — promoting them individually would be redundant.
@@ -741,7 +740,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
             }
         };
 
-        let by_score = weight >= 0.4;
+        let by_score = weight >= thresholds::BUFFER_PROMOTE_SCORE;
         let by_kind = (is_lesson || is_procedural) && epochs_alive >= lesson_cooldown_epochs;
 
         if (by_score || by_kind) && db.promote(&mem.id, Layer::Working).is_ok() {
@@ -754,7 +753,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     // If the consolidation LLM is down or rate-limited, buffer grows unbounded.
     // Hard cap with FIFO eviction (oldest first, exempt lessons/procedural).
     let buffer_cap: usize = std::env::var("ENGRAM_BUFFER_CAP")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(thresholds::BUFFER_CAP_DEFAULT);
     let buffer_mems: Vec<Memory> = db.list_by_layer_meta(Layer::Buffer, 10000, 0)
         .unwrap_or_else(|e| { warn!(error = %e, "list buffer for cap check failed"); vec![] });
     if buffer_mems.len() > buffer_cap {
@@ -805,7 +804,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     // Importance decay — epoch-based (per consolidation cycle, not per wall-clock time).
     // Only runs when there's write activity, so idle periods cause zero decay.
     // Memories accessed during this cycle are spared.
-    let importance_decayed = db.decay_importance(now, 0.005, 0.0).unwrap_or(0);
+    let importance_decayed = db.decay_importance(now, thresholds::DECAY_BASE_AMOUNT, thresholds::DECAY_FLOOR).unwrap_or(0);
 
     if promoted > 0 || decayed > 0 || demoted > 0 || importance_decayed > 0 {
         info!(promoted, decayed, demoted, importance_decayed, "consolidation complete");

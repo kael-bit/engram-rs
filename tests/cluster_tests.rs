@@ -21,6 +21,7 @@ fn make_memory(id: &str, content: &str, tags: &[&str], importance: f64) -> Memor
         embedding: None,
         kind: "semantic".to_string(),
         modified_at: 1500,
+        modified_epoch: 0,
     }
 }
 

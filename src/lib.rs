@@ -134,10 +134,7 @@ impl EmbedQueue {
     ) {
         use tracing::{info, warn};
 
-        const MAX_BATCH: usize = 50;
-        const WINDOW_MS: u64 = 500;
-
-        let mut batch: Vec<(String, String)> = Vec::with_capacity(MAX_BATCH);
+        let mut batch: Vec<(String, String)> = Vec::with_capacity(thresholds::EMBED_BATCH_SIZE);
 
         loop {
             // Phase 1: block until first item arrives (or channel closes)
@@ -148,9 +145,9 @@ impl EmbedQueue {
 
             // Phase 2: time window starts now — collect until deadline or cap
             let deadline = tokio::time::Instant::now()
-                + std::time::Duration::from_millis(WINDOW_MS);
+                + std::time::Duration::from_millis(thresholds::EMBED_WINDOW_MS);
 
-            while batch.len() < MAX_BATCH {
+            while batch.len() < thresholds::EMBED_BATCH_SIZE {
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 if remaining.is_zero() {
                     break;

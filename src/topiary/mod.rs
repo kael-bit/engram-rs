@@ -127,7 +127,7 @@ impl TopicNode {
     }
 }
 
-const LEAF_BUDGET: usize = 256;
+use crate::thresholds;
 
 // ── TopicTree ──────────────────────────────────────────────────────────────
 
@@ -149,7 +149,7 @@ impl TopicTree {
             assign_threshold,
             merge_threshold,
             max_leaf_size: 8,
-            min_internal_sim: 0.35,
+            min_internal_sim: thresholds::TOPIARY_MIN_INTERNAL_SIM,
             next_id: 0,
         }
     }
@@ -246,7 +246,7 @@ impl TopicTree {
         {
             let flat_leaves = collect_all_leaves(std::mem::take(&mut self.roots));
             let mut leaves = flat_leaves;
-            cluster::enforce_budget(&mut leaves, all_entries, LEAF_BUDGET);
+            cluster::enforce_budget(&mut leaves, all_entries, thresholds::TOPIARY_LEAF_BUDGET);
             self.roots = leaves;
         }
 
@@ -457,8 +457,8 @@ fn absorb_small_in_node(
     all_entries: &[Entry],
     max_leaf_size: usize,
 ) -> usize {
-    const ABSORB_THRESHOLD: f32 = 0.40;
-    const SMALL_SIZE: usize = 2;
+    let absorb_threshold: f32 = thresholds::TOPIARY_ABSORB_THRESHOLD;
+    let small_size: usize = thresholds::TOPIARY_ABSORB_SMALL_SIZE;
 
     let mut absorbed = 0;
     for child in &mut node.children {
@@ -475,7 +475,7 @@ fn absorb_small_in_node(
         let mut best: Option<(usize, usize, f32)> = None;
 
         for i in 0..node.children.len() {
-            if !node.children[i].is_leaf() || node.children[i].members.len() > SMALL_SIZE {
+            if !node.children[i].is_leaf() || node.children[i].members.len() > small_size {
                 continue;
             }
             for j in 0..node.children.len() {
@@ -488,7 +488,7 @@ fn absorb_small_in_node(
                 }
                 let sim =
                     cosine_similarity(&node.children[i].centroid, &node.children[j].centroid);
-                if sim >= ABSORB_THRESHOLD {
+                if sim >= absorb_threshold {
                     if best.is_none() || sim > best.unwrap().2 {
                         best = Some((i, j, sim));
                     }

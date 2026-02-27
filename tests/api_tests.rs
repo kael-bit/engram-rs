@@ -403,39 +403,46 @@ async fn quick_search_finds_match() {
 async fn resume_returns_structured_sections() {
     let app = router(test_state(None));
 
-    // Seed: a high-importance core memory (identity)
+    // Seed: a high-importance memory, then promote to Core via PATCH
     let body = serde_json::json!({
         "content": "I am the test agent, created for integration testing",
-        "layer": 3, "importance": 0.9
+        "importance": 0.9
     });
-    app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    let resp = app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    let j = body_json(resp).await;
+    let core_id = j["id"].as_str().unwrap().to_string();
+    let patch = serde_json::json!({"layer": 3});
+    app.clone().oneshot(json_req("PATCH", &format!("/memories/{}", core_id), patch)).await.unwrap();
 
     // Seed: a working memory
     let body = serde_json::json!({
         "content": "next step: write more tests",
-        "layer": 2, "importance": 0.7,
+        "importance": 0.7,
         "tags": ["next-action"]
     });
-    app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    let resp = app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    let j = body_json(resp).await;
+    let working_id = j["id"].as_str().unwrap().to_string();
+    let patch = serde_json::json!({"layer": 2});
+    app.clone().oneshot(json_req("PATCH", &format!("/memories/{}", working_id), patch)).await.unwrap();
 
-    // Seed: a buffer memory
+    // Seed: a buffer memory (default, no PATCH needed)
     let body = serde_json::json!({
         "content": "did some refactoring today",
-        "layer": 1, "importance": 0.6
+        "importance": 0.6
     });
     app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
 
     let resp = app.oneshot(
-        Request::builder().uri("/resume?hours=1&format=json").body(Body::empty()).unwrap()
+        Request::builder().uri("/resume?format=json").body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let j = body_json(resp).await;
 
-    // Structure checks — new format has core, recent, triggers, hours
+    // Structure checks — new format has core, recent, triggers
     assert!(j["core"].is_array());
     assert!(j["recent"].is_array());
     assert!(j["triggers"].is_array());
-    assert!(j["hours"].as_f64().unwrap() > 0.0);
 
     // Core should include the high-importance core memory
     let core = j["core"].as_array().unwrap();
@@ -617,17 +624,20 @@ async fn triggers_empty_when_no_match() {
 async fn resume_compact_includes_kind() {
     let app = router(test_state(None));
 
-    // Procedural memory
+    // Procedural memory — insert then promote to Core
     let body = serde_json::json!({
         "content": "Deploy: test, build, stop, copy, start",
-        "layer": 3,
         "importance": 0.9,
         "kind": "procedural"
     });
-    app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    let resp = app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    let j = body_json(resp).await;
+    let mem_id = j["id"].as_str().unwrap().to_string();
+    let patch = serde_json::json!({"layer": 3});
+    app.clone().oneshot(json_req("PATCH", &format!("/memories/{}", mem_id), patch)).await.unwrap();
 
     let resp = app.oneshot(
-        Request::builder().uri("/resume?hours=1&compact=true&format=json").body(Body::empty()).unwrap()
+        Request::builder().uri("/resume?compact=true&format=json").body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let j = body_json(resp).await;
@@ -693,8 +703,16 @@ async fn list_memories_total_respects_kind_filter() {
 async fn list_memories_total_respects_layer_filter() {
     let app = router(test_state(None));
 
-    let body = serde_json::json!({"content": "core mem", "layer": 3, "skip_dedup": true});
-    app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    // All API inserts go to Buffer now. Insert 3 memories, then promote one to Core via PATCH.
+    let body = serde_json::json!({"content": "core mem", "skip_dedup": true});
+    let resp = app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
+    let j = body_json(resp).await;
+    let core_id = j["id"].as_str().unwrap().to_string();
+
+    // Promote to Core via PATCH
+    let patch = serde_json::json!({"layer": 3});
+    app.clone().oneshot(json_req("PATCH", &format!("/memories/{}", core_id), patch)).await.unwrap();
+
     for i in 0..2 {
         let body = serde_json::json!({"content": format!("buf {i}"), "skip_dedup": true});
         app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();

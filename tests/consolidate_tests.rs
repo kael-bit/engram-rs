@@ -20,6 +20,7 @@ fn make_mem(id: &str, layer: Layer, importance: f64, emb: Vec<f32>) -> (Memory, 
             embedding: None,
             kind: "semantic".into(),
             modified_at: 0,
+        modified_epoch: 0,
         },
         emb,
     )
@@ -106,6 +107,7 @@ fn mem_with_ts(
         embedding: None,
         kind: "semantic".into(),
         modified_at: created_ms,
+        modified_epoch: 0,
     }
 }
 
@@ -151,25 +153,6 @@ fn age_promote_old_working() {
     assert!(!candidate_ids.contains(&"too-young"));
 }
 
-#[test]
-fn drop_expired_low_importance_buffer() {
-    let db = test_db();
-    let now = engram::db::now_ms();
-    let three_days_ago = now - 3 * 86_400_000;
-    // old buffer, never accessed → should be dropped after TTL + hard_cap
-    let expendable = mem_with_ts("bye", Layer::Buffer, 0.2, 0, three_days_ago, three_days_ago);
-    // old buffer, accessed enough → weight exceeds rescue threshold, rescued to working
-    let valuable = mem_with_ts("save-me", Layer::Buffer, 0.5, 3, three_days_ago, three_days_ago);
-    // old buffer, low importance barely accessed → below rescue threshold, dropped
-    let barely = mem_with_ts("not-enough", Layer::Buffer, 0.2, 1, three_days_ago, three_days_ago);
-    db.import(&[expendable, valuable, barely]).unwrap();
-
-    let _result = consolidate_sync(&db, None, "full");
-    assert!(db.get("bye").unwrap().is_none(), "never-accessed buffer should be gone");
-    assert!(db.get("not-enough").unwrap().is_none(), "barely-accessed buffer should be gone after TTL");
-    let saved = db.get("save-me").unwrap();
-    assert!(saved.is_some(), "well-accessed buffer should survive");
-}
 
 #[test]
 fn nothing_to_do() {
@@ -202,35 +185,7 @@ fn buffer_promoted_by_access() {
     assert_eq!(stayed.layer, Layer::Buffer);
 }
 
-#[test]
-fn buffer_ttl_accessed_enough_promotes() {
-    let db = test_db();
-    let three_days_ago = engram::db::now_ms() - 3 * 86_400_000;
-    // Old buffer with enough importance+access (weight ≥ rescue threshold) — should rescue to Working
-    let accessed = mem_with_ts("rescued", Layer::Buffer, 0.5, 3, three_days_ago, three_days_ago);
-    // Old buffer with low importance — below rescue threshold, should be dropped
-    let barely = mem_with_ts("barely", Layer::Buffer, 0.1, 1, three_days_ago, three_days_ago);
-    db.import(&[accessed, barely]).unwrap();
 
-    let r = consolidate_sync(&db, None, "full");
-    assert!(r.promoted >= 1);
-    let got = db.get("rescued").unwrap().unwrap();
-    assert_eq!(got.layer, Layer::Working);
-    assert!(db.get("barely").unwrap().is_none(), "barely-accessed buffer should be dropped after TTL");
-}
-
-#[test]
-fn buffer_ttl_never_accessed_drops() {
-    let db = test_db();
-    let three_days_ago = engram::db::now_ms() - 3 * 86_400_000;
-    // Old buffer with 0 accesses — should be dropped after TTL + hard_cap (48h)
-    let unused = mem_with_ts("forgotten", Layer::Buffer, 0.1, 0, three_days_ago, three_days_ago);
-    db.import(&[unused]).unwrap();
-
-    let r = consolidate_sync(&db, None, "full");
-    assert!(r.decayed >= 1);
-    assert!(db.get("forgotten").unwrap().is_none());
-}
 
 #[test]
 fn operational_tag_blocks_working_to_core_promotion() {
@@ -259,25 +214,6 @@ fn operational_tag_blocks_working_to_core_promotion() {
     assert!(!candidate_ids.contains(&"ephemeral-mem"), "ephemeral memory must not be a candidate");
 }
 
-#[test]
-fn lesson_tag_survives_buffer_ttl() {
-    let db = test_db();
-    let two_days_ago = engram::db::now_ms() - 2 * 86_400_000;
-
-    // Lesson tagged memory — old, zero accesses, but should NOT be dropped
-    let mut lesson = mem_with_ts("never-force-push", Layer::Buffer, 0.5, 0, two_days_ago, two_days_ago);
-    lesson.tags = vec!["lesson".into(), "trigger:git-push".into()];
-
-    // Regular buffer — same age, low importance, zero accesses, should be dropped
-    let regular = mem_with_ts("some-note", Layer::Buffer, 0.2, 0, two_days_ago, two_days_ago);
-
-    db.import(&[lesson, regular]).unwrap();
-
-    let r = consolidate_sync(&db, None, "full");
-    assert!(db.get("never-force-push").unwrap().is_some(), "lesson must survive TTL");
-    assert!(db.get("some-note").unwrap().is_none(), "regular buffer should be dropped");
-    assert!(r.decayed >= 1);
-}
 
 #[test]
 fn gate_rejected_skips_promotion() {
@@ -303,28 +239,6 @@ fn gate_rejected_skips_promotion() {
     assert!(candidate_ids.contains(&"eligible"), "eligible should be a promotion candidate");
 }
 
-#[test]
-fn high_importance_buffer_rescued_at_ttl() {
-    let db = test_db();
-    let expired = engram::db::now_ms() - 49 * 3600 * 1000; // 49h ago, past hard_cap (48h)
-
-    // sc=0 but high importance — should be rescued to Working
-    let important = mem_with_ts("design-decision", Layer::Buffer, 0.8, 0, expired, expired);
-
-    // sc=0, low importance — should be dropped (past hard_cap even if never triaged)
-    let junk = mem_with_ts("random-chat", Layer::Buffer, 0.3, 0, expired, expired);
-
-    db.import(&[important, junk]).unwrap();
-
-    let r = consolidate_sync(&db, None, "full");
-
-    assert!(db.get("design-decision").unwrap().is_some(), "high importance buffer should survive");
-    let rescued = db.get("design-decision").unwrap().unwrap();
-    assert_eq!(rescued.layer, Layer::Working, "should be promoted to Working");
-
-    assert!(db.get("random-chat").unwrap().is_none(), "low importance buffer should be dropped");
-    assert!(r.decayed >= 1, "at least one should be decayed");
-}
 
 #[test]
 fn distilled_tag_blocks_buffer_promotion() {

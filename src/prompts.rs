@@ -105,143 +105,7 @@ pub fn extract_memories_schema() -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
-// consolidate/audit.rs
-// ---------------------------------------------------------------------------
-
-// NOTE: "ac>5" is a prompt heuristic, not from thresholds.rs
-pub const AUDIT_SYSTEM: &str = r#"Review an AI agent's memory layers and propose maintenance operations.
-
-You have three powers:
-1. **Schedule** (promote/demote): Move memories between layers
-2. **Adjust** (adjust): Change a memory's importance score
-3. **Merge**: Combine duplicate/overlapping memories
-
-You CANNOT delete memories. Deletion happens through natural lifecycle (importance decay + capacity cap).
-
-Metadata per memory:
-- imp = importance (0-1)
-- ac = access count (times recalled). ac=0 = never recalled
-- age = days since creation
-- mod = days since last modification
-- tags = labels
-- Layer: Core (3), Working (2), Buffer (1)
-
-## Layer Principles
-
-**Core** = stable principles, lessons from mistakes, identity constraints. Rarely changes.
-**Working** = active project context, current decisions. Becomes stale as projects evolve.
-**Buffer** = temporary intake, expires via TTL.
-
-## Promote — be VERY selective
-
-Core is permanent. Only promote Working memories proven valuable over time.
-
-✅ GOOD promotion:
-- ac>5, survived multiple sessions, content still matches current architecture
-- Lesson that actually prevented repeating a mistake (not just "I learned X")
-- Hard constraint from the user that applies permanently
-
-❌ BAD promotion — DO NOT:
-- ac=0 and recently created → not battle-tested, keep in Working
-- Tagged `auto-extract` → machine-generated, often low quality
-- Content unrelated to the project → wrong scope
-- Describes a fix later replaced → obsolete
-- Generic platitudes without specific context
-
-A `LESSON:` prefix or `lesson` tag does NOT automatically qualify for Core.
-
-## Demote
-
-Move memories down one layer when they no longer belong:
-- Implementation details already in code
-- Session logs and progress reports
-- Stale plans/TODOs or config snapshots
-- Content about removed/replaced features
-
-Demote ONE layer at a time — Core→Working or Working→Buffer. Never skip layers.
-
-## Adjust importance
-
-Use adjust when a memory belongs in its current layer but its importance score is wrong:
-- Lower (e.g. 0.3): Memory is correct but rarely useful — low importance makes it decay faster in Working
-- Raise (e.g. 0.9): Memory is clearly under-valued relative to its actual importance
-- Do NOT use adjust as a substitute for demote — if the content doesn't belong in this layer, demote it
-
-## Merge rules
-
-- When memories overlap heavily, merge to consolidate information
-- Cross-layer merge: the merged result MUST go to the HIGHER layer (Working+Core → Core)
-- Preserve all specific details — never lose information in a merge
-
-## Input Format
-
-Each memory is labeled with a letter alias (A, B, C, ... Z, AA, AB, ...). Use these aliases when referencing memories in operations.
-
-Memories are grouped into semantic clusters. Similar memories appear together with merge similarity hints when applicable. Use these hints to identify merge candidates.
-
-## Guidelines
-
-- **Superseded:** newer memory covers same knowledge → merge or demote the older one
-- **Obsolete:** high ac on content about removed features ≠ still valid → demote
-- Same-layer demote/promote is a no-op bug (L2→L2, L3→L3)
-- Read full content before deciding — don't judge by tags alone
-- Propose no operations if nothing needs changing."#;
-
-pub fn audit_tool_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "operations": {
-                "type": "array",
-                "description": "List of maintenance operations. Empty array if nothing needs changing.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "op": {
-                            "type": "string",
-                            "enum": ["promote", "demote", "adjust", "merge"],
-                            "description": "Operation type"
-                        },
-                        "id": {
-                            "type": "string",
-                            "description": "Letter alias from the memory listing (A, B, C...) for promote/demote/adjust"
-                        },
-                        "to": {
-                            "type": "integer",
-                            "enum": [1, 2, 3],
-                            "description": "Target layer. Demote by one layer only: Core(3)→Working(2) or Working(2)→Buffer(1)"
-                        },
-                        "importance": {
-                            "type": "number",
-                            "description": "New importance value 0.0-1.0 (for adjust op)"
-                        },
-                        "ids": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Letter aliases from the memory listing (A, B, C...) for merge op, minimum 2"
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "Combined text for the merged memory (for merge op)"
-                        },
-                        "layer": {
-                            "type": "integer",
-                            "enum": [2, 3],
-                            "description": "Layer for merged memory — must be the HIGHEST layer among source memories (for merge op)"
-                        },
-                        "tags": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Tags for the merged memory (for merge op)"
-                        }
-                    },
-                    "required": ["op"]
-                }
-            }
-        },
-        "required": ["operations"]
-    })
-}
+// (old global-scan audit prompts removed — replaced by topic distillation in audit.rs)
 
 // ---------------------------------------------------------------------------
 // consolidate/triage.rs
@@ -369,7 +233,29 @@ pub fn gate_batch_schema() -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
-// consolidate/merge.rs
+// consolidate/merge.rs — reconcile
+// ---------------------------------------------------------------------------
+
+pub fn reconcile_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "decision": {
+                "type": "string",
+                "enum": ["update", "absorb", "keep_both"],
+                "description": "How to reconcile the two memories"
+            },
+            "merged_content": {
+                "type": "string",
+                "description": "Merged text preserving ALL details from both entries. Required when decision is update or absorb."
+            }
+        },
+        "required": ["decision"]
+    })
+}
+
+// ---------------------------------------------------------------------------
+// consolidate/merge.rs — merge
 // ---------------------------------------------------------------------------
 
 pub const MERGE_SYSTEM: &str = r#"Merge these related memory entries into a single concise note. Rules:
@@ -409,6 +295,130 @@ Focus on: what exists now, current version/state, key capabilities, what's in pr
 Skip: lessons learned, past bugs, how things were built.\n\
 Output a single paragraph, 2-4 sentences, under 250 chars. Same language as input.\n\
 No preamble, no markdown headers — just the status text.";
+
+// ---------------------------------------------------------------------------
+// consolidate/audit.rs — topic distillation
+// ---------------------------------------------------------------------------
+
+pub const DISTILL_TOPIC_SYSTEM: &str = r#"You condense overlapping memories within a topic into fewer, richer entries.
+
+Given N memories that belong to the same semantic topic, find groups that overlap
+and merge each group into one comprehensive entry. Leave unique memories alone.
+
+Rules:
+1. **Preserve ALL specific details** — names, numbers, IDs, dates, commands, constraints. Never generalize away specifics.
+2. **Only merge memories that genuinely overlap** — same subject, redundant info. Don't merge unrelated memories just because they're in the same topic.
+3. **Each distilled entry must list its source IDs** (first 8 chars of the memory ID). A source can only appear in ONE distilled entry.
+4. **A distilled entry must replace 2+ sources** — don't output single-source "merges".
+5. **If nothing overlaps, return an empty distilled array** — don't force merges.
+6. **Kind**: choose the most appropriate kind for the merged result (semantic/episodic/procedural).
+7. **Same language as input** — don't translate.
+8. **Content length**: the merged text should be roughly as long as the longest source, not a summary. You're consolidating, not summarizing."#;
+
+pub fn distill_topic_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "distilled": {
+                "type": "array",
+                "description": "List of condensed memory entries",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The condensed memory text. Must preserve ALL specific details from sources."
+                        },
+                        "source_ids": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "IDs (first 8 chars) of memories this entry replaces"
+                        },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["semantic", "episodic", "procedural"],
+                            "description": "Memory kind for the distilled entry"
+                        }
+                    },
+                    "required": ["content", "source_ids"]
+                }
+            }
+        },
+        "required": ["distilled"]
+    })
+}
+
+// ---------------------------------------------------------------------------
+// recall.rs — rerank
+// ---------------------------------------------------------------------------
+
+pub const RERANK_SYSTEM: &str = "\
+You rerank memory search results by relevance to the user's query.
+Think step-by-step about what the user ACTUALLY needs:
+- \"X是谁\" / \"who is X\" → identity/relationship answers first
+- \"X怎么用\" / \"how to X\" → workflows, procedures, role descriptions first; lessons/caveats second
+- \"X怎么设计\" / \"how is X designed\" → architecture/design answers first
+Prefer results that DIRECTLY answer the question over tangential mentions or meta-commentary.
+A result describing what something does and how to use it beats a cautionary principle about it.
+Return ONLY the numbers, most relevant first, comma-separated. No explanation.
+Example: 3,1,5,2";
+
+// ---------------------------------------------------------------------------
+// proxy/extract.rs — proxy memory extraction
+// ---------------------------------------------------------------------------
+
+pub const PROXY_EXTRACT_SYSTEM: &str = "You extract long-term memories from a multi-turn conversation between a user and their AI assistant.\n\
+    Most windows produce nothing — that's fine. But don't miss real signals.\n\n\
+    EXTRACT:\n\
+    - Decisions: 'we chose X over Y', 'switching to native binaries'\n\
+    - Constraints: 'no Docker', 'code must look human-written', 'never mention X in public'\n\
+    - Lessons: mistakes pointed out, corrections, 'don't do X again', 'X was wrong because Y'\n\
+    - User feedback that shapes behavior: criticism, preferences, rules stated in frustration\n\
+      (e.g. 'you're too expensive, use haiku for this' → extract the model routing decision)\n\
+    - Infrastructure/tooling changes that persist\n\
+    - Gotchas discovered through experience\n\n\
+    Extract from EITHER side — user corrections AND assistant realizations both count.\n\
+    User anger often contains the most important signals.\n\n\
+    NEVER extract:\n\
+    - Routine code changes, refactors, test results\n\
+    - Bug fixes (unless there's a reusable lesson)\n\
+    - The assistant explaining how things work (teaching ≠ memory)\n\
+    - Anything already in ALREADY IN MEMORY below\n\n\
+    LANGUAGE: Match the user's language.\n\n\
+    DEDUP: Skip if it overlaps with ALREADY IN MEMORY.";
+
+pub fn proxy_extract_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "One sentence, concrete, under 150 chars"
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "1-4 relevant tags"
+                        },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["semantic", "episodic", "procedural"],
+                            "description": "semantic=facts/decisions/lessons/preferences (most memories are this). episodic=specific dated events. procedural=reusable step-by-step workflows ONLY (e.g. 'deploy: test→build→stop→copy→start'). Code changes, prompt edits, bug fixes are NOT procedural — they are semantic."
+                        }
+                    },
+                    "required": ["content", "tags", "kind"]
+                },
+                "maxItems": 3
+            }
+        },
+        "required": ["items"]
+    })
+}
 
 // ---------------------------------------------------------------------------
 // topiary/naming.rs — topic naming

@@ -23,6 +23,7 @@ fn buf_mem(id: &str, ns: &str, tags: &[&str], access_count: i64, importance: f64
         embedding: Some(emb),
         kind: "semantic".into(),
         modified_at: created_at,
+        modified_epoch: 0,
     }
 }
 

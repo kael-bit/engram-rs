@@ -1,5 +1,6 @@
 //! Memory CRUD operations.
 
+use crate::thresholds;
 use rusqlite::params;
 use uuid::Uuid;
 
@@ -451,12 +452,12 @@ impl MemoryDB {
         let n_semantic = conn.execute(
             "UPDATE memories SET importance = MAX(?1, importance - ?2) \
              WHERE last_accessed < ?3 AND importance > ?1 AND layer < 3 AND kind = 'semantic'",
-            params![floor, decay_amount * 0.6, cycle_start],
+            params![floor, decay_amount * thresholds::DECAY_SEMANTIC_RATIO, cycle_start],
         )?;
         let n_procedural = conn.execute(
             "UPDATE memories SET importance = MAX(?1, importance - ?2) \
              WHERE last_accessed < ?3 AND importance > ?1 AND layer < 3 AND kind = 'procedural'",
-            params![floor, decay_amount * 0.2, cycle_start],
+            params![floor, decay_amount * thresholds::DECAY_PROCEDURAL_RATIO, cycle_start],
         )?;
         Ok(n_episodic + n_semantic + n_procedural)
     }
@@ -957,7 +958,7 @@ impl MemoryDB {
             if c.trim().is_empty() {
                 return Err(EngramError::EmptyContent);
             }
-            if c.chars().count() > MAX_CONTENT_LEN {
+            if c.chars().count() > thresholds::MAX_CONTENT_LEN {
                 return Err(EngramError::ContentTooLong);
             }
         }
@@ -967,10 +968,11 @@ impl MemoryDB {
             }
         }
         if let Some(t) = tags {
-            if t.len() > MAX_TAGS {
-                return Err(EngramError::Validation(format!("too many tags (max {MAX_TAGS})")));
+            if t.len() > thresholds::MAX_TAGS {
+                let max = thresholds::MAX_TAGS;
+                return Err(EngramError::Validation(format!("too many tags (max {max})")));
             }
-            if let Some(tag) = t.iter().find(|tag| tag.chars().count() > MAX_TAG_LEN) {
+            if let Some(tag) = t.iter().find(|tag| tag.chars().count() > thresholds::MAX_TAG_LEN) {
                 return Err(EngramError::Validation(format!("tag '{}' too long", tag)));
             }
         }
