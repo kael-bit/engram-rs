@@ -303,59 +303,42 @@ Bilingual (Chinese + English) expansion required.
 **Auto-expand**: If `expand` not set AND top result has `relevance < AUTO_EXPAND_THRESHOLD (0.25)`,
 automatically expands and retries. Uses expanded result only if it beats original.
 
-### 4.5 Re-ranking & Touch
+### 4.5 Touch
 
-When `rerank=true`: LLM (`rerank` model, `RERANK_SYSTEM`) re-orders results. Scores interpolated.
 Only memories with `relevance > 0.5` get `touch()`-ed. Dry queries (`dry=true`) skip touch.
 
 ---
 
-## 5. Audit System
+## 5. Topic Distillation (Audit)
 
-### 5.1 Three Powers
+### 5.1 Overview
 
-The audit LLM has exactly three powers:
+When a topic accumulates too many memories (≥ `DISTILL_THRESHOLD = 10`), the distillation system
+condenses overlapping memories into fewer, richer entries. This replaces the old global-scan audit.
+One topic per LLM call, up to `DISTILL_MAX_PER_CYCLE = 2` topics per consolidation cycle.
 
-| Power | Operations | Description |
-|-------|-----------|-------------|
-| **Schedule** | `promote`, `demote` | Move memories between layers |
-| **Adjust** | `adjust` | Change importance score (0.0–1.0) |
-| **Merge** | `merge` | Combine 2+ memories into one |
+### 5.2 Flow (`distill_topics` in `consolidate/audit.rs`)
 
-**Audit CANNOT delete memories.** Deletion only happens through natural lifecycle (epoch-based decay, capacity cap).
-Demote is restricted to one layer at a time (Core→Working or Working→Buffer, never Core→Buffer).
+1. Load the cached topiary tree (`topiary_tree` in `engram_meta`).
+2. Walk leaf nodes, find those with ≥ `DISTILL_THRESHOLD` members. Sort by size descending.
+3. For each bloated topic (up to 2 per cycle):
+   a. Load full memories for all members.
+   b. Build prompt listing each memory with `[index] id layer kind importance content`.
+   c. LLM call (`audit` model, `DISTILL_TOPIC_SYSTEM` prompt, `distill_topic_schema()`).
+   d. LLM returns groups of overlapping memories merged into distilled entries.
+4. For each distilled entry:
+   - Must replace 2+ source memories (single-source "merges" are skipped).
+   - Insert distilled memory with tag `distilled`, source `distill`, importance 0.7.
+   - Layer set to max of source layers.
+   - Source memories deleted via `supersedes`.
 
-### 5.2 Audit Flow (`audit_memories` in `consolidate/audit.rs`)
+### 5.3 LLM Rules
 
-1. Fetch all Core + Working memories (meta only, no embeddings).
-2. Group into semantic clusters with merge similarity hints (cosine `AUDIT_MERGE_MIN_SIM`–`AUDIT_MERGE_MAX_SIM`).
-3. Format with metadata: `[short_id] L{layer} imp={importance} ac={access} age={days}d mod={days}d tags=[...] (kind) content`.
-4. LLM call (`audit` model, falls back to `gate` model) with `AUDIT_SYSTEM` prompt.
-   Uses function calling with `audit_tool_schema()` for structured output.
-5. Returns `Vec<RawAuditOp>` — operations use 8-char short IDs.
-6. Resolve short IDs to full UUIDs (`resolve_audit_ops`).
-7. **Sandbox check** before execution.
-
-### 5.3 Sandbox (`sandbox_audit` in `consolidate/sandbox.rs`)
-
-Every audit operation passes through `RuleChecker` before execution:
-
-**Rules checked per operation:**
-
-| Rule | Check | Fail condition |
-|------|-------|---------------|
-| Delete blocked | Audit has no delete power | Any delete op → always fail |
-| Target exists | ID must resolve to a real memory | ID not found |
-| No same-layer demote | Demote target must be lower than current | `current_layer <= target` |
-| Importance bounds | Adjust value must be in 0.0–1.0 | Out of range |
-| Merge minimum | Merge needs ≥2 source IDs | <2 IDs |
-| Merge direction | Merged result must go to highest source layer | `target_layer < max(source_layers)` |
-| Merge content length | Merged text must preserve information | `output_len < shortest_input / 2` |
-
-**Grading:**
-- Each operation gets `Good` (pass) or `Bad` (blocked).
-- Only `Good` operations execute. Bad operations are skipped and logged.
-- Overall score = `good_count / total_count`. Threshold: `SANDBOX_SAFETY_THRESHOLD (0.70)`.
+- **Preserve ALL specific details** — names, numbers, IDs, dates, commands. Never generalize.
+- **Only merge genuinely overlapping memories** — same subject, redundant info.
+- **If nothing overlaps, return empty array** — don't force merges.
+- **Consolidate, don't summarize** — merged text should be as long as the longest source.
+- **Same language as input** — don't translate.
 
 ---
 
@@ -464,8 +447,7 @@ Every place the system calls an LLM, with model tier and purpose:
 | **Fact extract** | `extract` | `fact_extract` | Extract (subject, predicate, object) triples | `FACT_EXTRACT_PROMPT` (disabled) |
 | **Resume compress** | `resume` (→default) | `resume_compress` | Summarize section for context budget | Inline system prompt |
 | **Insert merge** | `merge` | `insert_merge` | Merge on insert when high similarity | `INSERT_MERGE_PROMPT` |
-| **Rerank** | `rerank` | `rerank` | Re-order recall results by relevance | `RERANK_SYSTEM` |
-| **Distill** | `gate` | `distill` | Synthesize session notes into status | Inline system prompt |
+| **Distill** | `audit` (→`gate`) | `distill` | Condense bloated topic members | `DISTILL_TOPIC_SYSTEM` |
 | **Naming** | `naming` (→default) | `naming` | Name topic clusters for resume index | `TOPIC_NAMING_SYSTEM` |
 
 Model tier resolution (`AiConfig::model_for`): each component checks its env var
@@ -553,10 +535,9 @@ sorted by aggregate access count.
 | Constant | Value | Used In |
 |----------|-------|---------|
 | `DEDUP_JACCARD_PREFILTER` | 0.50 | Pre-filter before cosine in DB dedup |
-| `SANDBOX_SAFETY_THRESHOLD` | 0.70 | Min safety score to execute audit ops |
-| `SANDBOX_RECENT_MOD_HOURS` | 24.0h | "Recently modified" guard in audit sandbox |
-| `SANDBOX_NEW_AGE_HOURS` | 48.0h | "New memory" protection in audit sandbox |
 | `BUFFER_CAP` | 200 (env) | Max buffer entries before capacity-based eviction |
+| `DISTILL_THRESHOLD` | 10 | Min topic members before distillation kicks in |
+| `DISTILL_MAX_PER_CYCLE` | 2 | Max topics to distill per consolidation cycle |
 | `RESUME_HIGH_RELEVANCE` | 0.25 | Identity/constraint boost in resume |
 | `RESUME_LOW_RELEVANCE` | 0.10 | Lesson/procedural boost in resume |
 | `RESUME_CORE_THRESHOLD` | 0.35 | Min relevance to include Core in resume |
@@ -617,8 +598,9 @@ sorted by aggregate access count.
 
 1. **Memories only move up layers through LLM review** (triage or gate). Mechanical promotion
    exists for Buffer→Working only (high reinforcement score or lesson/procedural kind).
-2. **Audit cannot delete** — only schedule (promote/demote), adjust importance, or merge.
-   Natural lifecycle (epoch-based decay, capacity cap) handles cleanup.
+2. **Topic distillation condenses, never deletes** — overlapping memories within a bloated topic
+   are merged into richer entries. Source memories are superseded (deleted), but the information is preserved
+   in the distilled output. Natural lifecycle (epoch-based decay, capacity cap) handles cleanup of unmerged memories.
 3. **Demotions are one-layer-at-a-time** — Core→Working or Working→Buffer, never skip.
 4. **Working memories are never deleted** — importance decays at different rates by kind, but memories
    remain searchable even at zero importance. Only Buffer entries can be evicted.

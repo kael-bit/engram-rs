@@ -199,15 +199,9 @@ Each cycle executes the following steps in order:
 5. **Reconcile** — LLM resolves ambiguous similar pairs; results are cached to avoid redundant calls
 6. **Topic tree rebuild** — re-cluster and name new or changed topics
 
-### Audit (every 12 hours)
+### Topic Distillation
 
-Full-store LLM review:
-
-- Promote undervalued memories, demote stale ones
-- Merge duplicates that escaped real-time dedup
-- Adjust importance scores based on global context
-
-The audit examines all Core and Working memories simultaneously, enabling detection of cross-topic redundancy that per-memory processing cannot catch.
+When a topic cluster grows too large (10+ memories), engram condenses overlapping memories into fewer, richer entries — preserving all specific details while reducing redundancy. Up to 2 topics are distilled per consolidation cycle.
 
 ## Namespace Isolation
 

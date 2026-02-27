@@ -47,7 +47,7 @@ With LLM features, engram needs two classes of models:
 | Role | What it does | Env var | Budget pick | Quality pick |
 |------|-------------|---------|-------------|-------------|
 | **Judgment** | Decides what memories are permanent (gate), reviews memory quality (audit) | `ENGRAM_GATE_MODEL`, `ENGRAM_AUDIT_MODEL` | Claude Haiku | Claude Sonnet |
-| **Text processing** | Merges text, expands queries, reranks (merge, rerank, expand) | `ENGRAM_LLM_MODEL` | GPT-4o-mini | GPT-4o-mini |
+| **Text processing** | Merges text, expands queries (merge, expand) | `ENGRAM_LLM_MODEL` | GPT-4o-mini | GPT-4o-mini |
 
 You can use one model for everything, or split by role to save cost:
 
@@ -95,7 +95,7 @@ ENGRAM_EMBED_KEY=sk-xxx \
 ./engram
 ```
 
-Every component (`gate`, `audit`, `merge`, `extract`, `expand`, `rerank`, `proxy`, `triage`, `summary`) supports `_URL`, `_KEY`, `_MODEL`, `_PROVIDER` overrides. Unset fields fall back to `ENGRAM_LLM_*` globals.
+Every component (`gate`, `audit`, `merge`, `extract`, `expand`, `proxy`, `triage`, `summary`) supports `_URL`, `_KEY`, `_MODEL`, `_PROVIDER` overrides. Unset fields fall back to `ENGRAM_LLM_*` globals.
 
 > **Why split?** The gate decides what gets promoted to permanent Core memory — it needs to distinguish "never force-push to main" (lesson, keep forever) from "fixed the build, 198 tests pass" (changelog, don't keep). Cheap models fail at this. Text merging and query expansion don't need that judgment.
 
@@ -341,7 +341,7 @@ ExecStart=/usr/local/bin/engram
 Environment=ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings
 Environment=ENGRAM_EMBED_KEY=sk-xxx
 
-# LLM — default model (text processing: merge, rerank, expand)
+# LLM — default model (text processing: merge, expand)
 Environment=ENGRAM_LLM_URL=https://api.openai.com/v1/chat/completions
 Environment=ENGRAM_LLM_KEY=sk-xxx
 Environment=ENGRAM_LLM_MODEL=gpt-4o-mini
