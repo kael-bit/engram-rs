@@ -18,9 +18,9 @@ A three-layer lifecycle inspired by [how human memory actually works](https://en
 
 | Layer | Role | Behavior |
 |-------|------|----------|
-| **Buffer** | Short-term intake | All new memories land here. Unreinforced entries decay naturally |
-| **Working** | Active knowledge | Promoted when accessed repeatedly or tagged as lessons/procedures |
-| **Core** | Long-term identity | Promoted through sustained usage and LLM quality gate. Procedures never decay |
+| **Buffer** | Short-term intake | All new memories land here. Unreinforced entries decay and get evicted |
+| **Working** | Active knowledge | Promoted when accessed repeatedly or tagged as lessons/procedures. Never deleted — importance decays but memory persists |
+| **Core** | Long-term identity | Promoted through sustained usage and LLM quality gate. Permanent |
 
 You just store memories. The system figures out what's important and promotes it. Unused memories fade. Lessons persist. Duplicates reinforce instead of accumulating.
 
@@ -118,7 +118,7 @@ One call to restore context on wake-up or after compaction:
 
 ### Hybrid Search
 
-Semantic embeddings + BM25 keyword search (with [jieba](https://github.com/messense/jieba-rs) for CJK) + fact-triple lookup → single ranked result set. Dual-hit boosting when multiple signals agree. Embedding cache for repeat queries (<15ms).
+Semantic embeddings + BM25 keyword search (with [jieba](https://github.com/messense/jieba-rs) for CJK) + fact-triple lookup → single ranked result set. Unified scoring: `0.5 × relevance + 0.3 × memory_weight + 0.2 × recency`, where `memory_weight = (importance + rep_bonus + access_bonus) × kind_boost × layer_boost`. Embedding cache for repeat queries (<15ms).
 
 ### Memory Types
 
@@ -138,10 +138,10 @@ One instance, multiple projects. Each workspace gets its own memory space with s
 
 ### Background Maintenance
 
-Fully autonomous — no cron needed:
+Fully autonomous, activity-driven — no cron needed, no wasted cycles when idle:
 
-- **Consolidation** (30min): promote, decay, dedup, merge, rebuild topic tree
-- **Audit** (12h): LLM reviews memory quality, merges duplicates, demotes stale entries
+- **Consolidation** (30min, skipped when idle): promote, decay, dedup, merge, rebuild topic tree
+- **Audit** (12h, skipped when idle): LLM reviews memory quality, merges duplicates, demotes stale entries
 
 ## MCP & API
 

@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.13.0
+
+### Breaking Changes
+
+- **Clean API responses**: `/recall` and `/triggers` now return `MemoryResult` — only `id` (8-char), `content`, `score`, `layer`, `tags`, `kind`. Internal fields (`decay_rate`, `access_count`, `repetition_count`, `last_accessed`, `modified_at`, `source`, `namespace`) removed from API output.
+- **Working memories are permanent**: Working layer memories are never deleted or demoted to Buffer. Importance decays to 0 but the memory persists — findable via recall and topic tree.
+
+### Unified Scoring
+
+- New `memory_weight()` in `src/scoring.rs` — single function used across all ranking contexts.
+- Formula: `(importance + rep_bonus + access_bonus) × kind_boost × layer_boost`
+  - `rep_bonus`: `min(repetition × 0.1, 0.5)` — permanent reinforcement signal
+  - `access_bonus`: `min(ln(1 + access_count) × 0.1, 0.3)` — diminishing returns
+  - `kind_boost`: procedural 1.3×, others 1.0×
+  - `layer_boost`: Core 1.2×, Working 1.0×, Buffer 0.8×
+- Additive design: importance=0 memories with high repetition still rank (not zeroed out).
+- Recall scoring: `0.5 × relevance + 0.3 × weight + 0.2 × recency`
+- Applied to: recall, resume Core sorting, triggers, consolidation promotion, buffer eviction.
+
+### Activity-Driven Consolidation
+
+- Consolidation loop skips when no write activity since last run — zero waste during idle.
+- Only memory writes (create/update/delete) count as activity; reads don't.
+- Agent frozen = system frozen. No phantom decay while inactive.
+
+### Gate Improvements
+
+- Promotion gate batches all candidates into single LLM call (was per-item).
+- `_gate-pending` cooldown tag prevents retry storms on LLM errors (2h TTL).
+- Triage dedup via `_triaged` filter.
+
+### Other Changes
+
+- Importance floor: 0.3 → 0.0
+- `reinforcement_score()` removed — replaced by `memory_weight()`
+- `Layer::score_bonus()` removed — absorbed into `memory_weight()`
+- Web UI: recall results use dedicated `recallCard()` renderer for `MemoryResult` format
+
 ## 0.12.2
 
 ### Fixes
