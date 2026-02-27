@@ -4,13 +4,10 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use tracing::{debug, warn};
 
 use crate::error::EngramError;
-use crate::{ai, db, AppState};
+use crate::{db, AppState};
 use super::blocking;
 use super::get_namespace;
 use super::topiary_api::build_topiary_resume_section;
@@ -21,99 +18,11 @@ use super::topiary_api::build_topiary_resume_section;
 pub(super) struct ResumeQuery {
     hours: Option<f64>,
     ns: Option<String>,
-    /// Comma-separated workspace tags. When set, Core memories are
-    /// filtered to those matching at least one tag. Untagged Core
-    /// memories (identity, universal knowledge) are always included.
     workspace: Option<String>,
-    /// Max Core memories to return (default 100).
     limit: Option<usize>,
-    /// When true, return compact JSON format (content + tags only).
-    /// Default true.
     compact: Option<bool>,
-    /// Max total characters. Default 12000 (~3K tokens). Set 0 for unlimited.
     budget: Option<usize>,
-    /// Output format: "text" (default) or "json".
     format: Option<String>,
-}
-
-/// Compute a cache key for a resume section based on memory IDs + modified_at.
-#[allow(dead_code)]
-pub(super) fn section_cache_key(prefix: &str, memories: &[db::Memory], char_budget: usize) -> String {
-    let mut hasher = DefaultHasher::new();
-    for m in memories {
-        m.id.hash(&mut hasher);
-        m.modified_at.hash(&mut hasher);
-    }
-    char_budget.hash(&mut hasher);
-    format!("resume_cache:{}:{:x}", prefix, hasher.finish())
-}
-
-/// LLM-compress a section of memories into a budget. Returns compressed text
-/// or None if AI is unavailable or compression fails.
-#[allow(dead_code)]
-pub(super) async fn compress_section(
-    ai: &ai::AiConfig,
-    db: &db::MemoryDB,
-    label: &str,
-    mems: &[db::Memory],
-    char_budget: usize,
-) -> Option<String> {
-    if mems.is_empty() || char_budget < 100 {
-        return None;
-    }
-
-    // Check cache first
-    let cache_key = section_cache_key(label, mems, char_budget);
-    if let Some(cached) = db.get_meta(&cache_key) {
-        debug!(section = label, key = %cache_key, "resume compression cache hit");
-        return Some(cached);
-    }
-
-    let input: String = mems.iter().map(|m| {
-        let tags = if m.tags.is_empty() { String::new() } else { format!(" [{}]", m.tags.join(", ")) };
-        let kind = if m.kind == "semantic" { String::new() } else { format!(" ({})", m.kind) };
-        format!("- {}{}{}\n", m.content, tags, kind)
-    }).collect();
-
-    let system = format!(
-        "Compress the following {} memories into ≤{} characters.\n\
-         Preserve ALL: identities, constraints, lessons, decisions, procedures, names, numbers.\n\
-         Drop: routine updates, transient status, redundant detail.\n\
-         Output raw text only, no markdown headers or bullet formatting.\n\
-         Combine related items. Be dense but complete.",
-        label, char_budget
-    );
-
-    match ai::llm_chat_as(ai, "resume", &system, &input).await {
-        Ok(result) => {
-            if let Some(ref u) = result.usage {
-                let cached_tokens = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                let _ = db.log_llm_call(
-                    "resume_compress", &result.model,
-                    u.prompt_tokens, u.completion_tokens, cached_tokens,
-                    result.duration_ms,
-                );
-            }
-            let text = result.content.trim().to_string();
-            // Hard limit safety: truncate if LLM exceeded budget
-            let text = if text.len() > char_budget {
-                let boundary = text.floor_char_boundary(char_budget.saturating_sub(1));
-                format!("{}…", &text[..boundary])
-            } else {
-                text
-            };
-            if let Err(e) = db.set_meta(&cache_key, &text) {
-                warn!(section = label, error = %e, "failed to cache compression result");
-            } else {
-                debug!(section = label, key = %cache_key, "resume compression cached");
-            }
-            Some(text)
-        }
-        Err(e) => {
-            warn!(section = label, error = %e, "resume compression failed, falling back to truncation");
-            None
-        }
-    }
 }
 
 pub(super) async fn do_resume(

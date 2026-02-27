@@ -624,17 +624,6 @@ pub async fn rerank_results(
     }
 }
 
-/// Check if content is semantically similar to an existing memory.
-/// Returns the ID of the duplicate if found, None otherwise.
-#[allow(dead_code)]
-pub async fn quick_semantic_dup(
-    ai_cfg: &AiConfig,
-    db: &MemoryDB,
-    content: &str,
-) -> Result<Option<String>, EngramError> {
-    quick_semantic_dup_threshold(ai_cfg, db, content, crate::thresholds::RECALL_DEDUP_SIM).await
-}
-
 /// Like `quick_semantic_dup` but with a custom cosine threshold.
 /// Proxy extraction uses a lower threshold (0.72) to catch cross-language dupes.
 pub async fn quick_semantic_dup_threshold(

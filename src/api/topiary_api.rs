@@ -114,22 +114,6 @@ pub(super) fn build_topiary_resume_section(tree_data: &serde_json::Value) -> Opt
     Some(out)
 }
 
-/// Find a topic by ID recursively in the JSON topic tree.
-#[allow(dead_code)]
-pub(super) fn find_topic_by_id<'a>(topics: &'a [serde_json::Value], id: &str) -> Option<&'a serde_json::Value> {
-    for topic in topics {
-        if topic.get("id").and_then(|v| v.as_str()) == Some(id) {
-            return Some(topic);
-        }
-        if let Some(children) = topic.get("children").and_then(|v| v.as_array()) {
-            if let Some(found) = find_topic_by_id(children, id) {
-                return Some(found);
-            }
-        }
-    }
-    None
-}
-
 /// Collect all leaf topics recursively.
 pub(super) fn collect_topic_leaves<'a>(topics: &'a [serde_json::Value], out: &mut Vec<(&'a str, &'a str, u64)>) {
     for topic in topics {

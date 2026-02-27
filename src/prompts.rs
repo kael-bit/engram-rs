@@ -384,41 +384,6 @@ Decide:
 // consolidate/facts.rs
 // ---------------------------------------------------------------------------
 
-// Disabled: facts auto-extraction is currently off. Kept for potential re-enablement.
-#[allow(dead_code)]
-pub const FACT_EXTRACT_PROMPT: &str = r#"Extract factual triples from this memory text. A triple is (subject, predicate, object) representing a concrete, stable relationship.
-Examples: (user, prefers, dark mode), (engram, uses, SQLite), (project, language, Rust)
-
-Rules:
-- Only extract concrete, stable facts — NOT transient states or opinions
-- Subject/object should be short noun phrases (1-3 words)
-- Predicate should be a verb or relationship label
-- Skip if the text is purely procedural/operational with no factual content"#;
-
-// Disabled: facts auto-extraction is currently off. Kept for potential re-enablement.
-#[allow(dead_code)]
-pub fn fact_extract_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "facts": {
-                "type": "array",
-                "description": "Extracted triples. Empty array if nothing to extract.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "subject": {"type": "string", "description": "Short noun phrase (1-3 words)"},
-                        "predicate": {"type": "string", "description": "Verb or relationship label"},
-                        "object": {"type": "string", "description": "Short noun phrase (1-3 words)"}
-                    },
-                    "required": ["subject", "predicate", "object"]
-                }
-            }
-        },
-        "required": ["facts"]
-    })
-}
-
 // ---------------------------------------------------------------------------
 // api/memory.rs — insert-time merge
 // ---------------------------------------------------------------------------

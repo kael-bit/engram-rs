@@ -49,10 +49,6 @@ pub(super) struct FactQuery {
     ns: Option<String>,
     #[serde(default)]
     include_superseded: Option<bool>,
-    #[allow(dead_code)]
-    limit: Option<usize>,
-    #[allow(dead_code)]
-    offset: Option<usize>,
 }
 
 pub(super) async fn query_facts(

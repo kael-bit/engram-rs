@@ -11,7 +11,6 @@ use tracing::{debug, info, warn};
 mod audit;
 mod cluster;
 mod distill;
-mod facts;
 mod merge;
 mod sandbox;
 mod summary;
@@ -977,37 +976,6 @@ async fn llm_promotion_gate_batch(
     }
 
     Ok((results, tcr.usage, tcr.model, tcr.duration_ms))
-}
-
-#[allow(dead_code)]
-async fn llm_promotion_gate(cfg: &AiConfig, content: &str, access_count: i64, rep_count: i64) -> Result<(bool, Option<String>, Option<ai::Usage>, String, u64), EngramError> {
-    let truncated = truncate_chars(content, 500);
-
-    let mut context_parts = Vec::new();
-    if access_count >= 30 {
-        context_parts.push(format!("recalled {} times (high practical utility)", access_count));
-    }
-    if rep_count >= 2 {
-        context_parts.push(format!("restated {} times (the user/agent keeps emphasizing this)", rep_count));
-    }
-
-    let user_msg = if context_parts.is_empty() {
-        truncated.to_string()
-    } else {
-        format!("{}\n\n[Context: {}]", truncated, context_parts.join("; "))
-    };
-
-    let schema = prompts::gate_schema();
-
-    let tcr: ai::ToolCallResult<GateResult> = ai::llm_tool_call(
-        cfg, "gate", prompts::GATE_SYSTEM, &user_msg,
-        "gate_decision", "Decide whether to promote this memory to Core",
-        schema,
-    ).await?;
-
-    let approved = tcr.value.decision == "approve";
-    let kind = if approved { tcr.value.kind.or(Some("semantic".into())) } else { None };
-    Ok((approved, kind, tcr.usage, tcr.model, tcr.duration_ms))
 }
 
 /// Apply batch gate results: calls `llm_promotion_gate_batch`, handles

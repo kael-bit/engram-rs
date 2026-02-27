@@ -118,19 +118,15 @@ One call to restore context on wake-up or after compaction:
 
 ### Hybrid Search
 
-Semantic embeddings + BM25 keyword search (with [jieba](https://github.com/messense/jieba-rs) for CJK) + fact-triple lookup → single ranked result set. Unified scoring: `0.5 × relevance + 0.3 × memory_weight + 0.2 × recency`, where `memory_weight = (importance + rep_bonus + access_bonus) × kind_boost × layer_boost`. Embedding cache for repeat queries (<15ms).
+Semantic embeddings + BM25 keyword search (with [jieba](https://github.com/messense/jieba-rs) for CJK) → single ranked result set. Unified scoring: `0.5 × relevance + 0.3 × memory_weight + 0.2 × recency`, where `memory_weight = (importance + rep_bonus + access_bonus) × kind_boost × layer_boost`. Embedding cache for repeat queries (<15ms).
 
 ### Memory Types
 
 | Kind | Decay | Use Case |
 |------|-------|----------|
-| `semantic` | Normal | Facts, preferences, knowledge (default) |
+| `semantic` | Normal | Knowledge, preferences, decisions (default) |
 | `episodic` | Normal | Events, experiences, time-bound context |
 | `procedural` | Never | Workflows, instructions, how-to — persists indefinitely |
-
-### Fact Triples
-
-Structured (subject, predicate, object) relationships extracted from memories. Contradictions are automatically resolved — new facts supersede old ones with timestamps.
 
 ### Namespace Isolation
 

@@ -377,12 +377,6 @@ fn add_auth(resolved: &ResolvedConfig, builder: reqwest::RequestBuilder) -> reqw
 // LLM chat
 // ---------------------------------------------------------------------------
 
-/// Send a chat completion request, return the response text.
-#[allow(dead_code)]
-pub async fn llm_chat(cfg: &AiConfig, system: &str, user: &str) -> Result<String, EngramError> {
-    Ok(llm_chat_as(cfg, "", system, user).await?.content)
-}
-
 /// Like llm_chat but uses a component-specific model if configured.
 /// Returns LlmResult with usage stats and model info.
 pub async fn llm_chat_as(cfg: &AiConfig, component: &str, system: &str, user: &str) -> Result<LlmResult, EngramError> {
