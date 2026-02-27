@@ -13,7 +13,6 @@ mod cluster;
 mod distill;
 mod merge;
 mod sandbox;
-mod summary;
 mod triage;
 
 pub use audit::{audit_memories, AuditOp, AuditResult, RawAuditOp, AuditToolResponse, audit_tool_schema, resolve_audit_ops};
@@ -23,7 +22,6 @@ pub use triage::dedup_buffer;
 
 use distill::distill_sessions;
 use merge::{merge_similar, reconcile_updates};
-use summary::update_core_summary;
 use triage::{triage_buffer, heuristic_triage_buffer_sync};
 
 #[derive(Debug, Deserialize)]
@@ -302,12 +300,6 @@ pub async fn consolidate(
     // compression at resume time. The summary is cached in engram_meta and
     // invalidated by a hash of Core memory IDs + content lengths.
     // Skipped in `off` mode (requires LLM for summarization).
-    if llm_level != "off" {
-        if let Some(ref cfg) = ai {
-            update_core_summary(&db, cfg).await;
-        }
-    }
-
     result
 }
 
