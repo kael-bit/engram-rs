@@ -95,7 +95,9 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(index))
         .route("/health", get(health_only))
         .route("/stats", get(stats))
-        .route("/ui", get(serve_ui));
+        .route("/ui", get(serve_ui))
+        .route("/ui/style.css", get(serve_css))
+        .route("/ui/app.js", get(serve_js));
 
     let protected = Router::new()
         .route("/memories", post(create_memory).get(list_memories).delete(batch_delete))
@@ -157,6 +159,23 @@ pub fn router(state: AppState) -> Router {
 
 async fn serve_ui() -> impl axum::response::IntoResponse {
     axum::response::Html(include_str!("../../web/index.html"))
+}
+
+async fn serve_css() -> impl axum::response::IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        include_str!("../../web/style.css"),
+    )
+}
+
+async fn serve_js() -> impl axum::response::IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        include_str!("../../web/app.js"),
+    )
 }
 
 /// Shared health data (without endpoints) used by both `/` and `/health`.

@@ -791,6 +791,11 @@ impl MemoryDB {
             return Ok(Some(m));
         }
 
+        // Episodic memories are time-bound — they never belong in Core.
+        if target == Layer::Core && m.kind == "episodic" {
+            return Ok(Some(m));
+        }
+
         // Kind-differentiated decay: episodic fastest, semantic medium, procedural slowest
         let decay = match target {
             Layer::Buffer => target.default_decay(),

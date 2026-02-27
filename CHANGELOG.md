@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.14.0
+
+### Breaking Changes
+
+- **Rerank removed**: `rerank` field removed from `RecallRequest`. LLM re-ranking was default-off and unnecessary — FTS + semantic scoring is sufficient. Reduces recall latency.
+- **Audit redesigned**: Old three-powers global audit replaced with **topic distillation** — condenses bloated topics (≥10 members) into fewer, richer entries. More focused, less wasteful.
+- **Sandbox removed**: The audit sandbox (`RuleChecker`) is no longer needed with the simpler distillation model.
+
+### New Features
+
+- **Episodic Core block**: Episodic memories can never be promoted to Core. Enforced at both candidate collection and DB `promote()` level.
+- **Web UI split**: Single 1300-line `index.html` split into `index.html` + `style.css` + `app.js`, served via `/ui`, `/ui/style.css`, `/ui/app.js`.
+- **Sort by weight**: Web UI memory list supports 4 sort modes — Newest, Oldest, Weight ↓, Weight ↑. Weight uses the same `memory_weight()` formula as recall scoring.
+
+### Improvements
+
+- **Centralized prompts**: All LLM prompts and JSON tool schemas moved to `src/prompts.rs`.
+- **Centralized thresholds**: All 60+ magic numbers from 15+ files moved to `src/thresholds.rs`.
+- **Epoch-based decay**: Decay only runs during active consolidation cycles, not by wall-clock time. Idle agents preserve memories intact.
+- **Buffer redesign**: All new memories enter Buffer. Promotion requires passing through consolidation.
+- **Gate whitelist**: LLM gate uses batch evaluation for Working→Core promotion decisions.
+- **Reconcile merge**: Detects same-topic memories where newer content supersedes older, merging them automatically.
+- **Net code reduction**: ~1400 lines removed across refactoring and feature removal.
+
 ## 0.13.0
 
 ### Breaking Changes

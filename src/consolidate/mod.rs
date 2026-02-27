@@ -706,6 +706,8 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
             && mem.importance >= promote_min_imp;
 
         if by_score || by_age {
+            // Episodic memories are time-bound — skip Core promotion entirely.
+            if mem.kind == "episodic" { continue; }
             promotion_candidates.push((mem.id.clone(), mem.content.clone(), mem.access_count, mem.repetition_count, mem.importance, mem.tags.clone()));
         }
     }
