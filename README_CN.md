@@ -96,6 +96,17 @@ irm https://raw.githubusercontent.com/kael-bit/engram-rs/main/install.ps1 | iex
 
 安装器会交互式引导你完成下载、配置和启动。
 
+### Docker
+
+```bash
+docker run -d --name engram \
+  -p 3917:3917 \
+  -v engram-data:/data \
+  -e ENGRAM_LLM_URL=https://api.openai.com/v1 \
+  -e ENGRAM_LLM_KEY=sk-... \
+  ghcr.io/kael-bit/engram-rs:latest
+```
+
 **给 AI agent 用** — 把这段贴到你的 agent 会话里：
 
 ```

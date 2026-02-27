@@ -98,6 +98,17 @@ irm https://raw.githubusercontent.com/kael-bit/engram-rs/main/install.ps1 | iex
 
 The installer walks you through download, configuration, and startup interactively.
 
+### Docker
+
+```bash
+docker run -d --name engram \
+  -p 3917:3917 \
+  -v engram-data:/data \
+  -e ENGRAM_LLM_URL=https://api.openai.com/v1 \
+  -e ENGRAM_LLM_KEY=sk-... \
+  ghcr.io/kael-bit/engram-rs:latest
+```
+
 **For AI agents** — paste this into your session:
 
 ```
