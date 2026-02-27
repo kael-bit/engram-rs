@@ -53,6 +53,8 @@ pub(super) async fn topiary_topic_handler(
             let memories: Vec<serde_json::Value> = blocking(move || {
                 mem_ids.iter().filter_map(|id| {
                     db2.get(id).ok().flatten().map(|m| {
+                        // Topic drill-down is active retrieval — bump access_count
+                        let _ = db2.touch(&m.id);
                         serde_json::json!({
                             "id": m.id,
                             "content": m.content,
