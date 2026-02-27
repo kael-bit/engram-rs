@@ -169,7 +169,7 @@ You have persistent memory via engram MCP tools.
 
 **Trigger:** Every session start OR after context compaction.
 
-- Call `engram_resume` with hours=6 and compact=true.
+- Call `engram_resume`.
 - **Rule:** If you see a `<summary>` block or "Compacted" system message, you MUST resume immediately, before responding to any user message.
 
 **Resume returns 4 sections:**
@@ -233,7 +233,7 @@ You have persistent memory via engram at http://localhost:3917
 **Trigger:** Every session start OR after context compaction.
 
 ```bash
-curl -sf "http://localhost:3917/resume?hours=6&compact=true"
+curl -sf "http://localhost:3917/resume"
 ```
 
 **Rule:** If you see a `<summary>` block or "Compacted" system message, you MUST resume immediately, before responding to any user message.

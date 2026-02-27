@@ -121,7 +121,7 @@ pub(super) async fn do_resume(
     headers: axum::http::HeaderMap,
     Query(mut q): Query<ResumeQuery>,
 ) -> Result<Response, EngramError> {
-    let hours = q.hours.unwrap_or(4.0).clamp(0.0, 87_600.0);
+    let hours = q.hours.unwrap_or(12.0).clamp(0.0, 87_600.0);
     if q.ns.is_none() {
         q.ns = get_namespace(&headers);
     }

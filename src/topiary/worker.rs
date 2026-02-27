@@ -1,11 +1,12 @@
 //! Debounced async background worker for topiary tree rebuilds.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use super::{Entry, TopicTree};
+use super::{Entry, TopicNode, TopicTree};
 use crate::ai::AiConfig;
 use crate::db::{Layer, MemoryDB};
 
@@ -115,6 +116,22 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
         "topiary tree built"
     );
 
+    // Step 3.5: Inherit names from previously cached tree
+    let db3 = db.clone();
+    let (old_tree_data, old_ids_data) = tokio::task::spawn_blocking(move || {
+        (
+            db3.get_meta("topiary_tree_full"),
+            db3.get_meta("topiary_entry_ids"),
+        )
+    })
+    .await
+    .unwrap_or((None, None));
+
+    let inherited = inherit_names(&mut tree.roots, &entries, old_tree_data, old_ids_data);
+    if inherited > 0 {
+        info!(inherited, "topiary inherited names from cache");
+    }
+
     // Step 4: Name dirty topics (if AI available)
     if let Some(cfg) = ai {
         if cfg.has_llm() {
@@ -126,6 +143,19 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
                     "topiary naming complete"
                 );
             }
+        }
+    }
+
+    // Step 4.5: Don't overwrite good cached tree with all-unnamed tree
+    {
+        let total_leaves: usize = tree.roots.iter().map(|r| r.leaf_count()).sum();
+        let unnamed = count_unnamed_leaves(&tree.roots);
+        if unnamed == total_leaves && total_leaves > 0 {
+            warn!(
+                unnamed,
+                "topiary: all topics unnamed, keeping cached tree"
+            );
+            return;
         }
     }
 
@@ -222,4 +252,138 @@ fn load_entries(db: &MemoryDB) -> Vec<Entry> {
     }
 
     entries
+}
+
+// ── Name inheritance helpers ──────────────────────────────────────────────
+
+/// Inherit topic names from the previously cached tree for leaves whose
+/// member composition hasn't changed significantly (Jaccard >= 0.5).
+fn inherit_names(
+    new_roots: &mut [TopicNode],
+    new_entries: &[Entry],
+    old_tree_json: Option<String>,
+    old_entry_ids_json: Option<String>,
+) -> usize {
+    let old_tree_str = match old_tree_json {
+        Some(s) => s,
+        None => return 0,
+    };
+    let old_ids_str = match old_entry_ids_json {
+        Some(s) => s,
+        None => return 0,
+    };
+    let old_tree: TopicTree = match serde_json::from_str(&old_tree_str) {
+        Ok(t) => t,
+        Err(_) => return 0,
+    };
+    let old_entry_ids: Vec<String> = match serde_json::from_str(&old_ids_str) {
+        Ok(ids) => ids,
+        Err(_) => return 0,
+    };
+
+    // Collect old named leaves: (name, set of member entry IDs)
+    let mut old_named: Vec<(String, HashSet<String>)> = Vec::new();
+    for root in &old_tree.roots {
+        collect_named_leaves(root, &old_entry_ids, &mut old_named);
+    }
+
+    if old_named.is_empty() {
+        return 0;
+    }
+
+    let mut inherited = 0;
+    for root in new_roots.iter_mut() {
+        inherited += inherit_in_node(root, new_entries, &old_named);
+    }
+    inherited
+}
+
+fn collect_named_leaves(
+    node: &TopicNode,
+    entry_ids: &[String],
+    out: &mut Vec<(String, HashSet<String>)>,
+) {
+    if node.is_leaf() {
+        if let Some(ref name) = node.name {
+            let ids: HashSet<String> = node
+                .members
+                .iter()
+                .filter_map(|&i| entry_ids.get(i).cloned())
+                .collect();
+            if !ids.is_empty() {
+                out.push((name.clone(), ids));
+            }
+        }
+    } else {
+        for child in &node.children {
+            collect_named_leaves(child, entry_ids, out);
+        }
+    }
+}
+
+fn inherit_in_node(
+    node: &mut TopicNode,
+    new_entries: &[Entry],
+    old_named: &[(String, HashSet<String>)],
+) -> usize {
+    if node.is_leaf() {
+        if !node.dirty || node.name.is_some() {
+            return 0;
+        }
+        let new_ids: HashSet<String> = node
+            .members
+            .iter()
+            .filter_map(|&i| new_entries.get(i).map(|e| e.id.clone()))
+            .collect();
+        if new_ids.is_empty() {
+            return 0;
+        }
+
+        let mut best_score = 0.0f32;
+        let mut best_name: Option<&str> = None;
+        for (name, old_ids) in old_named {
+            let intersection = new_ids.iter().filter(|id| old_ids.contains(*id)).count();
+            let union = new_ids.len() + old_ids.len() - intersection;
+            let jaccard = if union > 0 {
+                intersection as f32 / union as f32
+            } else {
+                0.0
+            };
+            if jaccard > best_score {
+                best_score = jaccard;
+                best_name = Some(name.as_str());
+            }
+        }
+
+        if best_score >= 0.5 {
+            if let Some(name) = best_name {
+                node.name = Some(name.to_string());
+                node.dirty = false;
+                return 1;
+            }
+        }
+        0
+    } else {
+        let mut count = 0;
+        for child in &mut node.children {
+            count += inherit_in_node(child, new_entries, old_named);
+        }
+        count
+    }
+}
+
+fn count_unnamed_leaves(roots: &[TopicNode]) -> usize {
+    roots.iter().map(|r| count_unnamed_in(r)).sum()
+}
+
+fn count_unnamed_in(node: &TopicNode) -> usize {
+    if node.is_leaf() {
+        if node.name.is_none() {
+            1
+        } else {
+            0
+        }
+    } else {
+        node.children.iter().map(|c| count_unnamed_in(c)).sum()
+    }
 }

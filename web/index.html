@@ -110,10 +110,10 @@ label { font-size:11px; color:#888; }
 .topic-card .tc-head { display:flex; justify-content:space-between; align-items:center; }
 .topic-card .tc-name { font-size:13px; color:#eee; font-weight:500; }
 .topic-card .tc-id { font-size:10px; color:#555; margin-right:8px; }
-.topic-card .tc-count { font-size:11px; color:#5b9cf5; }
+.topic-card .tc-count { font-size:11px; color:#5b9cf5; flex-shrink:0; }
 .topic-card .tc-sample { font-size:11px; color:#666; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .topic-card .tc-body { margin-top:10px; padding-top:10px; border-top:1px solid #252525; }
-.topic-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:8px; }
+.topic-grid { display:flex; flex-direction:column; gap:6px; }
 .trigger-tag { display:inline-block; padding:3px 10px; border-radius:12px; font-size:11px; background:#222; color:#888; margin:3px; border:1px solid #333; }
 .trigger-tag:hover { color:#ccc; border-color:#555; }
 .resume-section { margin-bottom:16px; }
@@ -495,7 +495,7 @@ function renderResume(){
     <h2>Resume</h2>
     <div class="card">
       <div class="row" style="margin:0;gap:12px;flex-wrap:wrap">
-        <label>Hours <input type="number" id="resHours" value="6" min="1" max="168" style="width:55px"></label>
+        <label>Hours <input type="number" id="resHours" value="12" min="1" max="168" style="width:55px"></label>
         <label><input type="checkbox" id="resCompact"> compact</label>
         <label>Budget <input type="number" id="resBudget" value="0" min="0" style="width:70px" placeholder="0=unlimited"></label>
         <label>Format <select id="resFormat" style="padding:4px 8px;background:#222;color:#eee;border:1px solid #444;border-radius:4px"><option value="json">JSON</option><option value="text">Raw Text</option></select></label>
@@ -567,7 +567,7 @@ function renderResumeResult(r,ms){
 }
 
 async function doResume(){
-  const hours=parseInt(document.getElementById('resHours').value)||6;
+  const hours=parseInt(document.getElementById('resHours').value)||12;
   const compact=document.getElementById('resCompact').checked;
   const budget=parseInt(document.getElementById('resBudget').value)||0;
   const fmt=document.getElementById('resFormat').value;
@@ -616,7 +616,7 @@ async function expandResumeTopic(el,topicId){
     const h={'Content-Type':'application/json'};
     if(tk)h['Authorization']='Bearer '+tk;
     if(ns&&ns!=='default')h['X-Namespace']=ns;
-    const res=await fetch(A+'/topic',{method:'POST',headers:h,body:JSON.stringify({ids:[topicId]})});
+    const res=await fetch(A+'/topic?touch=false',{method:'POST',headers:h,body:JSON.stringify({ids:[topicId]})});
     const d=await res.json();
     const mems=(d[topicId]&&d[topicId].memories)||[];
     if(!mems.length){body.innerHTML='<div class="empty">No memories</div>';return;}
@@ -682,7 +682,7 @@ async function toggleTopic(topicId){
     const h={'Content-Type':'application/json'};
     if(tk)h['Authorization']='Bearer '+tk;
     if(ns&&ns!=='default')h['X-Namespace']=ns;
-    const res=await fetch(A+'/topic',{method:'POST',headers:h,body:JSON.stringify({ids:[topicId]})});
+    const res=await fetch(A+'/topic?touch=false',{method:'POST',headers:h,body:JSON.stringify({ids:[topicId]})});
     const d=await res.json();
     const mems=(d[topicId]&&d[topicId].memories)||[];
     if(!mems.length){body.innerHTML='<div class="empty">No memories in this topic</div>';return;}

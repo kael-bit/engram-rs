@@ -186,7 +186,7 @@ server.tool(
     "session notes. Use workspace tags to filter by current work context. " +
     "Compact mode (default) minimizes token usage.",
   {
-    hours: z.number().positive().optional().describe("Look back N hours for recent/sessions (default 4)"),
+    hours: z.number().positive().optional().describe("Look back N hours for recent/sessions (default 12)"),
     namespace: z.string().optional().describe("Filter by namespace (also includes \"default\" namespace automatically)"),
     workspace: z.string().optional().describe("Comma-separated workspace tags to filter core/working memories (e.g. 'engram,rust')"),
     compact: z.boolean().optional().describe("Compact output: content+tags only (default true)"),

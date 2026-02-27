@@ -1,6 +1,6 @@
 //! Topiary topic API handlers.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::Json;
 use serde::Deserialize;
 use tracing::debug;
@@ -10,15 +10,25 @@ use crate::AppState;
 use super::blocking;
 
 /// POST /topic — fetch topic details by IDs.
+/// Default: touches memories (bumps access_count for active retrieval).
+/// Pass `?touch=false` to skip (e.g. web UI browsing).
 #[derive(Deserialize)]
 pub(super) struct TopicRequest {
     ids: Vec<String>,
 }
 
+#[derive(Deserialize, Default)]
+pub(super) struct TopicQuery {
+    #[serde(default)]
+    touch: Option<bool>,
+}
+
 pub(super) async fn topiary_topic_handler(
     State(state): State<AppState>,
+    Query(query): Query<TopicQuery>,
     Json(body): Json<TopicRequest>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
+    let do_touch = query.touch.unwrap_or(true);
     let db = state.db.clone();
 
     // Load the full serialized TopicTree and entry IDs
@@ -53,14 +63,17 @@ pub(super) async fn topiary_topic_handler(
             let memories: Vec<serde_json::Value> = blocking(move || {
                 mem_ids.iter().filter_map(|id| {
                     db2.get(id).ok().flatten().map(|m| {
-                        // Topic drill-down is active retrieval — bump access_count
-                        let _ = db2.touch(&m.id);
+                        if do_touch {
+                            let _ = db2.touch(&m.id);
+                        }
                         serde_json::json!({
                             "id": m.id,
                             "content": m.content,
                             "layer": m.layer as i32,
                             "importance": m.importance,
                             "tags": m.tags,
+                            "kind": m.kind,
+                            "created_at": m.created_at,
                         })
                     })
                 }).collect()
