@@ -165,17 +165,16 @@ Then add the prompt template below to your project instructions (`CLAUDE.md`, `A
 
 You have persistent memory via engram MCP tools.
 
-### 1. Context Restoration (Tool: `engram_resume`)
+### 1. Context Restoration — ⚠️ MANDATORY FIRST ACTION (Tool: `engram_resume`)
 
-**Trigger:** Every session start OR after context compaction.
+**Your VERY FIRST tool call in every session must be `engram_resume`.** No exceptions. Do this before reading files, before answering the user, before anything else.
 
-- Call `engram_resume`.
-- **Rule:** If you see a `<summary>` block or "Compacted" system message, you MUST resume immediately, before responding to any user message.
+**Why:** Resume returns your topic index — the ONLY way to access your Working memories. Without it you are operating blind. A compaction summary is NOT a substitute; it lacks your topic index and cannot be drilled into.
 
 **Resume returns 4 sections:**
 - **Core** — permanent rules/identity (full text, never truncated)
 - **Recent** — recently changed memories for short-term continuity
-- **Topics** — a named topic index of ALL your memories (e.g. `kb1: "Deploy procedures" [5]`). Use `engram_topic` with IDs to drill into any topic and see its full memories.
+- **Topics** — a named topic index of ALL your memories (e.g. `kb1: "Deploy procedures" [5]`). Use `engram_topic` with IDs to drill into any topic. **This is your memory's table of contents.**
 - **Triggers** — pre-action safety tags for reflex recall
 
 ### 2. When & What to Store (Tool: `engram_store`)
@@ -228,20 +227,16 @@ No build step. Add the prompt template below to your project instructions (`CLAU
 
 You have persistent memory via engram at http://localhost:3917
 
-### 1. Context Restoration
+### 1. Context Restoration — ⚠️ MANDATORY FIRST ACTION
 
-**Trigger:** Every session start OR after context compaction.
+**Your VERY FIRST tool call in every session must be `curl -sf http://localhost:3917/resume`.** No exceptions. Do this before reading files, before answering the user, before anything else.
 
-```bash
-curl -sf "http://localhost:3917/resume"
-```
-
-**Rule:** If you see a `<summary>` block or "Compacted" system message, you MUST resume immediately, before responding to any user message.
+**Why:** Resume returns your topic index — the ONLY way to access your Working memories. Without it you are operating blind. A compaction summary is NOT a substitute; it lacks your topic index and cannot be drilled into.
 
 **Resume returns 4 sections:**
 - **Core** — permanent rules/identity (full text, never truncated)
 - **Recent** — recently changed memories for short-term continuity
-- **Topics** — a named topic index of ALL your memories (e.g. `kb1: "Deploy procedures" [5]`). Use `POST /topic {"ids":["kb1"]}` to drill into any topic.
+- **Topics** — a named topic index of ALL your memories (e.g. `kb1: "Deploy procedures" [5]`). Use `POST /topic {"ids":["kb1"]}` to drill into any topic. **This is your memory's table of contents.**
 - **Triggers** — pre-action safety tags for reflex recall
 
 ### 2. When & What to Store
