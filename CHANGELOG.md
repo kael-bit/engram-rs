@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.2
+
+### Fixes
+
+- **Topiary name inheritance**: Rebuilds now compare new topics with cached tree by member overlap (Jaccard ≥ 0.5) and inherit existing names, avoiding unnecessary LLM calls. Only truly new/changed topics trigger naming.
+- **Unnamed tree protection**: If all topics remain unnamed after naming (e.g. LLM timeout), the tree is not stored — preserving the last good cached tree.
+- **`/topic` touch control**: Default behavior is `touch=true` (bumps access_count for agent retrieval). Web UI passes `?touch=false` to avoid polluting access metrics during browsing.
+
+### Changes
+
+- Resume default hours: 4 → 12
+- Web: topic grid layout changed from multi-column grid to single-column list
+- Templates: removed hardcoded `compact=true` and `hours` params (both default correctly)
+
 ## 0.12.0
 
 ### Highlights
