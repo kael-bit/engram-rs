@@ -1,8 +1,9 @@
-FROM rust:1.84-slim AS builder
+FROM rust:1-slim AS builder
 WORKDIR /build
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY web ./web
 RUN cargo build --release
 
 FROM debian:bookworm-slim

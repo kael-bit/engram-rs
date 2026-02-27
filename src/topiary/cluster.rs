@@ -488,7 +488,9 @@ fn subdivide(node: &mut TopicNode, next_id: &mut u32, depth: usize) {
 
 // ── Budget enforcement ────────────────────────────────────
 
-/// When leaf count exceeds budget, re-cluster via k-means into exactly `budget` clusters.
+/// When leaf count exceeds budget, incrementally merge the two most similar
+/// leaves until count <= budget.  This preserves existing topic IDs and names
+/// instead of destructively re-clustering via k-means.
 pub(super) fn enforce_budget(
     leaves: &mut Vec<TopicNode>,
     all_entries: &[Entry],
@@ -501,64 +503,59 @@ pub(super) fn enforce_budget(
     tracing::debug!(
         leaves = leaves.len(),
         budget,
-        "topiary enforce_budget: re-clustering"
+        "topiary enforce_budget: incremental merge"
     );
 
-    let all_members: Vec<usize> = leaves
-        .iter()
-        .flat_map(|l| l.members.iter().copied())
-        .collect();
+    while leaves.len() > budget && leaves.len() >= 2 {
+        // Find the two most similar leaves by centroid cosine similarity
+        let mut best_sim = f32::NEG_INFINITY;
+        let mut best_i = 0;
+        let mut best_j = 1;
 
-    if all_members.is_empty() {
-        leaves.clear();
-        return;
-    }
-
-    let embeddings: Vec<&[f32]> = all_members
-        .iter()
-        .filter_map(|&idx| all_entries.get(idx).map(|e| e.embedding.as_slice()))
-        .collect();
-
-    let assignments = kmeans_vectors(&embeddings, budget);
-
-    let mut clusters: Vec<Vec<usize>> = vec![Vec::new(); budget];
-    for (i, &cluster_id) in assignments.iter().enumerate() {
-        if i < all_members.len() {
-            clusters[cluster_id].push(all_members[i]);
+        for i in 0..leaves.len() {
+            for j in (i + 1)..leaves.len() {
+                let sim = cosine_similarity(&leaves[i].centroid, &leaves[j].centroid);
+                if sim > best_sim {
+                    best_sim = sim;
+                    best_i = i;
+                    best_j = j;
+                }
+            }
         }
-    }
 
-    let mut new_leaves = Vec::new();
-    let mut id_counter = 0u32;
-    for cluster_members in clusters {
-        if cluster_members.is_empty() {
-            continue;
-        }
-        id_counter += 1;
-        let vecs: Vec<&[f32]> = cluster_members
-            .iter()
+        // Merge j into i (remove j first since j > i)
+        let removed = leaves.remove(best_j);
+        let target = &mut leaves[best_i];
+
+        // Combine members
+        target.members.extend(removed.members);
+
+        // Recalculate centroid from all member embeddings
+        let vecs: Vec<&[f32]> = target.members.iter()
             .filter_map(|&m| all_entries.get(m).map(|e| e.embedding.as_slice()))
             .collect();
-        let centroid = mean_vector(&vecs);
-        let avg_sim = if cluster_members.len() > 1 {
-            let sum: f32 = cluster_members
-                .iter()
-                .filter_map(|&m| all_entries.get(m).map(|e| cosine_similarity(&e.embedding, &centroid)))
-                .sum();
-            sum / cluster_members.len() as f32
-        } else {
-            1.0
-        };
-        new_leaves.push(TopicNode {
-            id: format!("kb{}", id_counter),
-            name: None,
-            centroid,
-            members: cluster_members,
-            children: Vec::new(),
-            dirty: true,
-            avg_sim,
-        });
-    }
+        if !vecs.is_empty() {
+            target.centroid = mean_vector(&vecs);
+        }
 
-    *leaves = new_leaves;
+        // Recalculate avg_sim
+        if target.members.len() > 1 {
+            let sum: f32 = target.members.iter()
+                .filter_map(|&m| all_entries.get(m).map(|e| cosine_similarity(&e.embedding, &target.centroid)))
+                .sum();
+            target.avg_sim = sum / target.members.len() as f32;
+        } else {
+            target.avg_sim = 1.0;
+        }
+
+        // Mark as dirty so it gets renamed (merged topic needs a new name)
+        target.dirty = true;
+
+        tracing::trace!(
+            merged_into = %target.id,
+            new_size = target.members.len(),
+            similarity = best_sim,
+            "merged two most similar leaves"
+        );
+    }
 }
