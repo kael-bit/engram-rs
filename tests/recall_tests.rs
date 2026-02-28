@@ -580,6 +580,14 @@ fn prefilter_falls_back_when_few_candidates() {
     sem_emb[0] = 0.9;
     sem_emb[1] = 0.1;
 
+    // Add padding memories so HNSW graph is stable (2 entries is too few)
+    for i in 0..8 {
+        let pad = db.insert(MemoryInput::new(&format!("padding memory number {i}"))).unwrap();
+        let mut pad_emb = vec![0.0f32; 64];
+        pad_emb[(i + 2) % 64] = 1.0; // orthogonal to query/semantic embeddings
+        db.set_embedding(&pad.id, &pad_emb).unwrap();
+    }
+
     // Only 1 FTS match — not enough for prefiltering with limit=2
     let mem = db.insert(MemoryInput::new("rare keyword xylophone")).unwrap();
     db.set_embedding(&mem.id, &qemb).unwrap();
