@@ -272,8 +272,8 @@ fn kmeans_split(
             };
             let mut best_k = 0;
             let mut best_sim = -1.0f32;
-            for ki in 0..centroids.len() {
-                let sim = cosine_similarity(emb, &centroids[ki]);
+            for (ki, centroid) in centroids.iter().enumerate() {
+                let sim = cosine_similarity(emb, centroid);
                 if sim > best_sim {
                     best_sim = sim;
                     best_k = ki;
@@ -287,6 +287,7 @@ fn kmeans_split(
         if !changed {
             break;
         }
+        #[allow(clippy::needless_range_loop)]
         for ki in 0..centroids.len() {
             let vecs: Vec<&[f32]> = members
                 .iter()
@@ -390,8 +391,8 @@ pub(super) fn kmeans_vectors(vectors: &[&[f32]], k: usize) -> Vec<usize> {
         for i in 0..n {
             let mut best_k = 0;
             let mut best_sim = -1.0f32;
-            for ki in 0..k {
-                let sim = cosine_similarity(vectors[i], &centroids[ki]);
+            for (ki, centroid) in centroids.iter().enumerate() {
+                let sim = cosine_similarity(vectors[i], centroid);
                 if sim > best_sim {
                     best_sim = sim;
                     best_k = ki;
@@ -405,6 +406,7 @@ pub(super) fn kmeans_vectors(vectors: &[&[f32]], k: usize) -> Vec<usize> {
         if !changed {
             break;
         }
+        #[allow(clippy::needless_range_loop)]
         for ki in 0..k {
             let vecs: Vec<&[f32]> = (0..n)
                 .filter(|&i| assignments[i] == ki)

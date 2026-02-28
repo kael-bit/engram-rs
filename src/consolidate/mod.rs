@@ -9,6 +9,9 @@ use crate::SharedDB;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+/// Gate candidate: (id, content, layer, importance, weight, tags)
+type GateCandidate = (String, String, i64, i64, f64, Vec<String>);
+
 mod audit;
 mod cluster;
 mod distill;
@@ -865,7 +868,7 @@ struct GateBatchDecision {
 /// Usage/model/duration are from the single call and shared across all results.
 async fn llm_promotion_gate_batch(
     cfg: &AiConfig,
-    candidates: &[(String, String, i64, i64, f64, Vec<String>)],
+    candidates: &[GateCandidate],
 ) -> Result<(Vec<(String, bool, Option<String>)>, Option<ai::Usage>, String, u64), EngramError> {
     if candidates.is_empty() {
         return Ok((vec![], None, String::new(), 0));
@@ -925,7 +928,7 @@ async fn llm_promotion_gate_batch(
 async fn apply_batch_gate_results(
     db: &SharedDB,
     ai: &Option<AiConfig>,
-    candidates: &[(String, String, i64, i64, f64, Vec<String>)],
+    candidates: &[GateCandidate],
     result: &mut ConsolidateResponse,
     epoch: i64,
 ) {

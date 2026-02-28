@@ -246,6 +246,7 @@ pub(super) async fn do_resume(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_resume_text(
     core: &[db::Memory],
     recent: &[db::Memory],
