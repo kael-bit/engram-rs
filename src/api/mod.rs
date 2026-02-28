@@ -63,13 +63,23 @@ fn get_namespace(headers: &axum::http::HeaderMap) -> Option<String> {
 }
 
 /// Auth middleware: checks Bearer token if ENGRAM_API_KEY is configured.
+/// Also logs every API request (method + path + namespace).
 async fn require_auth(
     State(state): State<AppState>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, EngramError> {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let ns = get_namespace(req.headers()).unwrap_or_default();
+
+    let start = std::time::Instant::now();
+
     let Some(ref expected) = state.api_key else {
-        return Ok(next.run(req).await);
+        let resp = next.run(req).await;
+        let ms = start.elapsed().as_millis();
+        tracing::info!(%method, %path, ns, elapsed_ms = ms, "api request");
+        return Ok(resp);
     };
 
     let unauthorized = || EngramError::Unauthorized;
@@ -84,8 +94,12 @@ async fn require_auth(
 
     // constant-time comparison to prevent timing attacks
     if token.as_bytes().ct_eq(expected.as_bytes()).into() {
-        Ok(next.run(req).await)
+        let resp = next.run(req).await;
+        let ms = start.elapsed().as_millis();
+        tracing::info!(%method, %path, ns, elapsed_ms = ms, "api request");
+        Ok(resp)
     } else {
+        tracing::warn!(%method, %path, "unauthorized api request");
         Err(unauthorized())
     }
 }

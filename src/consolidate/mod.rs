@@ -500,23 +500,6 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
         .unwrap_or(0) + 1;
     db.set_meta("consolidation_epoch", &epoch.to_string()).ok();
 
-    // --- Working layer quality rules (before main consolidation) ---
-
-    // Rule 1: auto-extract Working memories — legacy proxy extraction noise.
-    // Just tag them so they're deprioritized, but don't demote to Buffer.
-    // Working memories never go back to Buffer.
-    let auto_extract_tagged = 0usize;
-    // (Keeping the counter for the info! log below, but no longer demoting.)
-
-    // Rule 2: gate-rejected Working memories stay in Working.
-    // Working memories are never deleted — they just lose importance over time.
-    // The gate-rejected tags prevent them from being re-evaluated for Core promotion.
-    let gate_rejected_cleaned = 0usize;
-
-    if auto_extract_tagged > 0 || gate_rejected_cleaned > 0 {
-        info!(auto_extract_tagged, gate_rejected_cleaned, "Working quality cleanup");
-    }
-
     let _promote_threshold = req.and_then(|r| r.promote_threshold).unwrap_or(3);
     let promote_min_imp = req.and_then(|r| r.promote_min_importance).unwrap_or(0.6);
     let decay_threshold = req.and_then(|r| r.decay_drop_threshold).unwrap_or(0.01);
@@ -819,8 +802,8 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
 
     ConsolidateResponse {
         promoted,
-        decayed: decayed + gate_rejected_cleaned,
-        demoted: demoted + auto_extract_tagged,
+        decayed,
+        demoted,
         merged: 0,
         importance_decayed,
         gate_rejected: 0,
