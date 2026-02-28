@@ -37,8 +37,12 @@ cargo build --release
 
 ## Step 2: Start engram
 
+engram **requires** an embedding provider — without it, semantic recall doesn't work and the server will refuse to start. At minimum, set `ENGRAM_EMBED_URL`:
+
 ```bash
-# Minimal — just memory engine, no AI features
+# Minimal — embedding only, no LLM features (dedup, consolidation, gating)
+ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings \
+ENGRAM_EMBED_KEY=sk-xxx \
 ./engram
 ```
 

@@ -15,7 +15,7 @@ Most agent memory is a flat store — dump everything in, keyword search to get 
 ## Quick Start
 
 ```bash
-# Install and start
+# Install (interactive — will prompt for embedding provider config)
 curl -fsSL https://raw.githubusercontent.com/kael-bit/engram-rs/main/install.sh | bash
 
 # Store a memory
