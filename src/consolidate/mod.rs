@@ -991,7 +991,7 @@ async fn apply_batch_gate_results(
             match llm_promotion_gate_batch(cfg, candidates).await {
                 Ok((decisions, usage, model, duration_ms)) => {
                     // Log the single LLM call
-                    log_llm_usage(&db, "gate", &usage, &model, duration_ms);
+                    log_llm_usage(db, "gate", &usage, &model, duration_ms);
                     // Process each decision
                     for (id, approved, kind) in decisions {
                         if approved {
