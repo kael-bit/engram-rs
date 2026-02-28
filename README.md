@@ -203,9 +203,11 @@ Each cycle executes the following steps in order:
 
 When a topic cluster grows too large (10+ memories), engram condenses overlapping memories into fewer, richer entries — preserving all specific details while reducing redundancy. Up to 2 topics are distilled per consolidation cycle.
 
-## Namespace Isolation
+## Multi-Agent & Namespace Isolation
 
-A single engram instance supports multiple projects. Each namespace maintains an isolated memory space:
+A single engram instance can serve multiple agents concurrently. SQLite WAL mode, a connection pool, and an `RwLock`-protected vector index make concurrent reads and writes safe out of the box.
+
+Use the `X-Namespace` header to give each agent (or project) its own isolated memory space:
 
 ```bash
 # Project-specific memories
