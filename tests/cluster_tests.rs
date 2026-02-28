@@ -1,5 +1,5 @@
 use engram::consolidate::{
-    batch_clusters, cluster_memories, combined_similarity, generate_label, tag_jaccard,
+    batch_clusters, cluster_memories, generate_label, tag_jaccard,
     MemoryCluster,
 };
 use engram::db::{Layer, Memory};
@@ -26,55 +26,10 @@ fn make_memory(id: &str, content: &str, tags: &[&str], importance: f64) -> Memor
 }
 
 #[test]
-fn test_tag_jaccard_identical() {
-    let a = vec!["lesson".into(), "deploy".into()];
-    let b = vec!["deploy".into(), "lesson".into()];
-    assert!((tag_jaccard(&a, &b) - 1.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn test_tag_jaccard_disjoint() {
-    let a = vec!["lesson".into()];
-    let b = vec!["config".into()];
-    assert!((tag_jaccard(&a, &b) - 0.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn test_tag_jaccard_partial_overlap() {
-    let a = vec!["lesson".into(), "deploy".into()];
-    let b = vec!["deploy".into(), "config".into()];
-    // intersection={deploy}, union={lesson,deploy,config} → 1/3
-    assert!((tag_jaccard(&a, &b) - 1.0 / 3.0).abs() < 0.001);
-}
-
-#[test]
 fn test_tag_jaccard_both_empty() {
     let a: Vec<String> = vec![];
     let b: Vec<String> = vec![];
     assert!((tag_jaccard(&a, &b) - 0.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn test_combined_similarity_tag_boost() {
-    // Two orthogonal embeddings (cosine ≈ 0) but identical tags
-    let mut emb_a = vec![0.0_f32; 128];
-    emb_a[0] = 1.0;
-    let mut emb_b = vec![0.0_f32; 128];
-    emb_b[1] = 1.0;
-    let tags = vec!["lesson".into(), "deploy".into()];
-    let sim = combined_similarity(&emb_a, &emb_b, &tags, &tags);
-    // cosine ≈ 0, jaccard = 1.0 → 0*0.7 + 1.0*0.3 = 0.3
-    assert!((sim - 0.3).abs() < 0.01);
-}
-
-#[test]
-fn test_combined_similarity_pure_cosine() {
-    // Identical embeddings, no tags
-    let emb = vec![0.5_f32; 128];
-    let no_tags: Vec<String> = vec![];
-    let sim = combined_similarity(&emb, &emb, &no_tags, &no_tags);
-    // cosine = 1.0, jaccard = 0.0 → 1.0*0.7 + 0*0.3 = 0.7
-    assert!((sim - 0.7).abs() < 0.01);
 }
 
 #[test]

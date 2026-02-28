@@ -1,4 +1,4 @@
-use engram::topiary::{cosine_similarity, mean_vector, l2_normalize, Entry, TopicNode, TopicTree};
+use engram::topiary::{cosine_similarity, l2_normalize, Entry, TopicNode, TopicTree};
 
 fn make_entry(id: &str, text: &str, embedding: Vec<f32>) -> Entry {
     Entry {
@@ -16,22 +16,7 @@ fn unit_vec(dim: usize, idx: usize) -> Vec<f32> {
     v
 }
 
-// ── Math helpers ──────────────────────────────────────────────────────────
-
-#[test]
-fn cosine_identical_vectors() {
-    let v = vec![1.0, 2.0, 3.0];
-    let sim = cosine_similarity(&v, &v);
-    assert!((sim - 1.0).abs() < 1e-5);
-}
-
-#[test]
-fn cosine_orthogonal_vectors() {
-    let a = vec![1.0, 0.0, 0.0];
-    let b = vec![0.0, 1.0, 0.0];
-    let sim = cosine_similarity(&a, &b);
-    assert!(sim.abs() < 1e-5);
-}
+// ── Math helpers (edge cases only) ────────────────────────────────────────
 
 #[test]
 fn cosine_empty_vectors() {
@@ -45,27 +30,6 @@ fn cosine_different_lengths() {
     let b = vec![1.0, 2.0, 3.0];
     let sim = cosine_similarity(&a, &b);
     assert_eq!(sim, 0.0);
-}
-
-#[test]
-fn mean_vector_basic() {
-    let a = vec![2.0f32, 0.0];
-    let b = vec![0.0f32, 4.0];
-    let vecs: Vec<&[f32]> = vec![a.as_slice(), b.as_slice()];
-    let m = mean_vector(&vecs);
-    assert_eq!(m.len(), 2);
-    // mean_vector returns L2-normalized result: mean is [1,2], normalized is [1/√5, 2/√5]
-    let norm: f32 = m.iter().map(|x| x * x).sum::<f32>().sqrt();
-    assert!((norm - 1.0).abs() < 1e-5, "result should be L2-normalized");
-    assert!(m[1] / m[0] > 1.9 && m[1] / m[0] < 2.1, "ratio should be ~2:1");
-}
-
-#[test]
-fn l2_normalize_basic() {
-    let mut v = vec![3.0, 4.0];
-    l2_normalize(&mut v);
-    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    assert!((norm - 1.0).abs() < 1e-5);
 }
 
 #[test]

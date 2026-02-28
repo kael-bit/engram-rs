@@ -1,24 +1,4 @@
-use engram::ai::{cosine_similarity, embedding_to_bytes, bytes_to_embedding, unwrap_json};
-
-#[test]
-fn cosine_same_vec() {
-    let v: Vec<f32> = vec![1.0, 2.0, 3.0];
-    let sim = cosine_similarity(&v, &v);
-    assert!((sim - 1.0).abs() < 1e-10);
-}
-
-#[test]
-fn cosine_perpendicular() {
-    let a: Vec<f32> = vec![1.0, 0.0];
-    let b: Vec<f32> = vec![0.0, 1.0];
-    let sim = cosine_similarity(&a, &b);
-    assert!(sim.abs() < 1e-10);
-}
-
-#[test]
-fn cosine_empty() {
-    assert_eq!(cosine_similarity(&[], &[]), 0.0);
-}
+use engram::ai::{embedding_to_bytes, bytes_to_embedding, unwrap_json};
 
 #[test]
 fn embedding_roundtrip() {

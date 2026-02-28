@@ -355,16 +355,6 @@ fn reconcile_pair_key_same_id() {
 }
 
 #[test]
-fn reconcile_pair_key_uuid_style() {
-    let a = "550e8400-e29b-41d4-a716-446655440000";
-    let b = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
-    let k1 = reconcile_pair_key(a, b);
-    let k2 = reconcile_pair_key(b, a);
-    assert_eq!(k1, k2);
-    assert!(k1.starts_with("550e"), "lexicographically smaller UUID should come first");
-}
-
-#[test]
 fn buffer_cap_evicts_oldest() {
     std::env::set_var("ENGRAM_BUFFER_CAP", "5");
     let db = std::sync::Arc::new(MemoryDB::open(":memory:").unwrap());

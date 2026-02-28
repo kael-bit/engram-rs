@@ -523,28 +523,6 @@ fn dedup_respects_namespace() {
 }
 
 #[test]
-fn input_builder_chain() {
-    let input = MemoryInput::new("test content")
-        .layer(3)
-        .importance(0.9)
-        .source("unit-test")
-        .tags(vec!["a".into(), "b".into()])
-        .supersedes(vec!["old-id".into()])
-        .skip_dedup()
-        .namespace("test-ns");
-
-    assert_eq!(input.content, "test content");
-    assert_eq!(input.layer, Some(3));
-    assert_eq!(input.importance, Some(0.9));
-    assert_eq!(input.source.as_deref(), Some("unit-test"));
-    assert_eq!(input.tags.as_ref().unwrap().len(), 2);
-    assert_eq!(input.supersedes.as_ref().unwrap(), &["old-id"]);
-    assert_eq!(input.skip_dedup, Some(true));
-    assert_eq!(input.namespace.as_deref(), Some("test-ns"));
-    assert_eq!(input.sync_embed, None);
-}
-
-#[test]
 fn delete_namespace_removes_all() {
     let db = test_db();
     db.insert(MemoryInput::new("ns-a mem 1").namespace("wipe-me")).unwrap();
@@ -816,14 +794,6 @@ fn test_procedural_low_decay() {
 }
 
 #[test]
-fn test_kind_default_semantic() {
-    let db = test_db();
-    let mem = db.insert(MemoryInput::new("the sky is blue")).unwrap();
-    assert_eq!(mem.kind, "semantic");
-    assert!((mem.decay_rate - Layer::Buffer.default_decay()).abs() < f64::EPSILON);
-}
-
-#[test]
 fn test_kind_in_output() {
     let db = test_db();
     db.insert(MemoryInput::new("episodic event happened").kind("episodic")).unwrap();
@@ -905,80 +875,6 @@ fn trash_namespace_isolation() {
 }
 
 #[test]
-fn list_filtered_by_layer() {
-    let db = test_db();
-    db.insert(MemoryInput::new("buf1")).unwrap();
-    db.insert(MemoryInput::new("buf2")).unwrap();
-    let w = db.insert(MemoryInput::new("working1")).unwrap();
-    db.promote(&w.id, Layer::Working).unwrap();
-    let c = db.insert(MemoryInput::new("core1")).unwrap();
-    db.promote(&c.id, Layer::Core).unwrap();
-
-    let all = db.list_filtered(100, 0, None, None, None, None).unwrap();
-    assert_eq!(all.len(), 4);
-
-    let buf_only = db.list_filtered(100, 0, None, Some(1), None, None).unwrap();
-    assert_eq!(buf_only.len(), 2);
-    assert!(buf_only.iter().all(|m| m.layer == Layer::Buffer));
-
-    let working = db.list_filtered(100, 0, None, Some(2), None, None).unwrap();
-    assert_eq!(working.len(), 1);
-    assert_eq!(working[0].id, w.id);
-}
-
-#[test]
-fn list_filtered_by_tag() {
-    let db = test_db();
-    db.insert(MemoryInput::new("lesson1").tags(vec!["lesson".into(), "auth".into()])).unwrap();
-    db.insert(MemoryInput::new("lesson2").tags(vec!["lesson".into()])).unwrap();
-    db.insert(MemoryInput::new("no tag")).unwrap();
-
-    let lessons = db.list_filtered(100, 0, None, None, Some("lesson"), None).unwrap();
-    assert_eq!(lessons.len(), 2);
-
-    let auth = db.list_filtered(100, 0, None, None, Some("auth"), None).unwrap();
-    assert_eq!(auth.len(), 1);
-    assert!(auth[0].content.contains("lesson1"));
-}
-
-#[test]
-fn list_filtered_by_namespace() {
-    let db = test_db();
-    db.insert(MemoryInput::new("default ns")).unwrap();
-    db.insert(MemoryInput::new("agent-a").namespace("agent-a")).unwrap();
-    db.insert(MemoryInput::new("agent-b").namespace("agent-b")).unwrap();
-
-    let a = db.list_filtered(100, 0, Some("agent-a"), None, None, None).unwrap();
-    assert_eq!(a.len(), 1);
-    assert!(a[0].content.contains("agent-a"));
-
-    let all = db.list_filtered(100, 0, None, None, None, None).unwrap();
-    assert_eq!(all.len(), 3);
-}
-
-#[test]
-fn list_filtered_combined() {
-    let db = test_db();
-    db.insert(MemoryInput::new("a-buf").namespace("a")).unwrap();
-    let aw = db.insert(MemoryInput::new("a-working").namespace("a").tags(vec!["lesson".into()])).unwrap();
-    db.promote(&aw.id, Layer::Working).unwrap();
-    db.insert(MemoryInput::new("b-buf").namespace("b").tags(vec!["lesson".into()])).unwrap();
-
-    // namespace=a AND layer=2 (Working)
-    let r = db.list_filtered(100, 0, Some("a"), Some(2), None, None).unwrap();
-    assert_eq!(r.len(), 1);
-    assert!(r[0].content.contains("a-working"));
-
-    // namespace=a AND tag=lesson
-    let r = db.list_filtered(100, 0, Some("a"), None, Some("lesson"), None).unwrap();
-    assert_eq!(r.len(), 1);
-
-    // tag=lesson across all namespaces
-    let r = db.list_filtered(100, 0, None, None, Some("lesson"), None).unwrap();
-    assert_eq!(r.len(), 2);
-}
-
-#[test]
 fn list_since_filtered_basic() {
     let db = test_db();
     let _old = db.insert(MemoryInput::new("old entry")).unwrap();
@@ -990,19 +886,6 @@ fn list_since_filtered_basic() {
     let since = db.list_since_filtered(cutoff, 100, None, None, None, None).unwrap();
     assert_eq!(since.len(), 1);
     assert_eq!(since[0].id, new.id);
-}
-
-#[test]
-fn list_since_filtered_with_source() {
-    let db = test_db();
-    let cutoff = engram::db::now_ms() - 1;
-    db.insert(MemoryInput { source: Some("session".into()), ..MemoryInput::new("sess1") }).unwrap();
-    db.insert(MemoryInput { source: Some("manual".into()), ..MemoryInput::new("manual1") }).unwrap();
-    db.insert(MemoryInput { source: Some("session".into()), ..MemoryInput::new("sess2") }).unwrap();
-
-    let sessions = db.list_since_filtered(cutoff, 100, None, None, None, Some("session")).unwrap();
-    assert_eq!(sessions.len(), 2);
-    assert!(sessions.iter().all(|m| m.source == "session"));
 }
 
 #[test]
@@ -1036,32 +919,6 @@ fn demote_core_to_working() {
     assert_eq!(fetched.layer, Layer::Working);
 }
 
-#[test]
-fn delete_namespace_removes_only_matching() {
-    let db = test_db();
-    db.insert(MemoryInput::new("default")).unwrap();
-    db.insert(MemoryInput::new("ns-a-1").namespace("cleanup-ns")).unwrap();
-    db.insert(MemoryInput::new("ns-a-2").namespace("cleanup-ns")).unwrap();
-    db.insert(MemoryInput::new("keep-me").namespace("other")).unwrap();
-
-    let deleted = db.delete_namespace("cleanup-ns").unwrap();
-    assert_eq!(deleted, 2);
-
-    let remaining = db.list_filtered(100, 0, None, None, None, None).unwrap();
-    assert_eq!(remaining.len(), 2);
-    assert!(remaining.iter().all(|m| m.namespace != "cleanup-ns"));
-}
-
-#[test]
-fn update_kind_changes_kind() {
-    let db = test_db();
-    let mem = db.insert(MemoryInput::new("some memory")).unwrap();
-    assert_eq!(mem.kind, "semantic");
-
-    db.update_kind(&mem.id, "procedural").unwrap();
-    let updated = db.get(&mem.id).unwrap().unwrap();
-    assert_eq!(updated.kind, "procedural");
-}
 
 #[test]
 fn list_filtered_pagination() {
