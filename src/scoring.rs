@@ -30,7 +30,7 @@ impl MemoryResult {
             Layer::Buffer => "buffer",
         };
         Self {
-            id: mem.id[..mem.id.len().min(8)].to_string(),
+            id: crate::util::short_id(&mem.id).to_string(),
             content: mem.content.clone(),
             score,
             layer: layer_name.to_string(),

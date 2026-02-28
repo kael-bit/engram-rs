@@ -160,6 +160,7 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
     }
 
     // Step 5: Serialize and store
+    let store_start = std::time::Instant::now();
     let tree_json = tree.to_json(&entries);
     let json_str = match serde_json::to_string(&tree_json) {
         Ok(s) => s,
@@ -202,7 +203,8 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
             info!(
                 entries = entry_count,
                 topics = topic_count,
-                elapsed_ms = start.elapsed().as_millis() as u64,
+                elapsed_ms = store_start.elapsed().as_millis() as u64,
+                total_ms = start.elapsed().as_millis() as u64,
                 "topiary tree stored"
             );
         }
