@@ -179,21 +179,18 @@ You have persistent memory via engram MCP tools.
 
 ### 2. When & What to Store (Tool: `engram_store`)
 
-**Default: store user-provided info** — except anything in DO NOT store below. Engram handles dedup and decay. The cost of forgetting is always higher than the cost of storing.
+**🧠 Store everything valuable, store it immediately, never batch.** Engram handles dedup and decay automatically — over-storing costs nothing, forgetting costs everything.
 
-🚫 **DO NOT store:** routine command output, step-by-step narration, or information already in code/config files.
+**⚠️ CRITICAL:** When the user corrects you or sets a rule → store FIRST, then reply. When a conversation produces a decision, discovery, lesson, or strategy insight → store it in your very next tool call. If you think "I'll store this later", you're already wrong. If the same info comes up again, store it again — repetition strengthens memory weight.
 
-**Store includes:** user identity, preferences, decisions, constraints, lessons from mistakes, and milestone recaps ("what we decided" + "next steps").
-
-**CRITICAL:** When the user corrects you or states a rule → store FIRST, then reply.
-
-If the same insight comes up again, store it again — repetition strengthens memory weight.
+✅ **Store:** user identity, preferences, decisions, constraints, lessons, milestone recaps ("what was decided" + "what to do next"). Use `episodic` for time-bound events, `semantic` for lasting knowledge, `procedural` for permanent workflows.
+**🚫 Don't store:** command output, step-by-step narration, info already in code/config files.
 
 **Storage modifiers (MCP tool parameters):**
 - Workflows/procedures → `kind="procedural"`. **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural.
 - Events/decisions → `kind="episodic"`. Time-bound events: "decided to use X", "v1.0 released", "found bug in Y". These lose relevance as the situation evolves.
 - Facts/lessons → `kind="semantic"` (default). Identity, preferences, lessons, constraints.
-- Lessons → `tags=["lesson", "trigger:kebab-verb"]`
+- Lessons → `tags=["lesson", "trigger:kebab-verb"]` (e.g. `trigger:git-push`, `trigger:deploy-app`)
 - Cross-project knowledge → `namespace="default"`
 
 ### 3. Recalling Memories (Tools: `engram_recall` & `engram_triggers` & `engram_topic`)
@@ -241,21 +238,18 @@ You have persistent memory via engram at http://localhost:3917
 
 ### 2. When & What to Store
 
-**Default: store user-provided info** — except anything in DO NOT store below. Engram handles dedup and decay. The cost of forgetting is always higher than the cost of storing.
+**🧠 Store everything valuable, store it immediately, never batch.** Engram handles dedup and decay automatically — over-storing costs nothing, forgetting costs everything.
 
-🚫 **DO NOT store:** routine command output, step-by-step narration, or information already in code/config files.
+**⚠️ CRITICAL:** When the user corrects you or sets a rule → store FIRST, then reply. When a conversation produces a decision, discovery, lesson, or strategy insight → store it in your very next tool call. If you think "I'll store this later", you're already wrong. If the same info comes up again, store it again — repetition strengthens memory weight.
 
-**Store includes:** user identity, preferences, decisions, constraints, lessons from mistakes, and milestone recaps ("what we decided" + "next steps").
-
-**CRITICAL:** When the user corrects you or states a rule → store FIRST, then reply.
-
-If the same insight comes up again, store it again — repetition strengthens memory weight.
+✅ **Store:** user identity, preferences, decisions, constraints, lessons, milestone recaps ("what was decided" + "what to do next"). Use `episodic` for time-bound events, `semantic` for lasting knowledge, `procedural` for permanent workflows.
+**🚫 Don't store:** command output, step-by-step narration, info already in code/config files.
 
 **Storage modifiers (HTTP JSON body / headers):**
 - Workflows/procedures → `"kind": "procedural"`. **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural.
 - Events/decisions → `"kind": "episodic"`. Time-bound events: "decided to use X", "v1.0 released", "found bug in Y". These lose relevance as the situation evolves.
 - Facts/lessons → `"kind": "semantic"` (default). Identity, preferences, lessons, constraints.
-- Lessons → `"tags": ["lesson", "trigger:kebab-verb"]`
+- Lessons → `"tags": ["lesson", "trigger:kebab-verb"]` (e.g. `trigger:git-push`, `trigger:deploy-app`)
 - Cross-project knowledge → `-H "X-Namespace: default"`
 
 ```bash
