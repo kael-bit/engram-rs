@@ -121,7 +121,9 @@ pub fn score_combined(importance: f64, relevance: f64, last_accessed: i64) -> f6
 pub fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {
     let recency = recency_score(mem.last_accessed, mem.decay_rate);
     let weight = crate::scoring::memory_weight(mem);
-    let mut score = 0.5 * relevance + 0.3 * weight + 0.2 * recency;
+    // Multiplicative: relevance is the gate, weight/recency are modifiers only.
+    // relevance=0 → score=0 regardless of weight/recency (no free passes for Core).
+    let mut score = relevance * (1.0 + 0.4 * weight + 0.2 * recency);
 
     // Cap at 1.0 — scores above 1 confuse callers and threshold logic
     score = score.min(1.0);
@@ -189,11 +191,13 @@ pub fn recall(
                 return false;
             }
         }
-        if let Some(ref required_tags) = req.tags {
-            if !required_tags.iter().all(|t| mem.tags.contains(t)) {
-                return false;
-            }
-        }
+        // Tags: soft boost instead of hard filter.
+        // Memories matching hint tags get relevance boost; others are NOT excluded.
+        // if let Some(ref required_tags) = req.tags {
+        //     if !required_tags.iter().all(|t| mem.tags.contains(t)) {
+        //         return false;
+        //     }
+        // }
         if let Some(ref ns) = req.namespace {
             // Allow "default" namespace memories through when filtering by a project namespace
             if mem.namespace != *ns && mem.namespace != "default" {
@@ -398,6 +402,91 @@ pub fn recall(
         }
     }
 
+    // IDF-weighted term boost: rare query terms that appear in a memory's
+    // content/tags get a relevance boost proportional to their corpus rarity.
+    // This helps discriminating queries like "discord someone shared proposal"
+    // where "discord" is rare (high IDF) and "proposal" is common (low IDF).
+    if !req.query.is_empty() && !scored.is_empty() {
+        let terms = crate::db::fts::extract_query_terms(&req.query);
+        if !terms.is_empty() {
+            // Compute IDF for each term: ln(N / df)
+            // N = total memories in corpus
+            let total_docs = db.count_filtered(None, None, None, None).unwrap_or(1).max(1) as f64;
+            let term_idfs: Vec<(String, f64)> = terms.iter().filter_map(|t| {
+                let df = db.term_doc_frequency(t);
+                if df == 0 {
+                    // Term not in corpus at all — no discriminative value, skip
+                    return None;
+                }
+                let idf = (total_docs / df as f64).ln();
+                Some((t.clone(), idf))
+            }).collect();
+            let total_idf: f64 = term_idfs.iter().map(|(_, idf)| idf).sum();
+
+            if total_idf > 0.0 {
+                let idf_alpha: f64 = std::env::var("ENGRAM_IDF_BOOST_ALPHA")
+                    .ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+
+                for sm in scored.iter_mut() {
+                    let text = format!("{} {}", sm.memory.content, sm.memory.tags.join(" "))
+                        .to_lowercase();
+                    let hit_idf: f64 = term_idfs.iter()
+                        .filter(|(term, _)| text.contains(term.as_str()))
+                        .map(|(_, idf)| idf)
+                        .sum();
+                    let affinity = hit_idf / total_idf;
+                    if affinity > 0.0 {
+                        sm.relevance *= 1.0 + idf_alpha * affinity;
+                        let rescored = score_memory(&sm.memory, sm.relevance);
+                        sm.score = rescored.score;
+                        sm.recency = rescored.recency;
+                    } else {
+                        // No rare query terms found — likely a false-positive
+                        // embedding match. Penalize to push down noise.
+                        let miss_penalty: f64 = std::env::var("ENGRAM_IDF_MISS_PENALTY")
+                            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.85);
+                        sm.relevance *= miss_penalty;
+                        let rescored = score_memory(&sm.memory, sm.relevance);
+                        sm.score = rescored.score;
+                        sm.recency = rescored.recency;
+                    }
+                }
+            } else if !terms.is_empty() {
+                // All query terms have df=0: none exist in the corpus at all.
+                // Every result is a false positive from embedding noise.
+                // Apply a heavy penalty so scores reflect low confidence.
+                let orphan_penalty: f64 = std::env::var("ENGRAM_ORPHAN_QUERY_PENALTY")
+                    .ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+                for sm in scored.iter_mut() {
+                    sm.relevance *= orphan_penalty;
+                    let rescored = score_memory(&sm.memory, sm.relevance);
+                    sm.score = rescored.score;
+                    sm.recency = rescored.recency;
+                }
+            }
+        }
+    }
+
+    // Explicit tag boost: when agent passes tags=["discord"], memories with
+    // matching tags get a relevance boost (not a hard filter).
+    if let Some(ref hint_tags) = req.tags {
+        if !hint_tags.is_empty() {
+            let tag_boost: f64 = std::env::var("ENGRAM_TAG_BOOST")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(0.2);
+            for sm in scored.iter_mut() {
+                let overlap = sm.memory.tags.iter()
+                    .filter(|t| hint_tags.iter().any(|ht| ht.eq_ignore_ascii_case(t)))
+                    .count();
+                if overlap > 0 {
+                    sm.relevance *= 1.0 + tag_boost * overlap as f64;
+                    let rescored = score_memory(&sm.memory, sm.relevance);
+                    sm.score = rescored.score;
+                    sm.recency = rescored.recency;
+                }
+            }
+        }
+    }
+
     // Don't pad with unrelated core memories — they add noise.
 
     // Fact-based recall: pull linked memories at high relevance (exact knowledge match)
@@ -453,7 +542,7 @@ pub fn recall(
     }
 
     // Filter by min_score first so we can count the total eligible set
-    let min_score = req.min_score.unwrap_or(0.0);
+    let min_score = req.min_score.unwrap_or(0.30);
     let eligible: Vec<ScoredMemory> = scored
         .into_iter()
         .filter(|sm| sm.score >= min_score)

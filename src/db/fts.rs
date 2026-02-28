@@ -160,6 +160,22 @@ impl MemoryDB {
         }
     }
 
+    /// Count how many FTS documents contain a given term.
+    /// Used by recall for IDF-based term weighting.
+    pub fn term_doc_frequency(&self, term: &str) -> usize {
+        let conn = match self.conn() {
+            Ok(c) => c,
+            Err(_) => return 0,
+        };
+        // FTS5 MATCH with a single term returns all docs containing it
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH ?1",
+            params![term],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        count.max(0) as usize
+    }
+
     /// Auto-repair FTS index: remove orphans and rebuild missing entries.
     /// Returns (orphans_removed, missing_rebuilt).
     pub fn repair_fts(&self) -> Result<(usize, usize), EngramError> {
@@ -254,10 +270,25 @@ pub fn is_stopword(word: &str) -> bool {
         "用" | "从" | "很" | "但" | "还" | "又" | "或" | "已" | "要" | "该" |
         "为" | "其" | "所" | "只" | "之" | "中" | "上" | "下" | "个" | "么" |
         "什么" | "怎么" | "如何" | "什" | "哪" | "谁" |
+        "一个" | "一些" | "一种" | "可以" | "没有" | "因为" | "所以" |
+        "someone" | "something" | "some" | "shared" | "how" | "what" |
+        "when" | "where" | "which" | "who" | "do" | "does" | "did" |
         "the" | "a" | "an" | "is" | "are" | "was" | "were" | "be" | "been" |
         "and" | "or" | "but" | "in" | "on" | "at" | "to" | "for" | "of" |
         "it" | "as" | "if" | "no" | "not" | "so" | "this" | "that"
     )
+}
+
+/// Extract meaningful query terms (stopwords removed, deduped, lowercased).
+/// Used by recall for IDF-based term weighting.
+pub fn extract_query_terms(query: &str) -> Vec<String> {
+    let words = super::jieba().cut_for_search(query, false);
+    let mut seen = std::collections::HashSet::new();
+    words.iter()
+        .map(|w| w.trim().to_lowercase())
+        .filter(|w| w.chars().count() >= 2 && !is_stopword(w))
+        .filter(|w| seen.insert(w.clone()))
+        .collect()
 }
 
 
