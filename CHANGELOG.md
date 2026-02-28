@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.15.0
+
+### New Features
+
+- **Persistent embed cache**: Query embeddings are cached in SQLite (128-entry FIFO). Survives restarts — no cold-start API calls for repeated queries.
+- **API request logging**: Every protected endpoint logs method, path, namespace, and elapsed time via tracing. Enables observability and debugging of agent access patterns.
+- **Multi-agent concurrent access**: Documented and verified. SQLite WAL + connection pool + RwLock vector index supports multiple agents hitting one instance safely.
+
+### Performance
+
+- **Naming LLM call reduction**: Topics track `named_at_size` — only re-name when unnamed or members grew 50%+ since last naming. Reduced naming calls from ~19/day to near-zero on stable trees.
+- **bytemuck zero-copy**: Embedding f32↔bytes conversion uses `bytemuck::cast_slice` instead of manual `to_le_bytes` loops.
+- **backon structured retry**: HTTP retry logic uses `backon::ExponentialBuilder` instead of hand-rolled sleep loops.
+
+### Refactoring
+
+- **Unified vector utils**: `cosine_similarity`, `mean_vector`, `l2_normalize` consolidated into `src/util.rs` as single source of truth. `ai.rs` and `topiary/mod.rs` re-export instead of duplicating (~50 lines removed).
+- **Consistent imports**: All `cosine_similarity` consumers import from `crate::util` instead of scattered `crate::ai` references.
+- **Safe string slicing**: Manual `id[..8]` replaced with `util::short_id()` (CJK-safe, never panics).
+
+### Tests
+
+- **Vector util tests**: 11 new tests covering cosine similarity (identical, orthogonal, opposite, empty, mismatched lengths, f32/f64 consistency), mean_vector, and l2_normalize.
+- **Scoring tests**: 136-line `scoring_tests.rs` covering `memory_weight()` formula across all kind/layer combinations.
+
 ## 0.14.0
 
 ### Breaking Changes
