@@ -1234,7 +1234,7 @@ impl MemoryDB {
             if let Ok(vec_idx) = self.vec_index.read() {
                 for (mem, jaccard) in &jaccard_candidates {
                     if let Some(entry) = vec_idx.get(&mem.id) {
-                        let cosine = crate::ai::cosine_similarity(query_emb, &entry.emb);
+                        let cosine = crate::util::cosine_similarity(query_emb, &entry.emb);
                         tracing::debug!(
                             id = &mem.id[..8.min(mem.id.len())],
                             jaccard = %format!("{:.3}", jaccard),

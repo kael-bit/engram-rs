@@ -1,4 +1,5 @@
-use crate::ai::{self, AiConfig, cosine_similarity};
+use crate::ai::{self, AiConfig};
+use crate::util::cosine_similarity;
 use crate::db::{Layer, Memory};
 use crate::error::EngramError;
 use crate::prompts;

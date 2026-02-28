@@ -599,7 +599,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
                     if cand_id == &new_mem.id {
                         continue;
                     }
-                    let sim = crate::ai::cosine_similarity(new_emb, cand_emb);
+                    let sim = crate::util::cosine_similarity(new_emb, cand_emb);
                     if sim > crate::thresholds::CORE_OVERLAP_SIM {
                         let (id_a, id_b) = if new_mem.id < *cand_id {
                             (&new_mem.id, cand_id)

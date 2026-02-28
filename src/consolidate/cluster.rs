@@ -4,7 +4,7 @@
 //! Clusters are capped at thresholds::MAX_CLUSTER_SIZE to prevent chain drift (A≈B, B≈C but A≠C).
 //! Oversized clusters are split by picking the two most distant members as seeds.
 
-use crate::ai::cosine_similarity;
+use crate::util::cosine_similarity;
 use crate::db::Memory;
 use crate::thresholds;
 use std::collections::{HashMap, HashSet};

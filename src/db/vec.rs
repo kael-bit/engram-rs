@@ -375,7 +375,7 @@ impl MemoryDB {
                         .iter()
                         .filter(|(_, entry)| entry.namespace == ns.unwrap())
                         .map(|(id, entry)| {
-                            let sim = crate::ai::cosine_similarity(query_emb, &entry.emb);
+                            let sim = crate::util::cosine_similarity(query_emb, &entry.emb);
                             (id.clone(), sim)
                         })
                         .filter(|(_, sim)| *sim > 0.0)
@@ -392,7 +392,7 @@ impl MemoryDB {
             .into_iter()
             .filter(|(mem, _)| ns.is_none_or(|n| mem.namespace == n))
             .map(|(mem, emb)| {
-                let sim = crate::ai::cosine_similarity(query_emb, &emb);
+                let sim = crate::util::cosine_similarity(query_emb, &emb);
                 (mem.id, sim)
             })
             .filter(|(_, sim)| *sim > 0.0)
@@ -414,7 +414,7 @@ impl MemoryDB {
                 .iter()
                 .filter_map(|id| {
                     idx.get(id).map(|entry| {
-                        let sim = crate::ai::cosine_similarity(query_emb, &entry.emb);
+                        let sim = crate::util::cosine_similarity(query_emb, &entry.emb);
                         (id.clone(), sim)
                     })
                 })
