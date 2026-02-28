@@ -64,6 +64,7 @@ fn get_namespace(headers: &axum::http::HeaderMap) -> Option<String> {
 
 /// Auth middleware: checks Bearer token if ENGRAM_API_KEY is configured.
 /// Also logs every API request (method + path + namespace).
+/// Health check endpoints (`/`, `/health`) are whitelisted and skip auth.
 async fn require_auth(
     State(state): State<AppState>,
     req: Request<axum::body::Body>,
@@ -75,12 +76,23 @@ async fn require_auth(
 
     let start = std::time::Instant::now();
 
+    // Whitelist: health check endpoints bypass auth even if this middleware
+    // is accidentally applied to them (belt-and-suspenders for #9).
+    let is_health = matches!(path.as_str(), "/" | "/health");
+
     let Some(ref expected) = state.api_key else {
         let resp = next.run(req).await;
         let ms = start.elapsed().as_millis();
         tracing::info!(%method, %path, ns, elapsed_ms = ms, "api request");
         return Ok(resp);
     };
+
+    if is_health {
+        let resp = next.run(req).await;
+        let ms = start.elapsed().as_millis();
+        tracing::info!(%method, %path, ns, elapsed_ms = ms, "api request (health, no auth)");
+        return Ok(resp);
+    }
 
     let unauthorized = || EngramError::Unauthorized;
 

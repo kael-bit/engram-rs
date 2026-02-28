@@ -271,9 +271,9 @@ async fn delete_by_namespace() {
         let resp = app.clone().oneshot(json_req("POST", "/memories", body)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
-    // delete ns-a
+    // delete ns-a (confirm required for namespace wipe)
     let resp = app.clone()
-        .oneshot(json_req("DELETE", "/memories", serde_json::json!({"namespace": "ns-a"})))
+        .oneshot(json_req("DELETE", "/memories", serde_json::json!({"namespace": "ns-a", "confirm": true})))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);

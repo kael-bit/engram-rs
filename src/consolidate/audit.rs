@@ -230,20 +230,7 @@ async fn distill_one_topic(
     )
     .await?;
 
-    if let Some(ref u) = tcr.usage {
-        let cached = u
-            .prompt_tokens_details
-            .as_ref()
-            .map_or(0, |d| d.cached_tokens);
-        let _ = db.log_llm_call(
-            "distill",
-            &tcr.model,
-            u.prompt_tokens,
-            u.completion_tokens,
-            cached,
-            tcr.duration_ms,
-        );
-    }
+    super::log_llm_usage(db, "distill", &tcr.usage, &tcr.model, tcr.duration_ms);
 
     let response = tcr.value;
     if response.distilled.is_empty() {

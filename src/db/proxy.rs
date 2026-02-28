@@ -24,10 +24,7 @@ impl MemoryDB {
     /// Set the message watermark for a proxy session.
     pub fn set_watermark(&self, session_key: &str, watermark: i64) -> Result<(), EngramError> {
         let conn = self.conn()?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let now = super::now_ms();
         conn.execute(
             "INSERT INTO proxy_sessions (session_key, watermark, updated_at) \
              VALUES (?1, ?2, ?3) \
@@ -39,10 +36,7 @@ impl MemoryDB {
 
     pub fn save_proxy_turn(&self, session_key: &str, content: &str) -> Result<(), EngramError> {
         let conn = self.conn()?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let now = super::now_ms();
         conn.execute(
             "INSERT INTO proxy_turns (session_key, content, created_at) VALUES (?1, ?2, ?3)",
             params![session_key, content, now],
@@ -132,10 +126,7 @@ impl MemoryDB {
             Ok(c) => c,
             Err(_) => return true,
         };
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let now_ms = super::now_ms();
         let latest: i64 = conn
             .query_row(
                 "SELECT COALESCE(MAX(created_at), 0) FROM proxy_turns WHERE session_key = ?1",

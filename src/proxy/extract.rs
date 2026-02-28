@@ -203,47 +203,83 @@ struct ExtractionEntry {
 
 /// Reject code-operation noise that LLMs keep extracting despite prompt instructions.
 /// Returns true if the content looks like a routine implementation detail.
+///
+/// Signals are split into strong (definitely code noise) and weak (could appear
+/// in legitimate memories). A single weak signal is NOT enough to filter —
+/// only strong signals or 2+ weak signals trigger rejection, and only when
+/// no value signals are present.
 pub fn is_code_noise(content: &str) -> bool {
     let lower = content.to_lowercase();
 
-    // Code-level implementation details
-    let noise_signals = [
+    // Strong signals — almost certainly code noise on their own
+    let strong_signals = [
         "pub(crate)", "pub fn", "#[cfg(test)]", "#[test]",
         "impl ", "struct ", "enum ", "trait ",
         "cargo test", "cargo build", "cargo check",
-        "clippy", "compile", "compilation",
+        "clippy", "doc-test", "inline test",
         ".rs:", ".rs`", "mod.rs", "lib.rs", "main.rs",
-        "commit ", "merge conflict",
-        "test pass", "tests pass", "test fail",
-        "refactor", "visibility", "accessibility",
-        "doc-test", "inline test",
-        "replace", "rename", "moved to", "split into",
-        "magic number", "dead code", "unused import",
-        "parse_", "extract_", "resolve_",
-        "codebase", "source code", "implementation",
+        "dead code", "unused import",
         "the mutex", "the rwlock", "the pool",
     ];
 
-    let hit_count = noise_signals.iter()
+    // Weak signals — may appear in legitimate decision/lesson memories
+    let weak_signals = [
+        "compile", "compilation",
+        "commit ", "merge conflict",
+        "test pass", "tests pass", "test fail",
+        "refactor", "visibility", "accessibility",
+        "replace", "rename", "moved to", "split into",
+        "magic number",
+        "parse_", "extract_", "resolve_",
+        "codebase", "source code", "implementation",
+    ];
+
+    let strong_hits = strong_signals.iter()
         .filter(|s| lower.contains(*s))
         .count();
 
-    // 2+ noise signals = almost certainly code noise
-    if hit_count >= 2 {
+    let weak_hits = weak_signals.iter()
+        .filter(|s| lower.contains(*s))
+        .count();
+
+    let total_hits = strong_hits + weak_hits;
+
+    // No signals at all → not noise
+    if total_hits == 0 {
+        return false;
+    }
+
+    // Value signals — if present, the content has decision/lesson value
+    let has_value_signal = lower.contains("lesson")
+        || lower.contains("decision")
+        || lower.contains("never ")
+        || lower.contains("always ")
+        || lower.contains("don't ")
+        || lower.contains("chose")
+        || lower.contains("decided")
+        || lower.contains("strategy")
+        || lower.contains("architecture")
+        || lower.contains("trade-off")
+        || lower.contains("tradeoff")
+        || lower.contains("不要")
+        || lower.contains("必须")
+        || lower.contains("禁止")
+        || lower.contains("选择了")
+        || lower.contains("决定");
+
+    if has_value_signal {
+        return false;
+    }
+
+    // A single strong signal without value signals → noise
+    if strong_hits >= 1 {
         return true;
     }
 
-    // Single signal + no lesson/decision markers = likely noise
-    if hit_count == 1 {
-        let has_value_signal = lower.contains("lesson")
-            || lower.contains("decision")
-            || lower.contains("never ")
-            || lower.contains("always ")
-            || lower.contains("don't ")
-            || lower.contains("不要")
-            || lower.contains("必须")
-            || lower.contains("禁止");
-        return !has_value_signal;
+    // 2+ weak signals without value signals → noise
+    // (single weak signal alone is NOT enough — too aggressive)
+    if weak_hits >= 2 {
+        return true;
     }
 
     false

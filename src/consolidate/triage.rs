@@ -168,10 +168,7 @@ pub(super) async fn triage_buffer(
             schema,
         ).await {
             Ok(r) => {
-                if let Some(ref u) = r.usage {
-                    let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                    let _ = db.log_llm_call("triage", &r.model, u.prompt_tokens, u.completion_tokens, cached, r.duration_ms);
-                }
+                super::log_llm_usage(db, "triage", &r.usage, &r.model, r.duration_ms);
                 r.value
             }
             Err(e) => {
@@ -215,7 +212,9 @@ pub(super) async fn triage_buffer(
                     let mut tags: Vec<String> = mem.tags.to_vec();
                     tags.push("_triaged".into());
                     let _ = tokio::task::spawn_blocking(move || {
-                        let _ = db4.update_fields(&mid, None, None, None, Some(&tags));
+                        if let Err(e) = db4.update_fields(&mid, None, None, None, Some(&tags)) {
+                            tracing::warn!(id = %mid, error = %e, "update_fields failed (triage tag)");
+                        }
                     }).await;
                 }
             }
@@ -264,7 +263,9 @@ pub fn dedup_buffer(db: &MemoryDB) -> usize {
             let tags = merge_tags(&keep.tags, &[&discard.tags], 20);
 
             let imp = keep.importance.max(discard.importance);
-            let _ = db.update_fields(&keep.id, None, None, Some(imp), Some(&tags));
+            if let Err(e) = db.update_fields(&keep.id, None, None, Some(imp), Some(&tags)) {
+                tracing::warn!(id = %keep.id, error = %e, "update_fields failed (dedup merge)");
+            }
             let _ = db.set_access_count(&keep.id, total_access);
 
             if db.delete(&discard.id).unwrap_or(false) {

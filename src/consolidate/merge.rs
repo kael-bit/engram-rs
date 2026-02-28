@@ -212,10 +212,7 @@ async fn try_reconcile_pair(
         schema,
     ).await {
         Ok(r) => {
-            if let Some(ref u) = r.usage {
-                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                let _ = db.log_llm_call("reconcile", &r.model, u.prompt_tokens, u.completion_tokens, cached, r.duration_ms);
-            }
+            super::log_llm_usage(db, "reconcile", &r.usage, &r.model, r.duration_ms);
             r.value
         }
         Err(e) => { warn!(error = %e, "reconcile LLM call failed"); return None; }
@@ -372,10 +369,7 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
 
             let merged_content = match ai::llm_chat_as(cfg, "merge", prompts::MERGE_SYSTEM, &input).await {
                 Ok(r) => {
-                    if let Some(ref u) = r.usage {
-                        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                        let _ = db.log_llm_call("merge", &r.model, u.prompt_tokens, u.completion_tokens, cached, r.duration_ms);
-                    }
+                    super::log_llm_usage(db, "merge", &r.usage, &r.model, r.duration_ms);
                     r.content.trim().to_string()
                 }
                 Err(e) => {
@@ -482,10 +476,7 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
             let embed_ok = if cfg.has_embed() {
                 match ai::get_embeddings(cfg, &[merged_content]).await {
                     Ok(er) if !er.embeddings.is_empty() => {
-                        if let Some(ref u) = er.usage {
-                            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                            let _ = db.log_llm_call("merge_embed", &cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
-                        }
+                        super::log_llm_usage(db, "merge_embed", &er.usage, &cfg.embed_model, 0);
                         if let Some(emb) = er.embeddings.into_iter().next() {
                             let db2 = db.clone();
                             let id = best_id.clone();

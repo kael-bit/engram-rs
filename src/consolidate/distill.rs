@@ -60,10 +60,7 @@ async fn distill_one_ns(
 
     let summary = match ai::llm_chat_as(cfg, "gate", prompts::DISTILL_SYSTEM_PROMPT, &user).await {
         Ok(r) => {
-            if let Some(ref u) = r.usage {
-                let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                let _ = db.log_llm_call("distill", &r.model, u.prompt_tokens, u.completion_tokens, cached, r.duration_ms);
-            }
+            super::log_llm_usage(db, "distill", &r.usage, &r.model, r.duration_ms);
             r.content.trim().to_string()
         }
         Err(e) => {

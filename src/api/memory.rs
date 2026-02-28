@@ -112,8 +112,11 @@ pub(super) async fn create_memory(
                     }
                     Ok((None, pre_emb)) => {
                         // No semantic dup found — pass the pre-computed embedding
-                        // to MemoryInput so DB-level dedup can use cosine similarity
+                        // to MemoryInput so DB-level dedup can use cosine similarity.
+                        // Also skip DB-level FTS+Jaccard dedup since API layer already
+                        // confirmed no duplicate exists (#11).
                         input.embedding = Some(pre_emb);
+                        input.skip_dedup = Some(true);
                     }
                     _ => {}
                 }
@@ -304,12 +307,26 @@ pub(super) struct BatchDeleteBody {
     #[serde(default)]
     ids: Vec<String>,
     namespace: Option<String>,
+    /// Required to be `true` when performing a namespace wipe.
+    /// Prevents accidental deletion of all memories in a namespace.
+    #[serde(default)]
+    confirm: bool,
 }
 
 pub(super) async fn batch_delete(
     State(state): State<AppState>,
     LenientJson(body): LenientJson<BatchDeleteBody>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
+    // Namespace wipe requires explicit confirmation (#21)
+    if body.namespace.is_some() && !body.confirm {
+        return Err(EngramError::Validation(
+            "namespace wipe requires \"confirm\": true".into(),
+        ));
+    }
+
+    let ns_for_log = body.namespace.clone();
+    let ids_for_log: Vec<String> = body.ids.clone();
+
     let db = state.db.clone();
     let deleted = blocking(move || {
         let mut count = 0usize;
@@ -325,6 +342,22 @@ pub(super) async fn batch_delete(
         count
     })
     .await?;
+
+    // Audit log for batch deletes (#21)
+    if let Some(ref ns) = ns_for_log {
+        tracing::warn!(
+            namespace = %ns,
+            deleted_count = deleted,
+            "AUDIT: namespace wipe via batch_delete"
+        );
+    }
+    if !ids_for_log.is_empty() {
+        tracing::info!(
+            ids = ?ids_for_log,
+            deleted_count = deleted,
+            "AUDIT: batch_delete by ids"
+        );
+    }
 
     if deleted > 0 {
         if let Some(ref tx) = state.topiary_trigger {

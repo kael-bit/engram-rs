@@ -110,11 +110,18 @@ impl EmbedCache {
     }
 
     pub fn insert(&self, key: String, value: Vec<f32>) {
-        if let Some(ref db) = self.db {
-            db.embed_cache_put(&key, &value);
+        // Update in-memory cache first (under lock), then persist to DB outside
+        // the lock so the Mutex is never held during a SQLite write.
+        let db_ref = self.db.clone();
+        let db_key = key.clone();
+        let db_value = value.clone();
+        {
+            let mut inner = self.inner.lock();
+            inner.cache.put(key, value);
         }
-        let mut inner = self.inner.lock();
-        inner.cache.put(key, value);
+        if let Some(db) = db_ref {
+            db.embed_cache_put(&db_key, &db_value);
+        }
     }
 
     pub fn stats(&self) -> (usize, usize, u64, u64) {

@@ -286,9 +286,24 @@ fn code_noise_keeps_lessons() {
 }
 
 #[test]
-fn code_noise_single_signal_no_value() {
-    assert!(is_code_noise("The codebase uses an r2d2 pool for database connections."));
-    assert!(is_code_noise("Audit found 116 magic numbers across 23 files, notably in api/recall_handlers.rs"));
+fn code_noise_single_weak_signal_not_noise() {
+    // Single weak signal alone is NOT noise (strong/weak split from #10)
+    assert!(!is_code_noise("The codebase uses abstract factory pattern for services."));
+    assert!(!is_code_noise("Audit found 116 magic numbers across 23 files"));
+}
+
+#[test]
+fn code_noise_two_weak_signals_is_noise() {
+    // Two weak signals without value markers = noise
+    assert!(is_code_noise("Refactored the codebase to split into smaller modules."));
+    assert!(is_code_noise("The implementation was renamed and moved to a new module."));
+}
+
+#[test]
+fn code_noise_one_strong_signal_is_noise() {
+    // A single strong signal is enough
+    assert!(is_code_noise("Fixed the pool connection leak in production."));
+    assert!(is_code_noise("Audit found clippy warnings across 23 files"));
 }
 
 #[test]

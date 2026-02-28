@@ -42,6 +42,32 @@ impl MemoryResult {
 
 /// Unified memory weight — used across all ranking contexts.
 /// Combines decayable importance with permanent reinforcement signals.
+///
+/// # Value domain
+///
+/// The return value is **not** clamped to `[0, 1]` and can exceed `1.0`.
+///
+/// The formula is:
+/// ```text
+/// (importance + rep_bonus + access_bonus) × kind_boost × layer_boost
+/// ```
+///
+/// - `importance` is in `[0, 1]` (clamped on write).
+/// - `rep_bonus` is in `[0, REP_BONUS_CAP]` (default `0.5`).
+/// - `access_bonus` is in `[0, ACCESS_BONUS_CAP]` (default `0.3`).
+/// - `kind_boost` and `layer_boost` are multipliers (e.g. `1.3`, `1.2`).
+///
+/// Theoretical maximum ≈ `(1.0 + 0.5 + 0.3) × 1.3 × 1.2 ≈ 2.81`.
+///
+/// **Usage notes:**
+/// - **Recall scoring** (`score_memory`): weight feeds into a multiplicative
+///   formula whose output is separately capped at `1.0`, so an unbounded
+///   weight is safe.
+/// - **Resume sorting**: used only for relative ordering — absolute magnitude
+///   doesn't matter.
+/// - **Consolidation / triage**: compared against fixed thresholds (e.g.
+///   `BUFFER_PROMOTE_SCORE`). Callers should be aware that high-repetition
+///   procedural Core memories may far exceed `1.0`.
 pub fn memory_weight(mem: &Memory) -> f64 {
     let rep_bonus = (mem.repetition_count as f64 * thresholds::REP_BONUS_SCALE).min(thresholds::REP_BONUS_CAP);
     let access_bonus = ((1.0 + mem.access_count as f64).ln() * thresholds::ACCESS_BONUS_SCALE).min(thresholds::ACCESS_BONUS_CAP);

@@ -657,6 +657,8 @@ impl MemoryDB {
     }
 
     /// Insert or update a cached embedding, evicting oldest if over limit.
+    /// Eviction query only runs when the cache is at or near capacity to avoid
+    /// unnecessary work on every insert.
     pub fn embed_cache_put(&self, query: &str, embedding: &[f32]) {
         let c = match self.conn() { Ok(c) => c, Err(_) => return };
         let now = now_ms();
@@ -665,11 +667,20 @@ impl MemoryDB {
             "INSERT OR REPLACE INTO embed_cache (query, embedding, created_at) VALUES (?1, ?2, ?3)",
             rusqlite::params![query, blob, now],
         );
-        // FIFO eviction: delete oldest beyond limit
-        let _ = c.execute(
-            "DELETE FROM embed_cache WHERE query NOT IN (SELECT query FROM embed_cache ORDER BY created_at DESC LIMIT ?1)",
-            rusqlite::params![Self::EMBED_CACHE_MAX],
-        );
+        // Only run FIFO eviction when cache might exceed the limit.
+        // A cheap COUNT check is far cheaper than the correlated DELETE on every insert.
+        let count: i64 = c.query_row(
+            "SELECT COUNT(*) FROM embed_cache",
+            [],
+            |r| r.get(0),
+        ).unwrap_or(0);
+        if count > Self::EMBED_CACHE_MAX {
+            let _ = c.execute(
+                "DELETE FROM embed_cache WHERE query NOT IN \
+                 (SELECT query FROM embed_cache ORDER BY created_at DESC LIMIT ?1)",
+                rusqlite::params![Self::EMBED_CACHE_MAX],
+            );
+        }
     }
 
     pub fn log_llm_call(
@@ -906,27 +917,11 @@ fn row_to_memory_with_embedding(row: &rusqlite::Row) -> rusqlite::Result<Memory>
 /// Row mapper for queries that select explicit columns without `embedding`.
 /// Column order: id, content, layer, importance, created_at, last_accessed,
 /// access_count, decay_rate, source, tags, namespace, kind
+///
+/// Delegates to `row_to_memory_impl` with `include_embedding = false` to
+/// avoid duplicating field-parsing logic.
 fn row_to_memory_meta(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
-    let layer_val: u8 = row.get("layer")?;
-    let tags_str: String = row.get("tags")?;
-    Ok(Memory {
-        id: row.get("id")?,
-        content: row.get("content")?,
-        layer: layer_val.try_into().unwrap_or(Layer::Buffer),
-        importance: row.get("importance")?,
-        created_at: row.get("created_at")?,
-        last_accessed: row.get("last_accessed")?,
-        access_count: row.get("access_count")?,
-        repetition_count: row.get::<_, i64>("repetition_count").unwrap_or(0),
-        decay_rate: row.get("decay_rate")?,
-        source: row.get("source")?,
-        tags: serde_json::from_str(&tags_str).unwrap_or_default(),
-        namespace: row.get::<_, String>("namespace").unwrap_or_else(|_| "default".into()),
-        embedding: None,
-        kind: row.get::<_, String>("kind").unwrap_or_else(|_| "semantic".into()),
-        modified_at: row.get::<_, i64>("modified_at").unwrap_or(0),
-        modified_epoch: row.get::<_, i64>("modified_epoch").unwrap_or(0),
-    })
+    row_to_memory_impl(row, false)
 }
 
 fn row_to_memory_impl(row: &rusqlite::Row, include_embedding: bool) -> rusqlite::Result<Memory> {

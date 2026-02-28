@@ -10,6 +10,29 @@ use tracing::debug;
 // scoring weights — should add up to 1.0
 use crate::thresholds::{RECALL_WEIGHT_RELEVANCE, RECALL_WEIGHT_WEIGHT, RECALL_WEIGHT_RECENCY, RECALL_SIM_FLOOR};
 
+/// Cached scoring configuration parsed from environment variables once on first access.
+/// Avoids re-parsing env vars on every `score_memory` / recall call.
+struct ScoringConfig {
+    no_fts_penalty: f64,
+    idf_boost_alpha: f64,
+    idf_miss_penalty: f64,
+    orphan_query_penalty: f64,
+    tag_boost: f64,
+}
+
+static SCORING_CONFIG: std::sync::LazyLock<ScoringConfig> = std::sync::LazyLock::new(|| {
+    fn env_f64(name: &str, default: f64) -> f64 {
+        std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    }
+    ScoringConfig {
+        no_fts_penalty: env_f64("ENGRAM_NO_FTS_PENALTY", 0.85),
+        idf_boost_alpha: env_f64("ENGRAM_IDF_BOOST_ALPHA", 0.5),
+        idf_miss_penalty: env_f64("ENGRAM_IDF_MISS_PENALTY", 0.85),
+        orphan_query_penalty: env_f64("ENGRAM_ORPHAN_QUERY_PENALTY", 0.5),
+        tag_boost: env_f64("ENGRAM_TAG_BOOST", 0.2),
+    }
+});
+
 /// Detect short CJK queries where cosine similarity is unreliable.
 ///
 /// `text-embedding-3-small` produces uniformly high cosine scores for short
@@ -382,8 +405,7 @@ pub fn recall(
         };
 
         if !query_terms.is_empty() {
-            let no_fts_penalty: f64 = std::env::var("ENGRAM_NO_FTS_PENALTY")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(0.85);
+            let no_fts_penalty: f64 = SCORING_CONFIG.no_fts_penalty;
             for sm in scored.iter_mut() {
                 // Only penalize semantic-only hits (not boosted by FTS)
                 if fts_ids.contains(&sm.memory.id) {
@@ -422,8 +444,7 @@ pub fn recall(
             let total_idf: f64 = term_idfs.iter().map(|(_, idf)| idf).sum();
 
             if total_idf > 0.0 {
-                let idf_alpha: f64 = std::env::var("ENGRAM_IDF_BOOST_ALPHA")
-                    .ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+                let idf_alpha: f64 = SCORING_CONFIG.idf_boost_alpha;
 
                 for sm in scored.iter_mut() {
                     let text = format!("{} {}", sm.memory.content, sm.memory.tags.join(" "))
@@ -441,8 +462,7 @@ pub fn recall(
                     } else {
                         // No rare query terms found — likely a false-positive
                         // embedding match. Penalize to push down noise.
-                        let miss_penalty: f64 = std::env::var("ENGRAM_IDF_MISS_PENALTY")
-                            .ok().and_then(|v| v.parse().ok()).unwrap_or(0.85);
+                        let miss_penalty: f64 = SCORING_CONFIG.idf_miss_penalty;
                         sm.relevance *= miss_penalty;
                         let rescored = score_memory(&sm.memory, sm.relevance);
                         sm.score = rescored.score;
@@ -453,8 +473,7 @@ pub fn recall(
                 // All query terms have df=0: none exist in the corpus at all.
                 // Every result is a false positive from embedding noise.
                 // Apply a heavy penalty so scores reflect low confidence.
-                let orphan_penalty: f64 = std::env::var("ENGRAM_ORPHAN_QUERY_PENALTY")
-                    .ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+                let orphan_penalty: f64 = SCORING_CONFIG.orphan_query_penalty;
                 for sm in scored.iter_mut() {
                     sm.relevance *= orphan_penalty;
                     let rescored = score_memory(&sm.memory, sm.relevance);
@@ -469,8 +488,7 @@ pub fn recall(
     // matching tags get a relevance boost (not a hard filter).
     if let Some(ref hint_tags) = req.tags {
         if !hint_tags.is_empty() {
-            let tag_boost: f64 = std::env::var("ENGRAM_TAG_BOOST")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(0.2);
+            let tag_boost: f64 = SCORING_CONFIG.tag_boost;
             for sm in scored.iter_mut() {
                 let overlap = sm.memory.tags.iter()
                     .filter(|t| hint_tags.iter().any(|ht| ht.eq_ignore_ascii_case(t)))

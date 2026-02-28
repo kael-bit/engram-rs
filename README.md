@@ -143,8 +143,8 @@ LESSON: never force-push to main
 ...
 
 === Recent ===
-[02-27 14:15] switched auth to OAuth2
-[02-27 11:01] published API docs
+switched auth to OAuth2
+published API docs
 
 === Topics (Core: 24, Working: 57, Buffer: 7) ===
 kb1: "Deploy Procedures" [5]
@@ -152,8 +152,7 @@ kb2: "Auth Architecture" [3]
 kb3: "Memory Design" [8]
 ...
 
-=== Triggers ===
-deploy, git-push, database-migration
+Triggers: deploy, git-push, database-migration
 ```
 
 Four sections, each serving a distinct purpose:
@@ -162,8 +161,7 @@ Four sections, each serving a distinct purpose:
 |---------|---------|--------|
 | **Core** | Full text of permanent rules and identity — never truncated | ~2k tokens |
 | **Recent** | Memories changed since last consolidation window, for short-term continuity | ~1k tokens |
-| **Topics** | Named topic index — structured directory of all memories | Leaf list |
-| **Triggers** | Pre-action safety tags for automatic lesson recall | Tag list |
+| **Topics** | Named topic index — structured directory of all memories, followed by trigger tags | Leaf list |
 
 The agent reads the topic index, identifies relevant topics, and drills in via `POST /topic` on demand. This avoids loading the entire memory store into context.
 
@@ -182,6 +180,15 @@ curl http://localhost:3917/triggers/deploy
 # Topic drill-down
 curl -X POST http://localhost:3917/topic \
   -d '{"ids": ["kb3"]}'
+# → {
+#   "kb3": {
+#     "name": "Memory Design",
+#     "memories": [
+#       {"id": "a1b2c3d4-...", "content": "Three-layer lifecycle ...", "layer": 3, "importance": 0.9, "tags": ["architecture"], "kind": "semantic", "created_at": 1709000000000},
+#       ...
+#     ]
+#   }
+# }
 ```
 
 ## Background Maintenance

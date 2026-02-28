@@ -3,6 +3,22 @@
 //! Every magic number that controls engram's behavior lives here so it can
 //! be audited and tuned in one place.  The rest of the codebase imports from
 //! `crate::thresholds`.
+//!
+//! ## Runtime-overridable thresholds
+//!
+//! Some scoring thresholds benefit from runtime tuning without recompilation.
+//! These use [`std::sync::LazyLock`] to read an environment variable **once**
+//! at first access and cache the result for the lifetime of the process.
+//!
+//! | Env var | Default | Description |
+//! |---------|---------|-------------|
+//! | `ENGRAM_IDF_BOOST_ALPHA` | 0.5 | IDF term-boost scaling factor in recall scoring |
+//! | `ENGRAM_IDF_MISS_PENALTY` | 0.85 | Relevance penalty when no rare query terms match |
+//! | `ENGRAM_ORPHAN_QUERY_PENALTY` | 0.5 | Penalty when all query terms have zero corpus frequency |
+//! | `ENGRAM_TAG_BOOST` | 0.2 | Relevance boost per matching hint tag |
+//! | `ENGRAM_NO_FTS_PENALTY` | 0.85 | Penalty for semantic-only hits lacking any query-term overlap |
+
+use std::sync::LazyLock;
 
 // ── Cosine similarity ──────────────────────────────────────────────────────
 // Higher = stricter (only very similar items match).
@@ -64,6 +80,43 @@ pub const RECALL_SIM_FLOOR: f64 = 0.3;
 
 /// Below this relevance, auto-expand the query via LLM.
 pub const AUTO_EXPAND_THRESHOLD: f64 = 0.25;
+
+// ── Runtime-overridable recall scoring knobs ───────────────────────────────
+// These are read from environment variables **once** at first access via
+// `LazyLock`.  If the env var is unset or unparseable, the default is used.
+
+/// Helper: parse an env var into `f64`, falling back to `default`.
+fn env_f64(var: &str, default: f64) -> f64 {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(default)
+}
+
+/// IDF term-boost scaling factor (`ENGRAM_IDF_BOOST_ALPHA`).
+/// Controls how much rare query-term matches boost relevance.
+pub static IDF_BOOST_ALPHA: LazyLock<f64> =
+    LazyLock::new(|| env_f64("ENGRAM_IDF_BOOST_ALPHA", 0.5));
+
+/// Relevance penalty when no rare query terms match a memory
+/// (`ENGRAM_IDF_MISS_PENALTY`).  Applied multiplicatively to relevance.
+pub static IDF_MISS_PENALTY: LazyLock<f64> =
+    LazyLock::new(|| env_f64("ENGRAM_IDF_MISS_PENALTY", 0.85));
+
+/// Heavy penalty when *all* query terms have zero document frequency
+/// (`ENGRAM_ORPHAN_QUERY_PENALTY`).  Every result is likely a false positive.
+pub static ORPHAN_QUERY_PENALTY: LazyLock<f64> =
+    LazyLock::new(|| env_f64("ENGRAM_ORPHAN_QUERY_PENALTY", 0.5));
+
+/// Per-tag relevance boost for memories matching caller-supplied hint tags
+/// (`ENGRAM_TAG_BOOST`).  Multiplied by the number of matching tags.
+pub static TAG_BOOST: LazyLock<f64> =
+    LazyLock::new(|| env_f64("ENGRAM_TAG_BOOST", 0.2));
+
+/// Relevance penalty for semantic-only hits that contain none of the query
+/// terms (`ENGRAM_NO_FTS_PENALTY`).  Mitigates embedding false positives.
+pub static NO_FTS_PENALTY: LazyLock<f64> =
+    LazyLock::new(|| env_f64("ENGRAM_NO_FTS_PENALTY", 0.85));
 
 // ── Memory weight / scoring ────────────────────────────────────────────────
 
