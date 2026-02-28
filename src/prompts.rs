@@ -89,11 +89,11 @@ pub fn extract_memories_schema() -> serde_json::Value {
                     "properties": {
                         "content": {"type": "string", "description": "Concise memory text, 1-2 concise sentences"},
                         "importance": {"type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Importance level"},
-                        "tags": {"type": "array", "items": {"type": "string"}},
+                        "tags": {"type": "array", "items": {"type": "string"}, "description": "1-4 topic tags. Name the SUBJECT, not meta-properties. Good: 'github-auth', 'deploy-flow', 'ssh-config'. Bad: 'session', 'distilled', 'lesson'."},
                         "kind": {
                             "type": "string",
                             "enum": ["semantic", "episodic", "procedural"],
-                            "description": "semantic=facts, episodic=events, procedural=how-to (never decay)"
+                            "description": "semantic=facts/decisions/lessons/preferences (most common). episodic=specific dated events. procedural=reusable step-by-step workflows ONLY (e.g. 'deploy: build→stop→copy→start'). Strategies, plans, guidelines are NOT procedural."
                         }
                     },
                     "required": ["content"]
@@ -135,9 +135,9 @@ KEEP in buffer if:
 - Implementation minutiae without broader lessons
 
 Classify the kind for promoted memories:
-- procedural: step-by-step workflows, build/deploy/test processes
-- semantic: facts, decisions, lessons, preferences
-- episodic: specific events, dated occurrences, one-time incidents"#;
+- semantic: facts, decisions, lessons, preferences, constraints (most common — when in doubt, use this)
+- episodic: specific dated events, one-time incidents
+- procedural: reusable step-by-step workflows ONLY (e.g. 'deploy: build→stop→copy→start'). Strategies, plans, guidelines, one-time decisions are NOT procedural."#;
 
 pub fn triage_schema() -> serde_json::Value {
     serde_json::json!({
@@ -150,7 +150,7 @@ pub fn triage_schema() -> serde_json::Value {
                     "properties": {
                         "id": { "type": "string", "description": "Memory ID prefix (first 8 chars)" },
                         "action": { "type": "string", "enum": ["promote", "keep"] },
-                        "kind": { "type": "string", "enum": ["semantic", "procedural", "episodic"], "description": "Only for promoted memories" }
+                        "kind": { "type": "string", "enum": ["semantic", "procedural", "episodic"], "description": "semantic=facts/decisions/lessons (most common). procedural=reusable step-by-step workflows ONLY. episodic=dated events." }
                     },
                     "required": ["id", "action"]
                 }
@@ -188,8 +188,8 @@ If it reads like a changelog, progress report, bug fix, config snapshot,
 step-by-step recipe, algorithm formula, or implementation detail → REJECT.
 
 Kind assignment (only when approving):
-- procedural: permanently true process with no end condition
-- semantic: fact about identity, preference, or constraint
+- semantic: fact about identity, preference, or constraint (most common — when in doubt, use this)
+- procedural: permanently true step-by-step process with no end condition (e.g. deploy flow). NOT: strategies, plans, guidelines, one-time decisions
 - episodic: time-bound decision or event that may lose relevance"#;
 
 pub fn gate_schema() -> serde_json::Value {
@@ -204,7 +204,7 @@ pub fn gate_schema() -> serde_json::Value {
             "kind": {
                 "type": "string",
                 "enum": ["semantic", "procedural", "episodic"],
-                "description": "Memory kind (only when approving): procedural=permanent process, semantic=identity/preference/constraint, episodic=time-bound decision"
+                "description": "Memory kind (only when approving): semantic=identity/preference/constraint (most common). procedural=permanent step-by-step process ONLY. episodic=time-bound decision/event."
             }
         },
         "required": ["decision"]
@@ -222,7 +222,7 @@ pub fn gate_batch_schema() -> serde_json::Value {
                     "properties": {
                         "id": { "type": "string", "description": "Memory ID prefix (first 8 chars)" },
                         "decision": { "type": "string", "enum": ["approve", "reject"] },
-                        "kind": { "type": "string", "enum": ["semantic", "procedural", "episodic"], "description": "Memory kind (only when approving)" }
+                        "kind": { "type": "string", "enum": ["semantic", "procedural", "episodic"], "description": "semantic=facts/decisions/lessons (most common). procedural=permanent step-by-step process ONLY. episodic=dated events." }
                     },
                     "required": ["id", "decision"]
                 }
@@ -311,7 +311,7 @@ Rules:
 3. **Each distilled entry must list its source IDs** (first 8 chars of the memory ID). A source can only appear in ONE distilled entry.
 4. **A distilled entry must replace 2+ sources** — don't output single-source "merges".
 5. **If nothing overlaps, return an empty distilled array** — don't force merges.
-6. **Kind**: choose the most appropriate kind for the merged result (semantic/episodic/procedural).
+6. **Kind**: choose the most appropriate kind for the merged result. semantic=facts/decisions/lessons (most common). procedural=reusable step-by-step workflows ONLY. episodic=dated events.
 7. **Same language as input** — don't translate.
 8. **Content length**: the merged text should be roughly as long as the longest source, not a summary. You're consolidating, not summarizing."#;
 
@@ -388,7 +388,7 @@ pub fn proxy_extract_schema() -> serde_json::Value {
                         "tags": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "1-4 relevant tags"
+                            "description": "1-4 topic tags. Name the SUBJECT, not meta-properties. Good: 'github-auth', 'deploy-flow', 'competitor-mem0'. Bad: 'session', 'distilled', 'lesson', 'engram-rs' (too generic)."
                         },
                         "kind": {
                             "type": "string",
