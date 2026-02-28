@@ -1,6 +1,10 @@
 # engram
 
-Persistent memory for AI agents — organized by time and space. Important memories get promoted, noise decays naturally, and related knowledge clusters into a browsable topic tree. Fully automatic.
+Memory engine for AI agents. Two axes: **time** (three-layer decay & promotion) and **space** (self-organizing topic tree). Important memories get promoted, noise fades, related knowledge clusters automatically.
+
+Hybrid search, LLM-powered consolidation, single Rust binary, one SQLite file.
+
+Most agent memory is a flat store — dump everything in, keyword search to get it back. No forgetting, no organization, no lifecycle. engram adds the part that makes memory actually useful: the ability to forget what doesn't matter and surface what does.
 
 <p align="center">
   <img src="docs/engram-quickstart.gif" alt="engram demo — store, context reset, recall" width="720">
@@ -26,34 +30,34 @@ curl -X POST http://localhost:3917/recall \
 curl http://localhost:3917/resume
 ```
 
-## Core Features
+## What It Does
 
-Most agent memory tools provide a vector store with search. engram adds a **lifecycle** — memories are not just stored, they are continuously managed.
+### Three-Layer Lifecycle
+
+Inspired by the [Atkinson–Shiffrin memory model](https://en.wikipedia.org/wiki/Atkinson%E2%80%93Shiffrin_memory_model), memories are managed across three layers by importance:
+
+```
+Buffer (short-term) → Working (active knowledge) → Core (long-term identity)
+      ↓                       ↓                           ↑
+   eviction              importance decay           LLM quality gate
+```
+
+- **Buffer**: Entry point for all new memories. Temporary staging — evicted when below threshold
+- **Working**: Promoted via consolidation. Never deleted, importance decays at different rates by kind
+- **Core**: Promoted through LLM quality gate. Never deleted
 
 ### LLM Quality Gate
 
-New memories enter the Buffer layer. Promotion to Working or Core requires passing an LLM quality gate — the LLM evaluates each memory in context and determines whether it warrants long-term retention.
+Promotion isn't rule-based guesswork — an LLM evaluates each memory in context and decides whether it genuinely warrants long-term retention.
 
 ```
 Buffer → [LLM gate: "Is this a decision, lesson, or preference?"] → Working
 Working → [sustained access + LLM gate] → Core
 ```
 
-### Semantic Dedup & Merge
-
-When two memories express the same concept in different words, engram detects and merges them:
-
-```
-Memory A: "use PostgreSQL for auth"
-Memory B: "auth service runs on Postgres"
-→ After consolidation: single merged memory preserving both contexts
-```
-
-Merging is LLM-powered — based on semantic understanding, not string similarity.
-
 ### Automatic Decay
 
-Decay is epoch-based — it only occurs during active consolidation cycles, not by wall-clock time. If the agent is idle for a week, memories remain intact.
+Decay is activity-driven — it only fires during active consolidation cycles, not wall-clock time. If the system is idle, memories stay intact. Different kinds decay at different rates:
 
 | Kind | Decay rate | Use case |
 |------|-----------|----------|
@@ -61,11 +65,18 @@ Decay is epoch-based — it only occurs during active consolidation cycles, not 
 | `semantic` | Slow | Knowledge, preferences, lessons (default) |
 | `procedural` | Slowest | Workflows, instructions, how-to |
 
-Working and Core memories are never deleted. In the Working layer, importance decreases gradually but memories remain searchable. Buffer serves as a temporary staging area where all kinds may be evicted.
+### Semantic Dedup & Merge
+
+Two memories saying the same thing in different words? Detected and merged automatically:
+
+```
+"use PostgreSQL for auth" + "auth service runs on Postgres"
+→ Merged into one, preserving context from both
+```
 
 ### Self-Organizing Topic Tree
 
-Vector clustering automatically groups related memories. The tree is hierarchical, with LLM-generated names:
+Vector clustering groups related memories together, LLM names the clusters. No manual tagging required:
 
 ```
 Memory Architecture
@@ -78,65 +89,25 @@ Deploy & Ops
 User Preferences [6]
 ```
 
-The tree rebuilds automatically when memories change. At session start, the agent receives a topic index as a table of contents. Use `POST /topic {"ids": ["kb3"]}` to retrieve all memories within a specific cluster.
+The problem this solves: vector search requires asking the right question. Topic trees let agents **browse by subject** — scan the directory, drill into the right branch.
 
 ### Triggers
 
-Tag a memory with `trigger:deploy`, and it surfaces automatically when the agent queries `/triggers/deploy` before executing a deployment.
+Tag a memory with `trigger:deploy`, and the agent can recall all deployment lessons before executing:
 
 ```bash
-# Store a lesson
 curl -X POST http://localhost:3917/memories \
   -d '{"content": "LESSON: always backup DB before migration", "tags": ["trigger:deploy", "lesson"]}'
 
 # Pre-deployment check
 curl http://localhost:3917/triggers/deploy
-# → returns all memories tagged trigger:deploy, ranked by access count
 ```
-
-## Architecture
-
-Memory is organized along two dimensions — **time** and **space**:
-
-```
-         Time (lifecycle)                    Space (topic tree)
-┌─────────────────────────────┐    ┌──────────────────────────────┐
-│                             │    │ Auth Architecture            │
-│  Buffer → Working → Core    │    │ ├── OAuth2 migration [3]     │
-│    ↓         ↓        ↑     │    │ └── Token handling [2]       │
-│  evict     decay    gate    │    │ Deploy & Ops                 │
-│                             │    │ ├── CI/CD procedures [3]     │
-│                             │    │ └── Rollback lessons [2]     │
-└─────────────────────────────┘    │ User Preferences [6]         │
-                                   └──────────────────────────────┘
-```
-
-**Time** — a three-layer lifecycle inspired by the [Atkinson–Shiffrin memory model](https://en.wikipedia.org/wiki/Atkinson%E2%80%93Shiffrin_memory_model):
-
-| Layer | Role | Behavior |
-|-------|------|----------|
-| **Buffer** | Short-term staging | All new memories enter here. Evicted when they fall below threshold |
-| **Working** | Active knowledge | Promoted by consolidation. Never deleted — importance decays at different rates by kind |
-| **Core** | Long-term identity | Promoted through LLM quality gate. Never deleted |
-
-**Space** — a self-organizing topic tree built from embedding vectors. Related memories cluster by semantic similarity, with LLM-generated names for each cluster:
-
-| Mechanism | Description |
-|-----------|-------------|
-| **Vector clustering** | Groups semantically similar memories into topics via cosine similarity |
-| **Hierarchy** | Related topics nest under shared parent nodes, forming a multi-level tree |
-| **LLM naming** | Generates human-readable names for each cluster automatically |
-| **Auto-rebuild** | Tree updates when memories change — no manual maintenance required |
-
-Topic trees address a fundamental limitation of vector search: it requires the right query to find the right memory. Topic trees allow the agent to browse by subject — scan the directory, then drill into the relevant branch.
 
 ## Session Recovery
 
-A single call restores full context, intended for session start or post-compaction recovery:
+Agent wakes up, calls `GET /resume`, gets full context back. No file scanning needed:
 
 ```
-GET /resume →
-
 === Core (24) ===
 deploy: test → build → stop → start (procedural)
 LESSON: never force-push to main
@@ -155,76 +126,52 @@ kb3: "Memory Design" [8]
 Triggers: deploy, git-push, database-migration
 ```
 
-Four sections, each serving a distinct purpose:
+| Section | Content | Purpose |
+|---------|---------|---------|
+| **Core** | Full text of permanent rules and identity | The unforgettable stuff |
+| **Recent** | Recently changed memories | Short-term continuity |
+| **Topics** | Topic index (table of contents) | Drill in on demand, no full load |
+| **Triggers** | Pre-action tags | Auto-recall lessons before risky ops |
 
-| Section | Content | Budget |
-|---------|---------|--------|
-| **Core** | Full text of permanent rules and identity — never truncated | ~2k tokens |
-| **Recent** | Memories changed since last consolidation window, for short-term continuity | ~1k tokens |
-| **Topics** | Named topic index — structured directory of all memories, followed by trigger tags | Leaf list |
-
-The agent reads the topic index, identifies relevant topics, and drills in via `POST /topic` on demand. This avoids loading the entire memory store into context.
+Agent reads the directory, finds relevant topics, calls `POST /topic` to expand on demand.
 
 ## Search & Retrieval
 
-Hybrid retrieval combining semantic embeddings and BM25 keyword search (with [jieba](https://github.com/messense/jieba-rs) for CJK tokenization). Results are ranked by relevance, memory importance, and recency.
+Semantic embeddings + BM25 keyword search with CJK tokenization ([jieba](https://github.com/messense/jieba-rs)). IDF-weighted scoring — rare terms get boosted, common terms auto-downweighted. No stopword lists to maintain.
 
 ```bash
-# Semantic search with budget control
+# Semantic search
 curl -X POST http://localhost:3917/recall \
   -d '{"query": "how do we handle auth", "budget_tokens": 2000}'
-
-# Pre-action safety check
-curl http://localhost:3917/triggers/deploy
 
 # Topic drill-down
 curl -X POST http://localhost:3917/topic \
   -d '{"ids": ["kb3"]}'
-# → {
-#   "kb3": {
-#     "name": "Memory Design",
-#     "memories": [
-#       {"id": "a1b2c3d4-...", "content": "Three-layer lifecycle ...", "layer": 3, "importance": 0.9, "tags": ["architecture"], "kind": "semantic", "created_at": 1709000000000},
-#       ...
-#     ]
-#   }
-# }
 ```
 
 ## Background Maintenance
 
-Fully autonomous and activity-driven — cycles are skipped when there has been no write activity:
+Fully automatic, activity-driven — no writes means the cycle is skipped:
 
-### Consolidation (every 30 minutes)
-
-Each cycle executes the following steps in order:
+**Consolidation (every 30 minutes)**
 
 1. **Decay** — reduce importance of unaccessed memories
-2. **Dedup** — detect and merge near-identical memories (cosine > 0.78)
-3. **Triage** — LLM categorizes new Buffer memories for promotion
-4. **Gate** — LLM evaluates promotion candidates (batched, single call)
-5. **Reconcile** — LLM resolves ambiguous similar pairs; results are cached to avoid redundant calls
-6. **Topic tree rebuild** — re-cluster and name new or changed topics
+2. **Dedup** — merge near-identical memories (cosine > 0.78)
+3. **Triage** — LLM categorizes new Buffer memories
+4. **Gate** — LLM batch-evaluates promotion candidates
+5. **Reconcile** — resolve ambiguous similar pairs (results cached)
+6. **Topic tree rebuild** — re-cluster and name
 
-### Topic Distillation
+**Topic Distillation** — when a topic grows too large (10+ memories), overlapping content is condensed into fewer, richer entries.
 
-When a topic cluster grows too large (10+ memories), engram condenses overlapping memories into fewer, richer entries — preserving all specific details while reducing redundancy. Up to 2 topics are distilled per consolidation cycle.
+## Namespace Isolation
 
-## Multi-Agent & Namespace Isolation
-
-A single engram instance can serve multiple agents concurrently. SQLite WAL mode, a connection pool, and an `RwLock`-protected vector index make concurrent reads and writes safe out of the box.
-
-Use the `X-Namespace` header to give each agent (or project) its own isolated memory space:
+Single instance, multiple projects. Use `X-Namespace` to isolate:
 
 ```bash
-# Project-specific memories
 curl -X POST http://localhost:3917/memories \
   -H "X-Namespace: my-project" \
   -d '{"content": "API uses OAuth2 bearer tokens"}'
-
-# Cross-project knowledge in the default namespace
-curl -X POST http://localhost:3917/memories \
-  -d '{"content": "Always use UTC for timestamps"}'
 ```
 
 ## Install
@@ -250,7 +197,7 @@ docker run -d --name engram \
 
 ### LLM Configuration
 
-engram functions without an LLM — providing keyword search and rule-based lifecycle only. Adding an LLM enables intelligent features (triage, gate, merge, topic naming, audit):
+engram works without an LLM — keyword search and rule-based lifecycle still function. Adding an LLM unlocks intelligent features (triage, gate, merge, topic naming):
 
 ```bash
 export ENGRAM_LLM_URL=https://api.openai.com/v1
@@ -264,7 +211,7 @@ export ENGRAM_LLM_PROVIDER=anthropic
 export ENGRAM_LLM_KEY=sk-ant-...
 ```
 
-Two-tier model configuration — strong model for judgment tasks, lightweight model for text processing:
+Two-tier model config — strong model for judgment, lightweight for text processing:
 
 ```bash
 ENGRAM_GATE_MODEL=gpt-4o          # quality decisions
@@ -273,7 +220,7 @@ ENGRAM_LLM_MODEL=gpt-4o-mini     # text processing
 
 ### For AI Agents
 
-Add this to your agent's system prompt or session:
+Add to your agent's system prompt:
 
 ```
 Set up engram (persistent memory) by following the guide at:
@@ -282,29 +229,28 @@ https://raw.githubusercontent.com/kael-bit/engram-rs/main/docs/SETUP.md
 
 ## Integration
 
-Compatible with Claude Code, Cursor, Windsurf, OpenClaw, and any MCP-compatible tool.
+Works with Claude Code, Cursor, Windsurf, OpenClaw, and any MCP-compatible tool.
 
-17 MCP tools — see [MCP docs](docs/MCP.md). Full HTTP API — see [Setup guide](docs/SETUP.md).
+17 MCP tools ([MCP docs](docs/MCP.md)) | Full HTTP API ([Setup guide](docs/SETUP.md))
 
 ```bash
 # MCP (Claude Code)
 npx engram-rs-mcp
 
 # MCP (Cursor / Windsurf / generic)
-# Add to your MCP config:
 {"mcpServers": {"engram": {"command": "npx", "args": ["-y", "engram-rs-mcp"]}}}
 ```
 
 ### Web Dashboard
 
-Built-in web UI at `http://localhost:3917` for browsing memories, viewing the topic tree, monitoring LLM usage, and inspecting consolidation history.
+Built-in web UI at `http://localhost:3917` for browsing memories, viewing the topic tree, and monitoring LLM usage.
 
 ## Specs
 
 | | |
 |---|---|
-| Binary size | ~10 MB |
-| Memory usage | ~100 MB RSS in production |
+| Binary | ~10 MB |
+| Memory | ~100 MB RSS in production |
 | Storage | SQLite, no external database |
 | Language | Rust |
 | Platforms | Linux, macOS, Windows (x86_64 + aarch64) |
