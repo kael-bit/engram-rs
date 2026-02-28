@@ -203,8 +203,8 @@ pub(super) async fn do_extract(
         memories.push(mem);
     }
 
-    // single batch call instead of N individual embed requests
-    if !embed_batch.is_empty() && cfg.has_embed() {
+    // Embedding guaranteed available by startup check
+    if !embed_batch.is_empty() {
         spawn_embed_batch(state.db.clone(), cfg.clone(), embed_batch);
     }
 

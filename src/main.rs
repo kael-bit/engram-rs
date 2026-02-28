@@ -34,18 +34,38 @@ async fn main() {
     let shared: SharedDB = Arc::new(mdb);
 
     let ai_cfg = ai::AiConfig::from_env();
+
+    // Embedding is mandatory — without it, recall is keyword-only and memories
+    // have no vectors.  Fail fast so the user knows immediately.
+    match &ai_cfg {
+        None => {
+            eprintln!("ERROR: No AI provider configured. engram requires an embedding provider to function.");
+            eprintln!("  Set ENGRAM_EMBED_URL (and ENGRAM_EMBED_KEY if auth is needed).");
+            eprintln!("  Example: ENGRAM_EMBED_URL=https://api.openai.com/v1/embeddings");
+            eprintln!("  See docs/SETUP.md for full configuration.");
+            std::process::exit(1);
+        }
+        Some(cfg) if !cfg.has_embed() => {
+            eprintln!("ERROR: Embedding provider not configured. engram requires embeddings to function.");
+            eprintln!("  Set ENGRAM_EMBED_URL (and ENGRAM_EMBED_KEY if auth is needed).");
+            eprintln!("  Currently configured: LLM only (model={}).", cfg.llm_model);
+            eprintln!("  See docs/SETUP.md for full configuration.");
+            std::process::exit(1);
+        }
+        _ => {}
+    }
+
     let ai_status = match &ai_cfg {
         Some(cfg) => {
             let mut parts = vec![];
             if cfg.has_llm() {
                 parts.push(format!("llm={}", cfg.llm_model));
             }
-            if cfg.has_embed() {
-                parts.push(format!("embed={}", cfg.embed_model));
-            }
+            // has_embed() is guaranteed true at this point
+            parts.push(format!("embed={}", cfg.embed_model));
             parts.join(", ")
         }
-        None => "disabled".into(),
+        None => unreachable!(), // caught above
     };
 
     let api_key = std::env::var("ENGRAM_API_KEY").ok();
@@ -74,8 +94,8 @@ async fn main() {
     let (topiary_tx, topiary_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
     let topiary_tx_clone = topiary_tx.clone();
 
+    // has_embed() guaranteed true by startup check above
     let embed_queue = ai_cfg.as_ref()
-        .filter(|c| c.has_embed())
         .map(|c| EmbedQueue::new(shared.clone(), c.clone(), Some(topiary_tx_clone)));
 
     // Spawn topiary worker

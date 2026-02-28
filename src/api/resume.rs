@@ -17,6 +17,7 @@ use super::topiary_api::build_topiary_resume_section;
 #[derive(Deserialize)]
 pub(super) struct ResumeQuery {
     recent_epochs: Option<i64>,
+    #[serde(alias = "namespace")]
     ns: Option<String>,
     workspace: Option<String>,
     limit: Option<usize>,

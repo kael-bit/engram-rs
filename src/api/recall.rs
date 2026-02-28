@@ -16,6 +16,7 @@ use super::{blocking, get_namespace};
 pub(super) struct SearchQuery {
     q: String,
     limit: Option<usize>,
+    #[serde(alias = "namespace")]
     ns: Option<String>,
 }
 
@@ -172,34 +173,31 @@ pub(super) async fn do_recall(
 
     let query_text = req.query.clone();
 
+    // Embedding guaranteed available by startup check
     let query_emb = if let Some(ref cfg) = state.ai {
-        if cfg.has_embed() {
-            // check cache first
-            let cached = state.embed_cache.get(&query_text);
-            if let Some(emb) = cached {
-                debug!("embed cache hit for recall query");
-                Some(emb)
-            } else {
-                match ai::get_embeddings(cfg, std::slice::from_ref(&query_text)).await {
-                    Ok(er) => {
-                        if let Some(ref u) = er.usage {
-                            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                            let _ = state.db.log_llm_call("recall_embed", &cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
-                        }
-                        let emb = er.embeddings.into_iter().next();
-                        if let Some(ref e) = emb {
-                            state.embed_cache.insert(query_text.clone(), e.clone());
-                        }
-                        emb
+        // check cache first
+        let cached = state.embed_cache.get(&query_text);
+        if let Some(emb) = cached {
+            debug!("embed cache hit for recall query");
+            Some(emb)
+        } else {
+            match ai::get_embeddings(cfg, std::slice::from_ref(&query_text)).await {
+                Ok(er) => {
+                    if let Some(ref u) = er.usage {
+                        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                        let _ = state.db.log_llm_call("recall_embed", &cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
                     }
-                    Err(e) => {
-                        warn!(error = %e, "embedding lookup failed, falling back to FTS");
-                        None
+                    let emb = er.embeddings.into_iter().next();
+                    if let Some(ref e) = emb {
+                        state.embed_cache.insert(query_text.clone(), e.clone());
                     }
+                    emb
+                }
+                Err(e) => {
+                    warn!(error = %e, "embedding lookup failed, falling back to FTS");
+                    None
                 }
             }
-        } else {
-            None
         }
     } else {
         None

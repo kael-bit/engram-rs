@@ -50,7 +50,6 @@ pub fn combined_similarity(emb_a: &[f32], emb_b: &[f32], tags_a: &[String], tags
 /// single-linkage clustering.
 ///
 /// Two memories are linked if `cosine * 0.7 + tag_jaccard * 0.3 > threshold`.
-/// Memories without embeddings are grouped into a single "unclustered" group.
 /// Clusters exceeding thresholds::MAX_CLUSTER_SIZE are split to prevent chain drift.
 ///
 /// # Arguments
@@ -154,11 +153,13 @@ pub fn cluster_memories(
         }
     }
 
-    // Add unclustered group if any
+    // Memories without embeddings (should not happen since embedding is
+    // mandatory, but log a warning rather than silently dropping them).
     if !without_emb.is_empty() {
+        tracing::warn!(count = without_emb.len(), "memories without embeddings found during clustering — this should not happen");
         clusters.push(MemoryCluster {
             memories: without_emb.into_iter().cloned().collect(),
-            label: "unclustered (no embeddings)".to_string(),
+            label: "unclustered (missing embeddings)".to_string(),
             similarities: vec![],
         });
     }

@@ -152,7 +152,7 @@ pub fn router(state: AppState) -> Router {
         .route("/trash", get(trash_list).delete(trash_purge))
         .route("/trash/{id}/restore", post(trash_restore))
         .route("/llm-usage", get(llm_usage).delete(clear_llm_usage))
-        .route("/topic", post(topiary_topic_handler))
+        .route("/topic", post(topiary_topic_handler).get(topiary_topic_get_handler))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Import needs a bigger body limit for exports with embeddings
@@ -261,11 +261,11 @@ async fn index(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /memories/:id": "get a memory by id",
             "PATCH /memories/:id": "update a memory",
             "DELETE /memories/:id": "delete a memory",
-            "DELETE /memories": "batch delete (body: {ids: [...]} or {namespace: 'x'})",
-            "POST /recall": "hybrid search (semantic + keyword)",
+            "DELETE /memories": "batch delete (body: {ids: [...]} or {namespace: 'x', confirm: true})",
+            "POST /recall": "hybrid search (semantic + keyword; default min_score=0.30, override with 0.0 for all)",
             "GET /search?q=term": "quick keyword search",
             "GET /recent?hours=2": "recent memories by time",
-            "GET /resume?hours=4&workspace=tags&limit=100": "full memory bootstrap (core + working + buffer + recent + sessions)",
+            "GET /resume?recent_epochs=24&workspace=tags&limit=100": "full memory bootstrap (core + working + buffer + recent + sessions)",
             "GET /triggers/:action": "pre-action recall (e.g. /triggers/git-push)",
             "POST /consolidate": "run maintenance cycle",
             "POST /audit": "Topic-scoped distillation — condense bloated topics",
@@ -288,6 +288,8 @@ async fn index(State(state): State<AppState>) -> Json<serde_json::Value> {
             "POST /proxy/flush": "flush proxy sliding window for current session",
             "GET /proxy/window": "view proxy sliding window for current session",
             "GET /ui": "web dashboard",
+            "POST /topic": "fetch topic details by IDs (body: {ids: ['kb1','kb3']})",
+            "GET /topic?ids=kb1,kb3": "fetch topic details by IDs (comma-separated query param)",
         }));
     }
     Json(data)

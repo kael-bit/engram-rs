@@ -472,9 +472,8 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
                 }
             }
 
-            // regenerate embedding for merged content
-            let embed_ok = if cfg.has_embed() {
-                match ai::get_embeddings(cfg, &[merged_content]).await {
+            // regenerate embedding for merged content (guaranteed available)
+            let embed_ok = match ai::get_embeddings(cfg, &[merged_content]).await {
                     Ok(er) if !er.embeddings.is_empty() => {
                         super::log_llm_usage(db, "merge_embed", &er.usage, &cfg.embed_model, 0);
                         if let Some(emb) = er.embeddings.into_iter().next() {
@@ -491,8 +490,7 @@ pub(super) async fn merge_similar(db: &SharedDB, cfg: &AiConfig) -> (usize, Vec<
                         false
                     }
                     _ => true
-                }
-            } else { true };
+                };
 
             if !embed_ok {
                 continue; // don't delete losers without a valid winner embedding

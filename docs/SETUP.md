@@ -205,7 +205,7 @@ Before acting on any non-trivial task, you **MUST** check your memory. Do not as
 - **General search:** Call `engram_recall` with the topic as the query.
   - `query` (required): Search string.
   - `expand` (boolean): Set to true for short/vague queries (+1-2s).
-  - `limit` (default 20), `budget_tokens` (default 2000), `tags`, `min_score`.
+  - `limit` (default 20), `budget_tokens` (default 2000), `tags`, `min_score` (default 0.30; set to 0.0 for all results).
 - **Topic drill-down:** Resume includes a topic index (e.g. `kb3: "Memory architecture" [8]`). To explore a topic's full memories, call `engram_topic` with `ids=["kb3"]`. Use this when you need all memories about a subject, not just the top search results.
 
 ### 4. Milestone Recaps
@@ -284,7 +284,7 @@ Before acting on any non-trivial task, you **MUST** check your memory. Do not as
 - **General search:** Query with the topic.
   - `query` (required): Search string.
   - `expand` (boolean): Set to true for short/vague queries (+1-2s).
-  - `limit` (default 20), `budget_tokens` (default 2000), `tags`, `min_score`.
+  - `limit` (default 20), `budget_tokens` (default 2000), `tags`, `min_score` (default 0.30; set to 0.0 for all results).
 
 ```bash
 curl -sf -X POST http://localhost:3917/recall \

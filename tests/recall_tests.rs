@@ -615,6 +615,14 @@ fn estimate_tokens_empty() {
 
 fn db_with_numbered_entries(n: usize) -> MemoryDB {
     let db = MemoryDB::open(":memory:").expect("in-memory db");
+    // Add padding documents so "entry" and "topic" don't get filtered as noise
+    // (dynamic df filter removes terms appearing in >80% of docs)
+    for i in 0..n {
+        db.insert(MemoryInput {
+            content: format!("padding document {i} with unrelated words"),
+            ..Default::default()
+        }).unwrap();
+    }
     // Each entry has a unique keyword (entry_N) for FTS and an embedding for semantic search
     for i in 0..n {
         std::thread::sleep(std::time::Duration::from_millis(5));

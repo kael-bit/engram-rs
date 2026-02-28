@@ -16,7 +16,7 @@ pub(super) async fn create_memory(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     LenientJson(mut input): LenientJson<db::MemoryInput>,
-) -> Result<(StatusCode, Json<db::Memory>), EngramError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), EngramError> {
     if input.namespace.is_none() {
         input.namespace = get_namespace(&headers);
     }
@@ -29,7 +29,8 @@ pub(super) async fn create_memory(
     // "same concept, different wording" — the gap that caused rep=0.
     if !skip_dedup {
         if let Some(ref cfg) = state.ai {
-            if cfg.has_embed() {
+            // Embedding is guaranteed available by startup check
+            {
                 tracing::debug!("semantic dedup: checking before insert");
                 match crate::recall::quick_semantic_dup_with_embedding(
                     cfg, &state.db, &input.content, crate::thresholds::INSERT_DEDUP_SIM,
@@ -99,7 +100,9 @@ pub(super) async fn create_memory(
                                     "semantic dedup: LLM-merged content + reinforced"
                                 );
                                 state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
-                                return Ok((StatusCode::OK, Json(mem)));
+                                let mut resp = serde_json::to_value(&mem).unwrap_or_default();
+                                resp["merged"] = serde_json::Value::Bool(true);
+                                return Ok((StatusCode::OK, Json(resp)));
                             }
                         }
 
@@ -108,7 +111,9 @@ pub(super) async fn create_memory(
                             "semantic dedup: reinforced (no new info)"
                         );
                         state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
-                        return Ok((StatusCode::OK, Json(existing)));
+                        let mut resp = serde_json::to_value(&existing).unwrap_or_default();
+                        resp["merged"] = serde_json::Value::Bool(true);
+                        return Ok((StatusCode::OK, Json(resp)));
                     }
                     Ok((None, pre_emb)) => {
                         // No semantic dup found — pass the pre-computed embedding
@@ -128,8 +133,8 @@ pub(super) async fn create_memory(
     let mem = blocking(move || db.insert(input))
         .await??;
 
+    // Embedding is guaranteed available by startup check
     if let Some(ref cfg) = state.ai {
-        if cfg.has_embed() {
             if sync {
                 let db = state.db.clone();
                 let cfg = cfg.clone();
@@ -155,11 +160,12 @@ pub(super) async fn create_memory(
             } else {
                 spawn_embed(state.db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
             }
-        }
     }
 
     state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
-    Ok((StatusCode::CREATED, Json(mem)))
+    let mut resp = serde_json::to_value(&mem).unwrap_or_default();
+    resp["merged"] = serde_json::Value::Bool(false);
+    Ok((StatusCode::CREATED, Json(resp)))
 }
 
 pub(super) async fn batch_create(
@@ -189,39 +195,37 @@ pub(super) async fn batch_create(
     let results = blocking(move || db.insert_batch(inputs))
         .await??;
 
-    // batch embed if AI is configured
+    // batch embed — embedding guaranteed available by startup check
     if let Some(ref cfg) = state.ai {
-        if cfg.has_embed() {
-            let items: Vec<(String, String)> = results
-                .iter()
-                .map(|m| (m.id.clone(), m.content.clone()))
-                .collect();
-            // if any input had sync_embed, do it synchronously
-            let any_sync = inputs_had_sync;
-            if any_sync {
-                match ai::get_embeddings(cfg, &items.iter().map(|(_, c)| c.clone()).collect::<Vec<_>>()).await {
-                    Ok(er) => {
-                        if let Some(ref u) = er.usage {
-                            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-                            let _ = state.db.log_llm_call("embed_batch", &cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
-                        }
-                        let db = state.db.clone();
-                        let pairs: Vec<_> = items.into_iter().zip(er.embeddings).collect();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            for ((id, _), emb) in pairs {
-                                let _ = db.set_embedding(&id, &emb);
-                            }
-                        }).await;
+        let items: Vec<(String, String)> = results
+            .iter()
+            .map(|m| (m.id.clone(), m.content.clone()))
+            .collect();
+        // if any input had sync_embed, do it synchronously
+        let any_sync = inputs_had_sync;
+        if any_sync {
+            match ai::get_embeddings(cfg, &items.iter().map(|(_, c)| c.clone()).collect::<Vec<_>>()).await {
+                Ok(er) => {
+                    if let Some(ref u) = er.usage {
+                        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+                        let _ = state.db.log_llm_call("embed_batch", &cfg.embed_model, u.prompt_tokens, u.completion_tokens, cached, 0);
                     }
-                    Err(e) => warn!(error = %e, "sync batch embedding failed"),
+                    let db = state.db.clone();
+                    let pairs: Vec<_> = items.into_iter().zip(er.embeddings).collect();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        for ((id, _), emb) in pairs {
+                            let _ = db.set_embedding(&id, &emb);
+                        }
+                    }).await;
                 }
-            } else if let Some(ref eq) = state.embed_queue {
-                for (id, content) in items {
-                    eq.push(id, content);
-                }
-            } else {
-                spawn_embed_batch(state.db.clone(), cfg.clone(), items);
+                Err(e) => warn!(error = %e, "sync batch embedding failed"),
             }
+        } else if let Some(ref eq) = state.embed_queue {
+            for (id, content) in items {
+                eq.push(id, content);
+            }
+        } else {
+            spawn_embed_batch(state.db.clone(), cfg.clone(), items);
         }
     }
 

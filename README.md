@@ -143,6 +143,7 @@ Semantic embeddings + BM25 keyword search with CJK tokenization ([jieba](https:/
 # Semantic search
 curl -X POST http://localhost:3917/recall \
   -d '{"query": "how do we handle auth", "budget_tokens": 2000}'
+# Note: min_score defaults to 0.30. Use "min_score": 0.0 to get all results.
 
 # Topic drill-down
 curl -X POST http://localhost:3917/topic \

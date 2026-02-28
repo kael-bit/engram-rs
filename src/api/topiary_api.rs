@@ -21,14 +21,16 @@ pub(super) struct TopicRequest {
 pub(super) struct TopicQuery {
     #[serde(default)]
     touch: Option<bool>,
+    /// Comma-separated topic IDs for GET requests (e.g. ?ids=kb1,kb3)
+    ids: Option<String>,
 }
 
-pub(super) async fn topiary_topic_handler(
-    State(state): State<AppState>,
-    Query(query): Query<TopicQuery>,
-    Json(body): Json<TopicRequest>,
+/// Shared implementation for both GET and POST /topic.
+async fn topic_inner(
+    state: &AppState,
+    do_touch: bool,
+    requested_ids: &[String],
 ) -> Result<Json<serde_json::Value>, EngramError> {
-    let do_touch = query.touch.unwrap_or(true);
     let db = state.db.clone();
 
     // Load the full serialized TopicTree and entry IDs
@@ -51,7 +53,7 @@ pub(super) async fn topiary_topic_handler(
 
     let mut result = serde_json::Map::new();
 
-    for requested_id in &body.ids {
+    for requested_id in requested_ids {
         if let Some(leaf) = crate::topiary::find_leaf(&full_tree.roots, requested_id) {
             let name = leaf.name.as_deref().unwrap_or("unnamed");
             // Resolve member indices to entry IDs, then load memories
@@ -89,6 +91,33 @@ pub(super) async fn topiary_topic_handler(
     }
 
     Ok(Json(serde_json::Value::Object(result)))
+}
+
+pub(super) async fn topiary_topic_handler(
+    State(state): State<AppState>,
+    Query(query): Query<TopicQuery>,
+    Json(body): Json<TopicRequest>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let do_touch = query.touch.unwrap_or(true);
+    topic_inner(&state, do_touch, &body.ids).await
+}
+
+/// GET /topic?ids=kb1,kb3&touch=false
+pub(super) async fn topiary_topic_get_handler(
+    State(state): State<AppState>,
+    Query(query): Query<TopicQuery>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let do_touch = query.touch.unwrap_or(true);
+    let ids: Vec<String> = query.ids
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if ids.is_empty() {
+        return Err(EngramError::Validation("ids query parameter is required (e.g. ?ids=kb1,kb3)".into()));
+    }
+    topic_inner(&state, do_touch, &ids).await
 }
 
 /// Build a concise Topics section from the cached topiary tree JSON.
