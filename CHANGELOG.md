@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.16.0
+
+### Recall Overhaul
+
+- **IDF-weighted term scoring**: Query terms are weighted by corpus rarity (`ln(N/df)`). Rare terms boost relevance more than common ones — works for both keywords and natural language queries.
+- **Multiplicative scoring formula**: `score = relevance × (1 + 0.4×weight + 0.2×recency)`. Relevance is now the gate — a Core memory with zero relevance scores zero, not 0.50.
+- **Dynamic noise filtering**: Replaced 100+ hardcoded stopwords (English + Chinese) with `df/N > 0.8` auto-detection. Language-agnostic, zero maintenance. Small corpus guard skips filtering when `total_docs < 5`.
+- **IDF miss penalty**: Memories that miss all rare query terms get `relevance × 0.85`.
+- **Orphan query penalty**: When no query terms exist in the corpus at all, all candidates get `relevance × 0.5`.
+- **Tags as soft boost**: Tag parameters no longer hard-filter results. Each matching tag multiplies relevance by 1.2 — more results, better ranked.
+- **min_score default 0.30**: Applied at API layer to filter low-quality noise. Internal `recall()` defaults to 0.0 for testability.
+
+### Topiary Clustering
+
+- **Tag-aware merge/enforce**: Cluster merge and budget enforcement use combined similarity (`cosine × 0.7 + tag_jaccard × 0.3`). Prevents grouping semantically-near but conceptually-different memories (e.g. "GitHub credentials" vs "GitHub promotion").
+- **Absorb stays pure cosine**: Fragment absorption ignores tag differences — small orphans should consolidate regardless of tagging.
+- **Absorb threshold lowered**: `TOPIARY_ABSORB_THRESHOLD` 0.40 → 0.30 for easier fragment cleanup.
+
+### Prompt Quality
+
+- **Unified tag guidance**: All 7 LLM entry points (extract/triage/gate/proxy/distill/merge/naming) now include "name the SUBJECT, not meta-properties" with good/bad examples.
+- **Strict kind definitions**: `procedural` restricted to reusable step-by-step workflows ONLY. Strategies, plans, and one-time decisions default to `semantic`.
+- **SETUP.md templates updated**: HTTP and MCP agent templates include the same tag/kind guidance.
+
+### Tests
+
+- **Removed 38 trivial tests** (-594 lines, 3 files deleted): Pure formula recalculation, obvious status code mappings, textbook math. Remaining 239 tests all provide real protection value.
+
 ## 0.15.0
 
 ### New Features
