@@ -86,6 +86,8 @@ pub struct TopicNode {
     pub children: Vec<TopicNode>,
     pub dirty: bool,
     pub avg_sim: f32,
+    #[serde(default)]
+    pub named_at_size: usize, // member count when last named
 }
 
 impl TopicNode {
@@ -195,9 +197,10 @@ impl TopicTree {
         if accept {
             let leaf_id = best_leaf_id.unwrap();
             if let Some(leaf) = find_leaf_mut(&mut self.roots, &leaf_id) {
-                let prev_size = leaf.members.len();
                 leaf.members.push(mem_idx);
-                if leaf.name.is_none() || prev_size < 5 {
+                if leaf.name.is_none()
+                    || (leaf.named_at_size > 0 && leaf.members.len() >= leaf.named_at_size + leaf.named_at_size / 2)
+                {
                     leaf.dirty = true;
                 }
                 let n = leaf.members.len() as f32;
@@ -219,6 +222,7 @@ impl TopicTree {
                 children: Vec::new(),
                 dirty: true,
                 avg_sim: 1.0,
+                named_at_size: 0,
             };
             self.roots.push(node);
         }

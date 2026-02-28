@@ -135,6 +135,7 @@ impl TopicTree {
                     children,
                     dirty: false,
                     avg_sim: 0.0,
+                    named_at_size: 0,
                 };
                 subdivide(&mut parent, &mut self.next_id, 1);
                 self.roots.push(parent);
@@ -335,6 +336,7 @@ fn kmeans_split(
             children: Vec::new(),
             dirty: true,
             avg_sim,
+            named_at_size: 0,
         });
     }
 
@@ -465,6 +467,7 @@ fn subdivide(node: &mut TopicNode, next_id: &mut u32, depth: usize) {
                 children: sub_children,
                 dirty: false,
                 avg_sim: 0.0,
+                named_at_size: 0,
             };
             subdivide(&mut sub_parent, next_id, depth + 1);
             node.children.push(sub_parent);
@@ -544,8 +547,10 @@ pub(super) fn enforce_budget(
             target.avg_sim = 1.0;
         }
 
-        // Mark as dirty so it gets renamed (merged topic needs a new name)
-        target.dirty = true;
+        // Keep target name if it has one; only mark dirty if unnamed
+        if target.name.is_none() {
+            target.dirty = true;
+        }
 
         tracing::trace!(
             merged_into = %target.id,

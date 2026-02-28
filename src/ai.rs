@@ -819,11 +819,7 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 
 /// Serialize an f32 vector to bytes (little-endian) for SQLite BLOB storage.
 pub fn embedding_to_bytes(v: &[f32]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(v.len() * 4);
-    for &f in v {
-        buf.extend_from_slice(&f.to_le_bytes());
-    }
-    buf
+    bytemuck::cast_slice(v).to_vec()
 }
 
 /// Deserialize bytes back to an f32 vector.
@@ -838,10 +834,9 @@ pub fn bytes_to_embedding(b: &[u8]) -> Vec<f32> {
             })
             .collect();
     }
-    b.chunks_exact(4)
-        .map(|chunk| {
-            let arr: [u8; 4] = chunk.try_into().expect("4 bytes");
-            f32::from_le_bytes(arr)
-        })
-        .collect()
+    // Zero-copy reinterpret: allocate f32 vec and copy bytes into it via bytemuck
+    let n = b.len() / 4;
+    let mut v = vec![0f32; n];
+    bytemuck::cast_slice_mut::<f32, u8>(&mut v).copy_from_slice(&b[..n * 4]);
+    v
 }

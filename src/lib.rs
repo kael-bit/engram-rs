@@ -165,10 +165,17 @@ impl EmbedQueue {
             info!(batch_size = count, "embed queue flushing");
 
             let texts: Vec<String> = items.iter().map(|(_, c)| c.clone()).collect();
-            let mut attempts = 0u64;
-            loop {
-                attempts += 1;
-                match ai::get_embeddings(&cfg, &texts).await {
+            {
+                use backon::{ExponentialBuilder, Retryable};
+
+                let result = (|| ai::get_embeddings(&cfg, &texts))
+                    .retry(ExponentialBuilder::default().with_max_times(3))
+                    .notify(|err, dur| {
+                        warn!(error = %err, retry_after = ?dur, batch_size = count, "embed queue batch failed, retrying");
+                    })
+                    .await;
+
+                match result {
                     Ok(er) => {
                         if let Some(ref u) = er.usage {
                             let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
@@ -185,15 +192,9 @@ impl EmbedQueue {
                         if let Some(ref tx) = topiary_tx {
                             let _ = tx.send(());
                         }
-                        break;
-                    }
-                    Err(e) if attempts < 3 => {
-                        warn!(error = %e, attempt = attempts, batch_size = count, "embed queue batch failed, retrying");
-                        tokio::time::sleep(std::time::Duration::from_secs(attempts * 2)).await;
                     }
                     Err(e) => {
-                        warn!(error = %e, batch_size = count, "embed queue batch failed after 3 attempts");
-                        break;
+                        warn!(error = %e, batch_size = count, "embed queue batch failed after retries");
                     }
                 }
             }

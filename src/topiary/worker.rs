@@ -358,6 +358,7 @@ fn inherit_in_node(
         if best_score >= 0.5 {
             if let Some(name) = best_name {
                 node.name = Some(name.to_string());
+                node.named_at_size = node.members.len();
                 node.dirty = false;
                 return 1;
             }

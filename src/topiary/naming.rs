@@ -195,6 +195,7 @@ fn apply_names_to_leaves(node: &mut TopicNode, names: &HashMap<String, String>) 
             if let Some(name) = names.get(&node.id) {
                 let clean: String = name.chars().take(50).collect();
                 node.name = Some(clean);
+                node.named_at_size = node.members.len();
                 node.dirty = false;
                 return 1;
             }
