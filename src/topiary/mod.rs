@@ -18,6 +18,7 @@ pub struct Entry {
     pub id: String,
     pub text: String,
     pub embedding: Vec<f32>,
+    pub tags: Vec<String>,
 }
 
 // ── Vector math — re-export from crate::util (single source of truth) ──────
@@ -546,4 +547,25 @@ fn node_to_json(node: &TopicNode, all_entries: &[Entry]) -> serde_json::Value {
             "children": children,
         })
     }
+}
+
+// ── Tag-aware similarity ──────────────────────────────────────────────────
+
+/// Tag Jaccard similarity between two tag sets.
+pub fn tag_jaccard(a: &[String], b: &[String]) -> f32 {
+    if a.is_empty() && b.is_empty() {
+        return 0.0;
+    }
+    let set_a: std::collections::HashSet<&str> = a.iter().map(|s| s.as_str()).collect();
+    let set_b: std::collections::HashSet<&str> = b.iter().map(|s| s.as_str()).collect();
+    let intersection = set_a.intersection(&set_b).count();
+    let union = set_a.union(&set_b).count();
+    if union == 0 { 0.0 } else { intersection as f32 / union as f32 }
+}
+
+/// Combined similarity: cosine * 0.7 + tag_jaccard * 0.3
+pub fn combined_similarity(emb_a: &[f32], emb_b: &[f32], tags_a: &[String], tags_b: &[String]) -> f32 {
+    let cos = cosine_similarity(emb_a, emb_b);
+    let jac = tag_jaccard(tags_a, tags_b);
+    cos * 0.7 + jac * 0.3
 }

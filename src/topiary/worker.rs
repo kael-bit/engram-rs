@@ -249,6 +249,7 @@ fn load_entries(db: &MemoryDB) -> Vec<Entry> {
                 id: mem.id.clone(),
                 text: mem.content.clone(),
                 embedding: (*emb).clone(),
+                tags: mem.tags.clone(),
             });
         }
     }

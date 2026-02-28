@@ -50,6 +50,22 @@ impl TopicTree {
             }
         }
 
+        // Collect tag unions for each leaf
+        let mut leaf_all_tags: Vec<Vec<String>> = Vec::new();
+        for root in &self.roots {
+            for leaf in root.leaves() {
+                let mut tags_set = std::collections::HashSet::new();
+                for &m in &leaf.members {
+                    if let Some(e) = all_entries.get(m) {
+                        for t in &e.tags {
+                            tags_set.insert(t.clone());
+                        }
+                    }
+                }
+                leaf_all_tags.push(tags_set.into_iter().collect());
+            }
+        }
+
         let mut merge_pairs: Vec<(String, String)> = Vec::new();
         let mut merged_set = std::collections::HashSet::new();
 
@@ -64,7 +80,9 @@ impl TopicTree {
                 if leaf_sizes[i] + leaf_sizes[j] > self.max_leaf_size {
                     continue;
                 }
-                let sim = cosine_similarity(&leaf_centroids[i], &leaf_centroids[j]);
+                let cos = cosine_similarity(&leaf_centroids[i], &leaf_centroids[j]);
+                let jac = super::tag_jaccard(&leaf_all_tags[i], &leaf_all_tags[j]);
+                let sim = cos * 0.7 + jac * 0.3;
                 if sim >= self.merge_threshold {
                     merge_pairs.push((leaf_ids[i].clone(), leaf_ids[j].clone()));
                     merged_set.insert(leaf_ids[i].clone());
@@ -503,15 +521,34 @@ pub fn enforce_budget(
         "topiary enforce_budget: incremental merge"
     );
 
+    // Collect tag unions for each leaf
+    let mut leaf_tag_sets: Vec<std::collections::HashSet<String>> = leaves.iter()
+        .map(|leaf| {
+            let mut tags = std::collections::HashSet::new();
+            for &m in &leaf.members {
+                if let Some(e) = all_entries.get(m) {
+                    for t in &e.tags {
+                        tags.insert(t.clone());
+                    }
+                }
+            }
+            tags
+        })
+        .collect();
+
     while leaves.len() > budget && leaves.len() >= 2 {
-        // Find the two most similar leaves by centroid cosine similarity
+        // Find the two most similar leaves by combined similarity
         let mut best_sim = f32::NEG_INFINITY;
         let mut best_i = 0;
         let mut best_j = 1;
 
         for i in 0..leaves.len() {
             for j in (i + 1)..leaves.len() {
-                let sim = cosine_similarity(&leaves[i].centroid, &leaves[j].centroid);
+                let cos = cosine_similarity(&leaves[i].centroid, &leaves[j].centroid);
+                let tags_i: Vec<String> = leaf_tag_sets[i].iter().cloned().collect();
+                let tags_j: Vec<String> = leaf_tag_sets[j].iter().cloned().collect();
+                let jac = super::tag_jaccard(&tags_i, &tags_j);
+                let sim = cos * 0.7 + jac * 0.3;
                 if sim > best_sim {
                     best_sim = sim;
                     best_i = i;
@@ -522,6 +559,8 @@ pub fn enforce_budget(
 
         // Merge j into i (remove j first since j > i)
         let removed = leaves.remove(best_j);
+        let removed_tags = leaf_tag_sets.remove(best_j);
+        leaf_tag_sets[best_i].extend(removed_tags);
         let target = &mut leaves[best_i];
 
         // Combine members

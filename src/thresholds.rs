@@ -147,8 +147,8 @@ pub const TOPIARY_MIN_INTERNAL_SIM: f32 = 0.35;
 pub const TOPIARY_LEAF_BUDGET: usize = 256;
 
 /// Absorb small children: cosine threshold and size limit.
-pub const TOPIARY_ABSORB_THRESHOLD: f32 = 0.40;
-pub const TOPIARY_ABSORB_SMALL_SIZE: usize = 2;
+pub const TOPIARY_ABSORB_THRESHOLD: f32 = 0.30;
+pub const TOPIARY_ABSORB_SMALL_SIZE: usize = 3;
 
 /// Tiered split thresholds: large (>max_size), medium (5-8), small (3-4).
 pub const TOPIARY_SPLIT_LARGE: f32 = 0.50;
