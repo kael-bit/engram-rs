@@ -302,3 +302,7 @@ npx engram-rs-mcp
 ## License
 
 MIT
+
+<a href="https://glama.ai/mcp/servers/@kael-bit/engram-rs">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@kael-bit/engram-rs/badge" />
+</a>

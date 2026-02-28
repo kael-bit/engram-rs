@@ -1,9 +1,5 @@
 # engram
 
-<a href="https://glama.ai/mcp/servers/@kael-bit/engram-rs">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/@kael-bit/engram-rs/badge" />
-</a>
-
 Persistent memory for AI agents — organized by time and space. Important memories get promoted, noise decays naturally, and related knowledge clusters into a browsable topic tree. Fully automatic.
 
 <p align="center">
@@ -310,3 +306,7 @@ Built-in web UI at `http://localhost:3917` for browsing memories, viewing the to
 ## License
 
 MIT
+
+<a href="https://glama.ai/mcp/servers/@kael-bit/engram-rs">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@kael-bit/engram-rs/badge" />
+</a>
