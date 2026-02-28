@@ -40,7 +40,7 @@ pub async fn name_tree(
         };
     }
 
-    let num_batches = (dirty_count + batch_size - 1) / batch_size;
+    let num_batches = dirty_count.div_ceil(batch_size);
     info!(
         dirty = dirty_count,
         batches = num_batches,

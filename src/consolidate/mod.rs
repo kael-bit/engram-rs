@@ -876,7 +876,7 @@ async fn llm_promotion_gate_batch(
     user_msg.push_str("Review each memory below and decide whether to promote it to Core.\n\n");
 
     for (id, content, ac, rep, _imp, _tags) in candidates {
-        let short = crate::util::short_id(&id);
+        let short = crate::util::short_id(id);
         let truncated = truncate_chars(content, 300);
         let mut context_parts = Vec::new();
         if *ac >= 30 {
@@ -904,7 +904,7 @@ async fn llm_promotion_gate_batch(
     // Map LLM decisions back to full IDs
     let mut results = Vec::with_capacity(candidates.len());
     for (full_id, _content, _ac, _rep, _imp, _tags) in candidates {
-        let short = crate::util::short_id(&full_id);
+        let short = crate::util::short_id(full_id);
         if let Some(d) = tcr.value.decisions.iter().find(|d| d.id == short) {
             let approved = d.decision == "approve";
             let kind = if approved { d.kind.clone().or(Some("semantic".into())) } else { None };

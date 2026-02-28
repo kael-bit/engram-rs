@@ -67,7 +67,7 @@ pub(super) async fn do_resume(
         };
 
         // When a project namespace is set, also include "default" namespace
-        let include_default = ns_filter.as_deref().map_or(false, |ns| ns != "default");
+        let include_default = ns_filter.as_deref().is_some_and(|ns| ns != "default");
 
         // === Core section ===
         let mut core: Vec<db::Memory> = d

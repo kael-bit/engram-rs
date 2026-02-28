@@ -54,13 +54,12 @@ pub(super) fn heuristic_triage_buffer_sync(
     let mut promoted_ids = Vec::new();
 
     for mem in &all_buffers {
-        if heuristic_should_promote(mem) {
-            if db.promote(&mem.id, Layer::Working).is_ok() {
+        if heuristic_should_promote(mem)
+            && db.promote(&mem.id, Layer::Working).is_ok() {
                 info!(id = %crate::util::short_id(&mem.id), "auto-promoted {} (heuristic: high signal)", crate::util::short_id(&mem.id));
                 promoted_ids.push(mem.id.clone());
                 promoted_count += 1;
             }
-        }
     }
 
     if promoted_count > 0 {

@@ -129,7 +129,7 @@ pub fn cluster_memories(
     // Build clusters, splitting oversized ones to prevent chain drift
     let mut clusters: Vec<MemoryCluster> = Vec::new();
 
-    for (_root, indices) in &groups {
+    for indices in groups.values() {
         if indices.len() <= thresholds::MAX_CLUSTER_SIZE {
             // Small enough — build directly
             let cluster_mems: Vec<Memory> = indices.iter().map(|&i| with_emb[i].clone()).collect();

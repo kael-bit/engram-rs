@@ -146,10 +146,8 @@ impl TopicTree {
             }
         }
 
-        for slot in slots {
-            if let Some(node) = slot {
-                self.roots.push(node);
-            }
+        for node in slots.into_iter().flatten() {
+            self.roots.push(node);
         }
     }
 }
@@ -478,10 +476,8 @@ fn subdivide(node: &mut TopicNode, next_id: &mut u32, depth: usize) {
         }
     }
 
-    for slot in slots {
-        if let Some(child) = slot {
-            node.children.push(child);
-        }
+    for child in slots.into_iter().flatten() {
+        node.children.push(child);
     }
 }
 

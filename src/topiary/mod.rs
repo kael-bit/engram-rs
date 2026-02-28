@@ -442,11 +442,10 @@ fn absorb_small_in_node(
                 }
                 let sim =
                     cosine_similarity(&node.children[i].centroid, &node.children[j].centroid);
-                if sim >= absorb_threshold {
-                    if best.is_none() || sim > best.unwrap().2 {
+                if sim >= absorb_threshold
+                    && (best.is_none() || sim > best.unwrap().2) {
                         best = Some((i, j, sim));
                     }
-                }
             }
         }
 

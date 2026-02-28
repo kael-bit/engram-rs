@@ -376,7 +376,7 @@ fn inherit_in_node(
 }
 
 fn count_unnamed_leaves(roots: &[TopicNode]) -> usize {
-    roots.iter().map(|r| count_unnamed_in(r)).sum()
+    roots.iter().map(count_unnamed_in).sum()
 }
 
 fn count_unnamed_in(node: &TopicNode) -> usize {
@@ -387,6 +387,6 @@ fn count_unnamed_in(node: &TopicNode) -> usize {
             0
         }
     } else {
-        node.children.iter().map(|c| count_unnamed_in(c)).sum()
+        node.children.iter().map(count_unnamed_in).sum()
     }
 }
