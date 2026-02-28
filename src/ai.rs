@@ -809,12 +809,8 @@ pub fn embedding_to_bytes(v: &[f32]) -> Vec<u8> {
 pub fn bytes_to_embedding(b: &[u8]) -> Vec<f32> {
     // Legacy f64 blobs are exactly 12288 bytes (1536 × 8). New f32 blobs are 6144 (1536 × 4).
     if b.len() == 1536 * 8 {
-        return b.chunks_exact(8)
-            .map(|chunk| {
-                let arr: [u8; 8] = chunk.try_into().expect("8 bytes");
-                f64::from_le_bytes(arr) as f32
-            })
-            .collect();
+        let f64s: &[f64] = bytemuck::cast_slice(b);
+        return f64s.iter().map(|&x| x as f32).collect();
     }
     // Zero-copy reinterpret: allocate f32 vec and copy bytes into it via bytemuck
     let n = b.len() / 4;
