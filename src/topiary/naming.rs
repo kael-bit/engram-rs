@@ -18,7 +18,7 @@ pub struct NamingStats {
 
 /// Name all dirty leaf topics in the tree via batched LLM calls.
 pub async fn name_tree(
-    roots: &mut Vec<TopicNode>,
+    roots: &mut [TopicNode],
     all_entries: &[Entry],
     cfg: &AiConfig,
     db: &MemoryDB,
