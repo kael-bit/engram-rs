@@ -540,7 +540,7 @@ pub fn recall(
     }
 
     // Filter by min_score first so we can count the total eligible set
-    let min_score = req.min_score.unwrap_or(0.30);
+    let min_score = req.min_score.unwrap_or(0.0);
     let eligible: Vec<ScoredMemory> = scored
         .into_iter()
         .filter(|sm| sm.score >= min_score)

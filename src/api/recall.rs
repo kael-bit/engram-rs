@@ -165,6 +165,10 @@ pub(super) async fn do_recall(
     if req.namespace.is_none() {
         req.namespace = get_namespace(&headers);
     }
+    // Default min_score at API layer (recall function defaults to 0.0 for testability)
+    if req.min_score.is_none() {
+        req.min_score = Some(0.30);
+    }
 
     let query_text = req.query.clone();
 
