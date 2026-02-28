@@ -5,6 +5,7 @@ fn make_entry(id: &str, text: &str, embedding: Vec<f32>) -> Entry {
         id: id.to_string(),
         text: text.to_string(),
         embedding,
+        tags: vec![],
     }
 }
 

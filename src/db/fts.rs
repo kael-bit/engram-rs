@@ -124,10 +124,10 @@ impl MemoryDB {
         }
 
         let processed = append_segmented(sanitized);
-        let terms: Vec<String> = processed.split_whitespace()
+        let raw_terms: Vec<String> = processed.split_whitespace()
             .map(|w| w.to_lowercase())
-            .filter(|w| !is_stopword(w))
             .collect();
+        let terms = filter_fts_terms(&raw_terms, self);
         if terms.is_empty() {
             return Ok(vec![]);
         }
@@ -260,34 +260,48 @@ impl MemoryDB {
 
 }
 
-/// Common CJK stop words that match nearly everything and add noise to FTS queries.
-/// Kept minimal — only the most ubiquitous function words.
-pub fn is_stopword(word: &str) -> bool {
-    matches!(word,
-        "的" | "了" | "是" | "在" | "有" | "和" | "就" | "都" | "而" | "及" |
-        "与" | "这" | "那" | "你" | "我" | "他" | "她" | "它" | "们" | "着" |
-        "过" | "到" | "对" | "也" | "不" | "会" | "被" | "把" | "让" | "给" |
-        "用" | "从" | "很" | "但" | "还" | "又" | "或" | "已" | "要" | "该" |
-        "为" | "其" | "所" | "只" | "之" | "中" | "上" | "下" | "个" | "么" |
-        "什么" | "怎么" | "如何" | "什" | "哪" | "谁" |
-        "一个" | "一些" | "一种" | "可以" | "没有" | "因为" | "所以" |
-        "someone" | "something" | "some" | "shared" | "how" | "what" |
-        "when" | "where" | "which" | "who" | "do" | "does" | "did" |
-        "the" | "a" | "an" | "is" | "are" | "was" | "were" | "be" | "been" |
-        "and" | "or" | "but" | "in" | "on" | "at" | "to" | "for" | "of" |
-        "it" | "as" | "if" | "no" | "not" | "so" | "this" | "that"
-    )
-}
+/// Dynamic noise detection threshold: terms appearing in more than this
+/// fraction of documents are considered noise (no discriminative value).
+const NOISE_DF_RATIO: f64 = 0.8;
 
-/// Extract meaningful query terms (stopwords removed, deduped, lowercased).
-/// Used by recall for IDF-based term weighting.
-pub fn extract_query_terms(query: &str) -> Vec<String> {
+/// Extract meaningful query terms with dynamic noise filtering.
+/// Terms appearing in >80% of corpus are auto-filtered — works for any
+/// language without a hardcoded stopword list. The data decides what's noise.
+/// Returns (terms, total_docs) so callers can reuse the doc count.
+pub fn extract_query_terms(query: &str, db: &super::MemoryDB) -> (Vec<String>, f64) {
+    let total_docs = db.count_filtered(None, None, None, None).unwrap_or(1).max(1) as f64;
     let words = super::jieba().cut_for_search(query, false);
     let mut seen = std::collections::HashSet::new();
-    words.iter()
+    let terms = words.iter()
         .map(|w| w.trim().to_lowercase())
-        .filter(|w| w.chars().count() >= 2 && !is_stopword(w))
+        .filter(|w| !w.is_empty())
         .filter(|w| seen.insert(w.clone()))
+        .filter(|w| {
+            if total_docs < 5.0 {
+                return true; // Too few docs for meaningful df stats
+            }
+            let df = db.term_doc_frequency(w);
+            (df as f64 / total_docs) <= NOISE_DF_RATIO
+        })
+        .collect();
+    (terms, total_docs)
+}
+
+/// Filter FTS query terms: remove corpus-noise terms.
+/// When corpus is too small (<5 docs), skip df filtering to avoid false negatives.
+pub fn filter_fts_terms(terms: &[String], db: &super::MemoryDB) -> Vec<String> {
+    let total_docs = db.count_filtered(None, None, None, None).unwrap_or(0) as f64;
+    if total_docs < 5.0 {
+        // Too few documents for meaningful df statistics
+        return terms.iter().filter(|w| !w.is_empty()).cloned().collect();
+    }
+    terms.iter()
+        .filter(|w| !w.is_empty())
+        .filter(|w| {
+            let df = db.term_doc_frequency(w);
+            (df as f64 / total_docs) <= NOISE_DF_RATIO
+        })
+        .cloned()
         .collect()
 }
 

@@ -376,7 +376,7 @@ pub fn recall(
             let words = crate::db::jieba().cut_for_search(&req.query, false);
             words.iter()
                 .map(|w| w.trim())
-                .filter(|w| w.chars().count() >= 2)
+                .filter(|w| !w.is_empty())
                 .map(str::to_lowercase)
                 .collect()
         };
@@ -407,11 +407,9 @@ pub fn recall(
     // This helps discriminating queries like "discord someone shared proposal"
     // where "discord" is rare (high IDF) and "proposal" is common (low IDF).
     if !req.query.is_empty() && !scored.is_empty() {
-        let terms = crate::db::fts::extract_query_terms(&req.query);
+        let (terms, total_docs) = crate::db::fts::extract_query_terms(&req.query, db);
         if !terms.is_empty() {
             // Compute IDF for each term: ln(N / df)
-            // N = total memories in corpus
-            let total_docs = db.count_filtered(None, None, None, None).unwrap_or(1).max(1) as f64;
             let term_idfs: Vec<(String, f64)> = terms.iter().filter_map(|t| {
                 let df = db.term_doc_frequency(t);
                 if df == 0 {
