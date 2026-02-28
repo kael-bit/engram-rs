@@ -794,28 +794,10 @@ pub async fn get_embeddings(
 }
 
 // ---------------------------------------------------------------------------
-// Vector utilities
+// Vector utilities — delegate to crate::util (single source of truth)
 // ---------------------------------------------------------------------------
 
-/// Cosine similarity between two vectors.
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let (mut dot, mut na, mut nb) = (0.0f64, 0.0f64, 0.0f64);
-    for i in 0..a.len() {
-        let (ai, bi) = (a[i] as f64, b[i] as f64);
-        dot += ai * bi;
-        na += ai * ai;
-        nb += bi * bi;
-    }
-    let denom = na.sqrt() * nb.sqrt();
-    if denom == 0.0 {
-        0.0
-    } else {
-        dot / denom
-    }
-}
+pub use crate::util::cosine_similarity;
 
 /// Serialize an f32 vector to bytes (little-endian) for SQLite BLOB storage.
 pub fn embedding_to_bytes(v: &[f32]) -> Vec<u8> {

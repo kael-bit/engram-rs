@@ -490,7 +490,7 @@ fn subdivide(node: &mut TopicNode, next_id: &mut u32, depth: usize) {
 /// When leaf count exceeds budget, incrementally merge the two most similar
 /// leaves until count <= budget.  This preserves existing topic IDs and names
 /// instead of destructively re-clustering via k-means.
-pub(super) fn enforce_budget(
+pub fn enforce_budget(
     leaves: &mut Vec<TopicNode>,
     all_entries: &[Entry],
     budget: usize,

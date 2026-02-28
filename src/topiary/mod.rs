@@ -3,7 +3,7 @@
 //! Adapted from the standalone `topic-tree` project. Builds a tree of
 //! topic clusters from memory embeddings, with LLM-powered naming.
 
-mod cluster;
+pub mod cluster;
 pub mod naming;
 pub mod worker;
 
@@ -20,59 +20,9 @@ pub struct Entry {
     pub embedding: Vec<f32>,
 }
 
-// ── Self-contained f32 math (not importing from ai.rs which uses f64) ──────
+// ── Vector math — re-export from crate::util (single source of truth) ──────
 
-/// Cosine similarity between two f32 vectors.
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0.0f64;
-    let mut na = 0.0f64;
-    let mut nb = 0.0f64;
-    for i in 0..a.len() {
-        let ai = a[i] as f64;
-        let bi = b[i] as f64;
-        dot += ai * bi;
-        na += ai * ai;
-        nb += bi * bi;
-    }
-    let denom = na.sqrt() * nb.sqrt();
-    if denom < 1e-12 {
-        0.0
-    } else {
-        (dot / denom) as f32
-    }
-}
-
-/// Element-wise mean of vectors, L2-normalized.
-pub fn mean_vector(vectors: &[&[f32]]) -> Vec<f32> {
-    if vectors.is_empty() {
-        return Vec::new();
-    }
-    let dim = vectors[0].len();
-    let mut result = vec![0.0f64; dim];
-    for v in vectors {
-        for (i, &val) in v.iter().enumerate() {
-            result[i] += val as f64;
-        }
-    }
-    let n = vectors.len() as f64;
-    let mut out: Vec<f32> = result.iter().map(|x| (*x / n) as f32).collect();
-    l2_normalize(&mut out);
-    out
-}
-
-/// In-place L2 normalization.
-pub fn l2_normalize(v: &mut [f32]) {
-    let norm: f64 = v.iter().map(|&x| (x as f64) * (x as f64)).sum::<f64>().sqrt();
-    if norm > 1e-12 {
-        let inv = 1.0 / norm;
-        for x in v.iter_mut() {
-            *x = (*x as f64 * inv) as f32;
-        }
-    }
-}
+pub use crate::util::{cosine_similarity_f32 as cosine_similarity, l2_normalize, mean_vector};
 
 // ── TopicNode ──────────────────────────────────────────────────────────────
 
@@ -105,7 +55,7 @@ impl TopicNode {
 
     pub fn depth(&self) -> usize {
         if self.is_leaf() {
-            1
+            0
         } else {
             1 + self.children.iter().map(|c| c.depth()).max().unwrap_or(0)
         }
