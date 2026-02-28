@@ -545,6 +545,12 @@ CREATE TABLE IF NOT EXISTS engram_meta (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS embed_cache (
+    query TEXT PRIMARY KEY,
+    embedding BLOB NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS llm_usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts INTEGER NOT NULL,
@@ -629,6 +635,41 @@ impl MemoryDB {
             rusqlite::params![format!("{}%", prefix)],
         )?;
         Ok(())
+    }
+
+    // ── Embed cache (persistent, FIFO, max 128) ───────────────────────────
+
+    const EMBED_CACHE_MAX: i64 = 128;
+
+    /// Load all cached embeddings (for warming in-memory LRU on startup).
+    pub fn embed_cache_load_all(&self) -> Vec<(String, Vec<f32>)> {
+        let c = match self.conn() { Ok(c) => c, Err(_) => return vec![] };
+        let mut stmt = match c.prepare(
+            "SELECT query, embedding FROM embed_cache ORDER BY created_at ASC"
+        ) { Ok(s) => s, Err(_) => return vec![] };
+        stmt.query_map([], |r| {
+            let q: String = r.get(0)?;
+            let blob: Vec<u8> = r.get(1)?;
+            Ok((q, crate::ai::bytes_to_embedding(&blob)))
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    }
+
+    /// Insert or update a cached embedding, evicting oldest if over limit.
+    pub fn embed_cache_put(&self, query: &str, embedding: &[f32]) {
+        let c = match self.conn() { Ok(c) => c, Err(_) => return };
+        let now = now_ms();
+        let blob = crate::ai::embedding_to_bytes(embedding);
+        let _ = c.execute(
+            "INSERT OR REPLACE INTO embed_cache (query, embedding, created_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![query, blob, now],
+        );
+        // FIFO eviction: delete oldest beyond limit
+        let _ = c.execute(
+            "DELETE FROM embed_cache WHERE query NOT IN (SELECT query FROM embed_cache ORDER BY created_at DESC LIMIT ?1)",
+            rusqlite::params![Self::EMBED_CACHE_MAX],
+        );
     }
 
     pub fn log_llm_call(

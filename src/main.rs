@@ -68,7 +68,7 @@ async fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(128);
-    let embed_cache = EmbedCache::new(embed_cache_cap);
+    let embed_cache = EmbedCache::with_db(embed_cache_cap, &shared);
 
     // Topiary trigger channel
     let (topiary_tx, topiary_rx) = tokio::sync::mpsc::unbounded_channel::<()>();

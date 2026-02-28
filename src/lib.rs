@@ -53,6 +53,7 @@ use std::num::NonZeroUsize;
 #[derive(Clone)]
 pub struct EmbedCache {
     inner: std::sync::Arc<parking_lot::Mutex<EmbedCacheInner>>,
+    db: Option<SharedDB>,
 }
 
 struct EmbedCacheInner {
@@ -71,6 +72,29 @@ impl EmbedCache {
                 hits: 0,
                 misses: 0,
             })),
+            db: None,
+        }
+    }
+
+    /// Create and warm from persistent DB cache.
+    pub fn with_db(capacity: usize, db: &SharedDB) -> Self {
+        let entries = db.embed_cache_load_all();
+        let loaded = entries.len();
+        let cap = NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(128).unwrap());
+        let mut cache = LruCache::new(cap);
+        for (q, emb) in entries {
+            cache.put(q, emb);
+        }
+        if loaded > 0 {
+            tracing::info!(loaded, "embed cache warmed from db");
+        }
+        Self {
+            inner: std::sync::Arc::new(parking_lot::Mutex::new(EmbedCacheInner {
+                cache,
+                hits: 0,
+                misses: 0,
+            })),
+            db: Some(db.clone()),
         }
     }
 
@@ -86,6 +110,9 @@ impl EmbedCache {
     }
 
     pub fn insert(&self, key: String, value: Vec<f32>) {
+        if let Some(ref db) = self.db {
+            db.embed_cache_put(&key, &value);
+        }
         let mut inner = self.inner.lock();
         inner.cache.put(key, value);
     }
