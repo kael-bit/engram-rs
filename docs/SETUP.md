@@ -186,10 +186,14 @@ You have persistent memory via engram MCP tools.
 ✅ **Store:** user identity, preferences, decisions, constraints, lessons, milestone recaps ("what was decided" + "what to do next"). Use `episodic` for time-bound events, `semantic` for lasting knowledge, `procedural` for permanent workflows.
 **🚫 Don't store:** command output, step-by-step narration, info already in code/config files.
 
-**Storage modifiers (MCP tool parameters):**
-- Workflows/procedures → `kind="procedural"`. **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural.
-- Events/decisions → `kind="episodic"`. Time-bound events: "decided to use X", "v1.0 released", "found bug in Y". These lose relevance as the situation evolves.
-- Facts/lessons → `kind="semantic"` (default). Identity, preferences, lessons, constraints.
+**Tags:** Name the SUBJECT, not meta-properties. Good: `deploy-flow`, `ssh-config`, `competitor-mem0`. Bad: `session`, `distilled`, `engram-rs` (too generic). Trigger tags (`trigger:git-push`) are the exception — they enable reflex recall.
+
+**Kind:**
+- `semantic` (default) — facts, preferences, lessons, constraints, strategies. **When in doubt, use this.**
+- `episodic` — specific dated events: "decided to use X", "v1.0 released", "found bug in Y"
+- `procedural` — reusable step-by-step workflows ONLY (deploy steps, build process). **NOT:** strategies, plans, guidelines, one-time decisions. If it has an end condition ("until X", "for now"), it's NOT procedural.
+
+**Other modifiers:**
 - Lessons → `tags=["lesson", "trigger:kebab-verb"]` (e.g. `trigger:git-push`, `trigger:deploy-app`)
 - Cross-project knowledge → `namespace="default"`
 
@@ -245,26 +249,30 @@ You have persistent memory via engram at http://localhost:3917
 ✅ **Store:** user identity, preferences, decisions, constraints, lessons, milestone recaps ("what was decided" + "what to do next"). Use `episodic` for time-bound events, `semantic` for lasting knowledge, `procedural` for permanent workflows.
 **🚫 Don't store:** command output, step-by-step narration, info already in code/config files.
 
-**Storage modifiers (HTTP JSON body / headers):**
-- Workflows/procedures → `"kind": "procedural"`. **Only for permanently true processes** — deployment steps, coding standards, recurring workflows. If it has an end condition ("until X", "for now", "temporary"), it's NOT procedural.
-- Events/decisions → `"kind": "episodic"`. Time-bound events: "decided to use X", "v1.0 released", "found bug in Y". These lose relevance as the situation evolves.
-- Facts/lessons → `"kind": "semantic"` (default). Identity, preferences, lessons, constraints.
+**Tags:** Name the SUBJECT, not meta-properties. Good: `deploy-flow`, `ssh-config`, `competitor-mem0`. Bad: `session`, `distilled`, `engram-rs` (too generic). Trigger tags (`trigger:git-push`) are the exception — they enable reflex recall.
+
+**Kind:**
+- `semantic` (default) — facts, preferences, lessons, constraints, strategies. **When in doubt, use this.**
+- `episodic` — specific dated events: "decided to use X", "v1.0 released", "found bug in Y"
+- `procedural` — reusable step-by-step workflows ONLY (deploy steps, build process). **NOT:** strategies, plans, guidelines, one-time decisions. If it has an end condition ("until X", "for now"), it's NOT procedural.
+
+**Other modifiers:**
 - Lessons → `"tags": ["lesson", "trigger:kebab-verb"]` (e.g. `trigger:git-push`, `trigger:deploy-app`)
 - Cross-project knowledge → `-H "X-Namespace: default"`
 
 ```bash
 curl -sf -X POST http://localhost:3917/memories \
-  -d '{"content": "...", "tags": ["topic"]}'
+  -d '{"content": "...", "tags": ["ssh-config"]}'
 
-# Procedures
-'{"content": "deploy: test → build → stop → start", "tags": ["deploy"], "kind": "procedural"}'
+# Procedures (step-by-step only)
+'{"content": "deploy: test → build → stop → start", "tags": ["deploy-flow"], "kind": "procedural"}'
 # Lessons with trigger
 '{"content": "LESSON: never force-push to main", "tags": ["lesson","trigger:git-push"]}'
 # Events/decisions
-'{"content": "Decided to switch from Postgres to SQLite", "kind": "episodic"}'
+'{"content": "Decided to switch from Postgres to SQLite for zero-dep deployment", "tags": ["db-choice"], "kind": "episodic"}'
 # Cross-project knowledge
 curl -sf -X POST http://localhost:3917/memories -H "X-Namespace: default" \
-  -d '{"content": "...", "tags": ["identity"]}'
+  -d '{"content": "User prefers concise replies, no filler", "tags": ["communication-style"]}'
 ```
 
 ### 3. Recalling Memories
