@@ -376,13 +376,14 @@ impl MemoryDB {
                 }
 
                 // With namespace filter: over-fetch from HNSW, then filter
+                let ns_val = ns.unwrap_or("default");
                 let fetch = limit * thresholds::NS_OVERFETCH;
                 let candidates = idx.search_hnsw(query_emb, fetch);
                 let mut scored: Vec<(String, f64)> = candidates
                     .into_iter()
                     .filter(|(id, _)| {
                         idx.get(id)
-                            .map(|e| e.namespace == ns.unwrap())
+                            .map(|e| e.namespace == ns_val)
                             .unwrap_or(false)
                     })
                     .collect();
@@ -392,7 +393,7 @@ impl MemoryDB {
                 if scored.len() < limit {
                     scored = idx
                         .iter()
-                        .filter(|(_, entry)| entry.namespace == ns.unwrap())
+                        .filter(|(_, entry)| entry.namespace == ns_val)
                         .map(|(id, entry)| {
                             let sim = crate::util::cosine_similarity(query_emb, &entry.emb);
                             (id.clone(), sim)

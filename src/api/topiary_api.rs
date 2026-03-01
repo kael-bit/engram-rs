@@ -134,7 +134,7 @@ pub(super) async fn topiary_tree_handler(
 
     fn strip_node(node: &crate::topiary::TopicNode) -> serde_json::Value {
         let member_count = node.total_members();
-        let children: Vec<serde_json::Value> = node.children.iter().map(|c| strip_node(c)).collect();
+        let children: Vec<serde_json::Value> = node.children.iter().map(strip_node).collect();
         serde_json::json!({
             "id": node.id,
             "name": node.name,
@@ -143,7 +143,7 @@ pub(super) async fn topiary_tree_handler(
         })
     }
 
-    let roots: Vec<serde_json::Value> = full_tree.roots.iter().map(|r| strip_node(r)).collect();
+    let roots: Vec<serde_json::Value> = full_tree.roots.iter().map(strip_node).collect();
     Ok(Json(serde_json::json!({ "roots": roots })))
 }
 
