@@ -209,6 +209,9 @@ pub(super) async fn do_extract(
     }
 
     let count = memories.len();
+    if count > 0 {
+        state.last_activity.store(db::now_ms(), std::sync::atomic::Ordering::Relaxed);
+    }
     debug!(count, "extract complete");
     Ok(Json(ExtractResponse { extracted: memories, count }))
 }

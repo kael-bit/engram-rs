@@ -36,6 +36,10 @@ pub(super) async fn create_facts(
     let (inserted, superseded) = blocking(move || db.insert_facts(body.facts, &ns)).await??;
     let resolved = superseded.len();
 
+    if !inserted.is_empty() {
+        state.last_activity.store(db::now_ms(), std::sync::atomic::Ordering::Relaxed);
+    }
+
     Ok(Json(CreateFactsResponse {
         facts: inserted,
         conflicts: superseded,

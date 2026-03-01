@@ -183,6 +183,8 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
     if stored > 0 {
         bump_extracted(stored);
         persist_proxy_counters(&db);
+        // Signal consolidation loop that new data was written
+        state.last_activity.store(db::now_ms(), std::sync::atomic::Ordering::Relaxed);
         info!(stored, extracted = count, "proxy: stored memories from window");
     } else if count > 0 {
         debug!("proxy: all extractions were duplicates");
