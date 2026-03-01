@@ -121,6 +121,32 @@ pub(super) async fn topiary_topic_get_handler(
     topic_inner(&state, do_touch, &ids).await
 }
 
+/// GET /topiary/tree — return the full hierarchical topic tree (stripped of heavy fields).
+pub(super) async fn topiary_tree_handler(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let db = state.db.clone();
+    let tree_json = blocking(move || db.get_meta("topiary_tree_full")).await?;
+    let tree_json = tree_json
+        .ok_or_else(|| EngramError::Internal("topiary tree not built yet".into()))?;
+    let full_tree: crate::topiary::TopicTree = serde_json::from_str(&tree_json)
+        .map_err(|e| EngramError::Internal(format!("failed to parse topiary tree: {e}")))?;
+
+    fn strip_node(node: &crate::topiary::TopicNode) -> serde_json::Value {
+        let member_count = node.total_members();
+        let children: Vec<serde_json::Value> = node.children.iter().map(|c| strip_node(c)).collect();
+        serde_json::json!({
+            "id": node.id,
+            "name": node.name.as_deref().unwrap_or("unnamed"),
+            "member_count": member_count,
+            "children": children,
+        })
+    }
+
+    let roots: Vec<serde_json::Value> = full_tree.roots.iter().map(|r| strip_node(r)).collect();
+    Ok(Json(serde_json::json!({ "roots": roots })))
+}
+
 /// Build a concise Topics section from the cached topiary tree JSON.
 /// Used by the resume endpoint to include topic summary.
 pub(super) fn build_topiary_resume_section(tree_data: &serde_json::Value) -> Option<String> {

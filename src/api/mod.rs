@@ -153,6 +153,7 @@ pub fn router(state: AppState) -> Router {
         .route("/trash/{id}/restore", post(trash_restore))
         .route("/llm-usage", get(llm_usage).delete(clear_llm_usage))
         .route("/topic", post(topiary_topic_handler).get(topiary_topic_get_handler))
+        .route("/topiary/tree", get(topiary_tree_handler))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Import needs a bigger body limit for exports with embeddings
@@ -291,6 +292,7 @@ async fn index(State(state): State<AppState>) -> Json<serde_json::Value> {
             "GET /ui": "web dashboard",
             "POST /topic": "fetch topic details by IDs (body: {ids: ['kb1','kb3']})",
             "GET /topic?ids=kb1,kb3": "fetch topic details by IDs (comma-separated query param)",
+            "GET /topiary/tree": "full hierarchical topic tree (lightweight, no embeddings)",
         }));
     }
     Json(data)

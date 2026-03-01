@@ -107,16 +107,35 @@ pub(super) async fn do_resume(
             .collect();
 
         // === Trigger tags ===
-        // Collect all tags matching "trigger:*" with their frequency
+        // Collect all tags matching "trigger:*" with their frequency.
+        // Respect namespace filter: include requested ns + "default" (same logic as core).
         let trigger_tags: Vec<(String, i64)> = {
             let conn = d.conn().ok();
             if let Some(c) = conn {
-                let mut stmt = c.prepare(
-                    "SELECT m.tags, m.access_count FROM memories m WHERE m.tags LIKE '%trigger:%'"
-                ).ok();
+                let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if include_default {
+                    // Project namespace: include both project ns and "default"
+                    let ns_val = ns_filter.as_deref().unwrap_or("default");
+                    (
+                        "SELECT m.tags, m.access_count FROM memories m WHERE m.tags LIKE '%trigger:%' AND (m.namespace = ?1 OR m.namespace = ?2)".into(),
+                        vec![Box::new(ns_val.to_string()), Box::new("default".to_string())],
+                    )
+                } else if let Some(ref ns) = ns_filter {
+                    (
+                        "SELECT m.tags, m.access_count FROM memories m WHERE m.tags LIKE '%trigger:%' AND m.namespace = ?1".into(),
+                        vec![Box::new(ns.clone()) as Box<dyn rusqlite::types::ToSql>],
+                    )
+                } else {
+                    (
+                        "SELECT m.tags, m.access_count FROM memories m WHERE m.tags LIKE '%trigger:%'".into(),
+                        vec![],
+                    )
+                };
+                let mut stmt = c.prepare(&sql).ok();
                 if let Some(ref mut s) = stmt {
                     let mut tag_counts: HashMap<String, i64> = HashMap::new();
-                    let rows = s.query_map([], |row| {
+                    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                        params.iter().map(std::convert::AsRef::as_ref).collect();
+                    let rows = s.query_map(param_refs.as_slice(), |row| {
                         let tags_str: String = row.get(0)?;
                         let access_count: i64 = row.get(1)?;
                         Ok((tags_str, access_count))
@@ -124,7 +143,6 @@ pub(super) async fn do_resume(
                     if let Ok(rows) = rows {
                         for row in rows.flatten() {
                             let (tags_str, access_count) = row;
-                            // tags are stored as JSON array, e.g. ["lesson","trigger:deploy"]
                             let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
                             for tag in &tags {
                                 if let Some(name) = tag.strip_prefix("trigger:") {
@@ -300,7 +318,8 @@ fn format_resume_text(
             if spent + cost > recent_budget && spent > 0 {
                 break;
             }
-            lines.push(m.content.clone());
+            let kind_tag = if m.kind != "semantic" { format!(" ({})", m.kind) } else { String::new() };
+            lines.push(format!("{}{}", m.content, kind_tag));
             spent += cost;
         }
         lines.push(String::new());

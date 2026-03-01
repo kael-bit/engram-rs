@@ -467,8 +467,8 @@ async function expandResumeTopic(el,topicId){
   }catch(e){body.innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>';}
 }
 
-/* --- Topics page --- */
-let topicsData=[];
+/* --- Topics page (hierarchical tree) --- */
+let topicsTreeData=null;
 
 function renderTopics(){
   document.getElementById('main').innerHTML=`
@@ -479,40 +479,84 @@ function renderTopics(){
 
 async function loadTopics(){
   try{
-    const url='/resume?format=json&recent_epochs=500';
-    const r=await api(url);
-    topicsData=parseTopicsString(r.topics);
-    if(!topicsData.length){
+    const r=await api('/topiary/tree');
+    topicsTreeData=r;
+    const roots=r.roots||[];
+    if(!roots.length){
       document.getElementById('topicsContent').innerHTML='<div class="empty">No topics found</div>';
       return;
     }
-    renderTopicCards();
+    renderTopicTree(roots);
   }catch(e){
     document.getElementById('topicsContent').innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>';
   }
 }
 
-function renderTopicCards(){
+function countLeaves(node){
+  if(!node.children||!node.children.length)return 1;
+  return node.children.reduce((s,c)=>s+countLeaves(c),0);
+}
+
+function renderTopicTree(roots){
   const el=document.getElementById('topicsContent');
-  let html='<div style="font-size:11px;color:#555;margin-bottom:10px">'+topicsData.length+' topics</div>';
-  html+='<div class="topic-grid">';
-  for(const t of topicsData){
-    html+='<div class="topic-card" id="tc-'+esc(t.id)+'" onclick="toggleTopic(\''+esc(t.id)+'\')">';
-    html+='<div class="tc-head"><span><span class="tc-id">'+esc(t.id)+'</span><span class="tc-name">'+esc(t.name)+'</span></span>';
-    html+='<span class="tc-count">'+t.count+' memories</span></div>';
-    html+='<div class="tc-body" style="display:none"></div>';
-    html+='</div>';
+  const totalLeaves=roots.reduce((s,r)=>s+countLeaves(r),0);
+  let html='<div style="font-size:11px;color:#555;margin-bottom:10px">'+totalLeaves+' topics in '+roots.length+' root(s)</div>';
+  html+='<div class="topic-tree">';
+  for(const root of roots){
+    html+=renderTreeNode(root,0);
   }
   html+='</div>';
   el.innerHTML=html;
 }
 
-async function toggleTopic(topicId){
-  const card=document.getElementById('tc-'+topicId);
-  if(!card)return;
-  const body=card.querySelector('.tc-body');
-  if(body.style.display!=='none'){body.style.display='none';card.classList.remove('expanded');return;}
-  card.classList.add('expanded');
+function renderTreeNode(node,depth){
+  const isLeaf=!node.children||!node.children.length;
+  const indent=depth*20;
+  if(isLeaf){
+    return '<div class="tt-leaf" style="padding-left:'+indent+'px" id="tt-'+esc(node.id)+'" onclick="toggleTreeLeaf(\''+esc(node.id)+'\')">'+
+      '<div class="tt-leaf-head">'+
+        '<span class="tt-icon tt-leaf-icon">●</span>'+
+        '<span class="tc-id">'+esc(node.id)+'</span>'+
+        '<span class="tc-name">'+esc(node.name||'unnamed')+'</span>'+
+        '<span class="tc-count">'+node.member_count+'</span>'+
+      '</div>'+
+      '<div class="tt-leaf-body" style="display:none"></div>'+
+    '</div>';
+  }
+  // Internal node
+  const childrenHtml=node.children.map(c=>renderTreeNode(c,depth+1)).join('');
+  return '<div class="tt-node" style="padding-left:'+indent+'px">'+
+    '<div class="tt-node-head" onclick="toggleTreeBranch(this)">'+
+      '<span class="tt-icon tt-toggle">▶</span>'+
+      '<span class="tc-id">'+esc(node.id)+'</span>'+
+      '<span class="tc-name">'+esc(node.name||'unnamed')+'</span>'+
+      '<span class="tc-count">'+node.member_count+'</span>'+
+    '</div>'+
+    '<div class="tt-children" style="display:none">'+childrenHtml+'</div>'+
+  '</div>';
+}
+
+function toggleTreeBranch(headEl){
+  const nodeEl=headEl.parentElement;
+  const children=nodeEl.querySelector('.tt-children');
+  const toggle=headEl.querySelector('.tt-toggle');
+  if(children.style.display==='none'){
+    children.style.display='block';
+    toggle.textContent='▼';
+    nodeEl.classList.add('expanded');
+  }else{
+    children.style.display='none';
+    toggle.textContent='▶';
+    nodeEl.classList.remove('expanded');
+  }
+}
+
+async function toggleTreeLeaf(topicId){
+  const leafEl=document.getElementById('tt-'+topicId);
+  if(!leafEl)return;
+  const body=leafEl.querySelector('.tt-leaf-body');
+  if(body.style.display!=='none'){body.style.display='none';leafEl.classList.remove('expanded');return;}
+  leafEl.classList.add('expanded');
   body.style.display='block';
   body.innerHTML='<div class="empty">Loading...</div>';
   try{
