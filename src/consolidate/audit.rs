@@ -285,20 +285,30 @@ async fn distill_one_topic(
 
             let kind = entry.kind.as_deref().unwrap_or("semantic").to_string();
 
-            // Insert the distilled memory
+            // Insert the distilled memory (enters as Buffer, promoted below)
             let input = crate::db::MemoryInput {
                 content: entry.content.clone(),
                 tags: Some(vec!["distilled".into()]),
                 source: Some("distill".into()),
                 importance: Some(0.7),
                 kind: Some(kind),
-                layer: Some(max_layer),
                 supersedes: Some(sources.clone()),
                 ..Default::default()
             };
 
             match db3.insert(input) {
-                Ok(_) => {
+                Ok(mem) => {
+                    // insert() always creates Buffer; promote to match source layer
+                    if max_layer > crate::db::Layer::Buffer as u8 {
+                        let target = if max_layer >= crate::db::Layer::Core as u8 {
+                            crate::db::Layer::Core
+                        } else {
+                            crate::db::Layer::Working
+                        };
+                        if let Err(e) = db3.promote(&mem.id, target) {
+                            warn!(error = %e, "distill promote failed");
+                        }
+                    }
                     absorbed.extend(sources);
                 }
                 Err(e) => {
