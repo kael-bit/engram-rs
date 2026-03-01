@@ -252,6 +252,9 @@ impl MemoryDB {
         match result {
             Ok(()) => {
                 conn.execute_batch("COMMIT")?;
+                if !results.is_empty() {
+                    let _ = self.clear_meta_prefix("resume_cache:");
+                }
                 Ok(results)
             }
             Err(e) => {
@@ -829,6 +832,8 @@ impl MemoryDB {
             "UPDATE memories SET layer = ?1, decay_rate = ?2, last_accessed = ?3, modified_at = ?3, modified_epoch = ?5 WHERE id = ?4",
             params![target as u8, decay, now, id, current_epoch],
         )?;
+        // Invalidate resume compression cache on layer change
+        let _ = self.clear_meta_prefix("resume_cache:");
         self.get(id)
     }
 
