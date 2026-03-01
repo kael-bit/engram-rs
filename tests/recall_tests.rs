@@ -221,15 +221,34 @@ fn filter_by_tags() {
 }
 
 #[test]
-fn score_combined_recalc() {
+fn score_memory_recency_matters() {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64;
-    let recent = score_combined(0.8, 0.9, now);
-    let old = score_combined(0.8, 0.9, now - 72 * 3_600_000);
-    assert!(recent > old, "recent memory should score higher");
-    assert!(recent > 0.0);
+    let mk = |accessed: i64| Memory {
+        id: "test-1".into(),
+        content: "test".into(),
+        layer: Layer::Working,
+        importance: 0.5,
+        access_count: 0,
+        last_accessed: accessed,
+        created_at: now,
+        repetition_count: 0,
+        decay_rate: 0.1,
+        source: String::new(),
+        tags: vec![],
+        namespace: "default".into(),
+        embedding: None,
+        kind: "semantic".into(),
+        modified_at: 0,
+        modified_epoch: 0,
+    };
+    // Use moderate relevance so scores stay below the 1.0 cap
+    let recent = score_memory(&mk(now), 0.5);
+    let old = score_memory(&mk(now - 72 * 3_600_000), 0.5);
+    assert!(recent.score > old.score, "recent memory should score higher");
+    assert!(recent.score > 0.0);
 }
 
 #[test]

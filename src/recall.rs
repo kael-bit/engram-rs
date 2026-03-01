@@ -7,8 +7,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use tracing::debug;
 
-// scoring weights — should add up to 1.0
-use crate::thresholds::{RECALL_WEIGHT_RELEVANCE, RECALL_WEIGHT_WEIGHT, RECALL_WEIGHT_RECENCY, RECALL_SIM_FLOOR};
+use crate::thresholds::RECALL_SIM_FLOOR;
 
 /// Cached scoring configuration parsed from environment variables once on first access.
 /// Avoids re-parsing env vars on every `score_memory` / recall call.
@@ -129,16 +128,6 @@ pub fn recency_score(last_accessed: i64, decay_rate: f64) -> f64 {
     let hours = ((now - last_accessed) as f64 / 3_600_000.0).max(0.0);
     let rate = if decay_rate.is_finite() { decay_rate.clamp(0.0, 10.0) } else { 0.1 };
     (-rate * hours / 168.0).exp()
-}
-
-/// Simplified scoring fallback — used when only importance (not full Memory) is available.
-/// For full scoring, prefer `crate::scoring::memory_weight(&mem)`.
-pub fn score_combined(importance: f64, relevance: f64, last_accessed: i64) -> f64 {
-    let now = crate::db::now_ms();
-    let age_hours = ((now - last_accessed) as f64 / 3_600_000.0).max(0.0);
-    // simplified recency for rescore — uses default decay
-    let recency = (-0.1 * age_hours).exp();
-    RECALL_WEIGHT_WEIGHT * importance + RECALL_WEIGHT_RECENCY * recency + RECALL_WEIGHT_RELEVANCE * relevance
 }
 
 pub fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {

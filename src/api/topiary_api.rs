@@ -3,6 +3,7 @@
 use axum::extract::{Query, State};
 use axum::Json;
 use serde::Deserialize;
+use crate::extract::LenientJson;
 use tracing::debug;
 
 use crate::error::EngramError;
@@ -96,7 +97,7 @@ async fn topic_inner(
 pub(super) async fn topiary_topic_handler(
     State(state): State<AppState>,
     Query(query): Query<TopicQuery>,
-    Json(body): Json<TopicRequest>,
+    LenientJson(body): LenientJson<TopicRequest>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let do_touch = query.touch.unwrap_or(true);
     topic_inner(&state, do_touch, &body.ids).await

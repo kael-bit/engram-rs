@@ -69,11 +69,6 @@ pub const RESUME_WORKING_THRESHOLD: f64 = 0.20;
 pub const RESUME_DEFAULT_RECENT_EPOCHS: i64 = 24;
 
 // ── Recall scoring ─────────────────────────────────────────────────────────
-// Must sum to 1.0.
-
-pub const RECALL_WEIGHT_RELEVANCE: f64 = 0.5;
-pub const RECALL_WEIGHT_WEIGHT: f64 = 0.3;
-pub const RECALL_WEIGHT_RECENCY: f64 = 0.2;
 
 /// Default minimum cosine similarity to include a recall result.
 pub const RECALL_SIM_FLOOR: f64 = 0.3;
