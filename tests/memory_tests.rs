@@ -741,9 +741,13 @@ fn importance_based_layer_routing() {
     }).unwrap();
     assert_eq!(lesson.layer, Layer::Buffer);
 
-    // Layer field in input is ignored — all inserts go to Buffer
+    // Layer field in input is respected when set (e.g. import/facts)
     let explicit = db.insert(MemoryInput { content: "admin override".into(), layer: Some(3), ..Default::default() }).unwrap();
-    assert_eq!(explicit.layer, Layer::Buffer);
+    assert_eq!(explicit.layer, Layer::Core);
+
+    // Without layer override, defaults to Buffer
+    let no_layer = db.insert(MemoryInput { content: "no layer set".into(), layer: None, ..Default::default() }).unwrap();
+    assert_eq!(no_layer.layer, Layer::Buffer);
 }
 
 #[test]

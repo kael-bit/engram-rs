@@ -13,7 +13,7 @@ fn ai_err(msg: impl Into<String>) -> EngramError {
     EngramError::AiBackend(msg.into())
 }
 
-const AI_TIMEOUT: Duration = Duration::from_secs(30);
+const AI_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Which LLM API wire format to use.
 #[derive(Clone, Debug, PartialEq, Eq)]
