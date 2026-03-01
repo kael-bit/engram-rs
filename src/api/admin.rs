@@ -573,7 +573,7 @@ pub(super) async fn do_import_facts(
 
         let input = db::MemoryInput {
             content: original_text.to_string(),
-            layer: None,
+            layer: Some(2), // working — pre-extracted facts skip buffer
             importance: Some(importance),
             source: Some("import".into()),
             tags: Some(ann.tags),
