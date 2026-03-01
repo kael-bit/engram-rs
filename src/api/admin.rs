@@ -297,7 +297,21 @@ pub(super) async fn trash_restore(
 ) -> Result<Json<serde_json::Value>, EngramError> {
     let db = state.db.clone();
     let ns = get_namespace(&headers);
-    let restored = blocking(move || db.trash_restore(&id, ns.as_deref())).await??;
+    let id_copy = id.clone();
+    let restored = blocking(move || db.trash_restore(&id_copy, ns.as_deref())).await??;
+
+    // Queue embedding for the restored memory so it's searchable immediately
+    if restored {
+        if let Some(ref cfg) = state.ai {
+            let db2 = state.db.clone();
+            let id2 = id.clone();
+            if let Ok(Some(mem)) = blocking(move || db2.get(&id2)).await? {
+                super::spawn_embed(state.db.clone(), cfg.clone(), mem.id, mem.content);
+            }
+        }
+        state.last_activity.store(db::now_ms(), std::sync::atomic::Ordering::Relaxed);
+    }
+
     Ok(Json(serde_json::json!({ "restored": restored })))
 }
 

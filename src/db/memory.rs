@@ -339,6 +339,10 @@ impl MemoryDB {
             self.vec_index_remove(id);
         }
 
+        if n > 0 {
+            let _ = self.clear_meta_prefix("resume_cache:");
+        }
+
         Ok(n)
     }
 
@@ -396,6 +400,8 @@ impl MemoryDB {
             self.fts_insert(&rid, &content, &tags_json)?;
             // Remove from trash
             conn.execute("DELETE FROM trash WHERE id = ?1", params![id])?;
+            // Invalidate resume cache
+            let _ = self.clear_meta_prefix("resume_cache:");
             Ok(true)
         } else {
             Ok(false)
