@@ -1159,24 +1159,25 @@ impl MemoryDB {
     /// Check if content is a near-duplicate of an existing memory.
     /// Uses token-level Jaccard similarity, enhanced with cosine similarity
     /// on embeddings when available.
-    /// Check if content is near-duplicate of an existing memory (default namespace).
+    /// Check if content is near-duplicate of an existing memory (any namespace).
     pub fn is_near_duplicate(&self, content: &str) -> bool {
-        self.find_near_duplicate_threshold(content, "", 0.8, None).is_some()
+        self.find_near_duplicate_threshold(content, None, 0.8, None).is_some()
     }
 
     /// Check with a custom Jaccard threshold (default is 0.8).
     pub fn is_near_duplicate_with(&self, content: &str, threshold: f64) -> bool {
-        self.find_near_duplicate_threshold(content, "", threshold, None).is_some()
+        // Search all namespaces — used by distill/proxy for cross-namespace dedup
+        self.find_near_duplicate_threshold(content, None, threshold, None).is_some()
     }
 
     pub(crate) fn find_near_duplicate(&self, content: &str, ns: &str, new_emb: Option<&[f32]>) -> Option<Memory> {
-        self.find_near_duplicate_threshold(content, ns, 0.8, new_emb)
+        self.find_near_duplicate_threshold(content, Some(ns), 0.8, new_emb)
     }
 
     fn find_near_duplicate_threshold(
         &self,
         content: &str,
-        ns: &str,
+        ns: Option<&str>,
         threshold: f64,
         new_emb: Option<&[f32]>,
     ) -> Option<Memory> {
@@ -1186,7 +1187,7 @@ impl MemoryDB {
         } else {
             content
         };
-        let candidates = self.search_fts_ns(query_text, 5, Some(ns)).unwrap_or_default();
+        let candidates = self.search_fts_ns(query_text, 5, ns).unwrap_or_default();
         if candidates.is_empty() {
             return None;
         }
@@ -1215,8 +1216,10 @@ impl MemoryDB {
         let mut jaccard_candidates: Vec<(Memory, f64)> = Vec::new();
         for (id, _) in &candidates {
             if let Ok(Some(mem)) = self.get(id) {
-                if mem.namespace != ns {
-                    continue;
+                if let Some(ns) = ns {
+                    if mem.namespace != ns {
+                        continue;
+                    }
                 }
                 let old_tokens = tokenize_for_dedup(&mem.content);
                 let intersection = new_tokens.intersection(&old_tokens).count();
