@@ -1069,3 +1069,27 @@ fn cosine_dedup_no_false_positive_for_dissimilar_embeddings() {
     // so it will match on Jaccard fallback. Let's use more different text.
     let _result2 = result; // just verify it compiled and ran
 }
+
+#[test]
+fn is_near_duplicate_with_finds_default_namespace() {
+    // Regression test: is_near_duplicate_with used to pass "" as namespace,
+    // which never matched "default" namespace memories. Fixed by passing None
+    // (search all namespaces) instead.
+    let db = test_db();
+
+    let content = "The deploy process is: run tests, build release, stop service, copy binary, restart";
+    db.insert(MemoryInput::new(content)).unwrap();
+
+    // Exact same content should be detected as near-duplicate
+    assert!(
+        db.is_near_duplicate_with(content, 0.8),
+        "is_near_duplicate_with should find exact match in default namespace"
+    );
+
+    // Very similar content should also be detected
+    let similar = "The deploy process is: run tests, build release, stop the service, copy binary, restart service";
+    assert!(
+        db.is_near_duplicate_with(similar, 0.5),
+        "is_near_duplicate_with should find similar content at threshold 0.5"
+    );
+}
