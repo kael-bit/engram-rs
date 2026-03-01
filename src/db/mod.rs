@@ -92,7 +92,7 @@ pub struct Memory {
     pub namespace: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Vec<f32>>,
-    #[serde(default = "default_kind", skip_serializing_if = "is_default_kind")]
+    #[serde(default = "default_kind")]
     pub kind: String,
     /// Timestamp of last real modification (content, layer, tags, kind change).
     /// Not updated by touch/access — only by actual edits.
@@ -115,12 +115,8 @@ pub struct TrashEntry {
     #[serde(default = "default_ns", skip_serializing_if = "is_default_ns")]
     pub namespace: String,
     pub source: String,
-    #[serde(default = "default_kind", skip_serializing_if = "is_default_kind")]
+    #[serde(default = "default_kind")]
     pub kind: String,
-}
-
-fn is_default_kind(k: &str) -> bool {
-    k == "semantic"
 }
 
 fn default_kind() -> String {
