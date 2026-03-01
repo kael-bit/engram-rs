@@ -71,6 +71,16 @@ Decay is activity-driven — it only fires during active consolidation cycles, n
 | `semantic` | Medium | ~58 epochs | Knowledge, preferences, lessons (default) |
 | `procedural` | Slowest | ~173 epochs | Workflows, instructions, how-to |
 
+### Algorithm Visualizations
+
+| Chart | What it shows |
+|-------|---------------|
+| <img src="docs/images/chart_scoring.png" width="600"> | **Sigmoid score compression.** Raw scores are mapped through a sigmoid function, approaching 1.0 asymptotically. High-relevance results remain distinguishable instead of being crushed into the same value. |
+| <img src="docs/images/chart_decay.png" width="600"> | **Ebbinghaus forgetting curve.** Exponential decay with kind-differentiated rates — episodic memories fade fastest, procedural slowest. Floor at 0.01 means memories never fully vanish; they remain retrievable under precise queries. |
+| <img src="docs/images/chart_bias.png" width="600"> | **Kind × layer weight bias.** Additive biases adjust memory weight by type and layer. Procedural+core memories rank highest, episodic+buffer lowest — but the spread stays bounded so no single combination dominates. |
+| <img src="docs/images/chart_reinforcement.png" width="600"> | **Reinforcement signals.** Repetition and access bonuses follow logarithmic saturation. Early interactions matter most; later ones contribute diminishing returns, discriminating between "used occasionally" and "used daily". |
+| <img src="docs/images/chart_lifecycle.png" width="600"> | **Use it or lose it.** Left: a memory that's never recalled decays into the buffer layer. Right: periodic recall triggers activation boosts that keep the memory in the working layer. Dashed line shows the unrecalled trajectory for comparison. |
+
 ### Semantic Dedup & Merge
 
 Two memories saying the same thing in different words? Detected and merged automatically:

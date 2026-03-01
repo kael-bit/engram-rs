@@ -72,6 +72,16 @@ Working → [持续访问 + LLM 门控] → Core
 | `semantic` | 中等 | ~58 轮 | 知识、偏好、经验教训（默认） |
 | `procedural` | 最慢 | ~173 轮 | 工作流、操作规范 |
 
+### 算法可视化
+
+| 图表 | 说明 |
+|------|------|
+| <img src="docs/images/chart_scoring.png" width="600"> | **Sigmoid 评分压缩。** 原始分数通过 sigmoid 函数映射，渐近趋向 1.0。高相关性结果之间仍保持区分度，不会被压成同一个值。 |
+| <img src="docs/images/chart_decay.png" width="600"> | **Ebbinghaus 遗忘曲线。** 指数衰减，按类型区分速率——episodic 最快，procedural 最慢。下限 0.01 意味着记忆永远不会完全消失，精确查询仍可检索。 |
+| <img src="docs/images/chart_bias.png" width="600"> | **类型×层级权重偏置。** 加性偏置按类型和层级调整记忆权重。procedural+core 排序最高，episodic+buffer 最低——但差距有界，不会让单一组合垄断排序。 |
+| <img src="docs/images/chart_reinforcement.png" width="600"> | **强化信号。** 重复和访问奖励遵循对数饱和曲线。早期交互影响最大，后续贡献递减，区分"偶尔用过"和"天天在用"。 |
+| <img src="docs/images/chart_lifecycle.png" width="600"> | **用则强，不用则忘。** 左：从不被召回的记忆衰减到 buffer 层。右：定期召回触发激活增强，让记忆维持在 working 层。虚线为未被召回的轨迹做对比。 |
+
 ### 语义去重与合并
 
 两条记忆说的是同一件事但措辞不同？自动检测并合并：
