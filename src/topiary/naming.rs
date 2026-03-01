@@ -1,6 +1,6 @@
 //! LLM-powered topic naming, adapted for engram's AI infrastructure.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, info, warn};
 
 use super::{Entry, TopicNode};
@@ -173,6 +173,43 @@ pub async fn name_tree(
         applied += apply_names_to_leaves(root, &all_names);
     }
 
+    // Post-naming dedup: detect duplicate names across all leaves
+    {
+        let mut all_leaf_names: Vec<(String, String, usize)> = Vec::new();
+        for root in roots.iter() {
+            collect_all_leaf_names(root, &mut all_leaf_names);
+        }
+
+        // Group by name (case-insensitive)
+        let mut by_name: HashMap<String, Vec<(String, usize)>> = HashMap::new();
+        for (id, name, size) in &all_leaf_names {
+            by_name
+                .entry(name.to_lowercase())
+                .or_default()
+                .push((id.clone(), *size));
+        }
+
+        // For each duplicate group, keep the largest, mark others dirty
+        let mut dupes_to_dirty: HashSet<String> = HashSet::new();
+        for (_name, mut entries) in by_name {
+            if entries.len() > 1 {
+                // Sort by size descending, keep the largest
+                entries.sort_by(|a, b| b.1.cmp(&a.1));
+                for (id, _) in entries.iter().skip(1) {
+                    dupes_to_dirty.insert(id.clone());
+                }
+            }
+        }
+
+        if !dupes_to_dirty.is_empty() {
+            let mut dirtied = 0;
+            for root in roots.iter_mut() {
+                dirtied += dedup_leaf_names(root, &dupes_to_dirty);
+            }
+            info!(dirtied, "topiary naming: marked duplicate-named topics as dirty for re-naming");
+        }
+    }
+
     // Name internal nodes bottom-up from child names (no LLM needed)
     for root in roots.iter_mut() {
         name_internal_nodes(root);
@@ -248,6 +285,41 @@ fn apply_names_to_leaves(node: &mut TopicNode, names: &HashMap<String, String>) 
     }
 }
 
+/// Collect all leaf names and their IDs for dedup checking.
+fn collect_all_leaf_names(node: &TopicNode, out: &mut Vec<(String, String, usize)>) {
+    if node.is_leaf() {
+        if let Some(ref name) = node.name {
+            out.push((node.id.clone(), name.clone(), node.members.len()));
+        }
+    } else {
+        for child in &node.children {
+            collect_all_leaf_names(child, out);
+        }
+    }
+}
+
+/// Mark duplicate-named leaves as dirty (keeping the largest one).
+fn dedup_leaf_names(node: &mut TopicNode, dupes_to_dirty: &HashSet<String>) -> usize {
+    if node.is_leaf() {
+        if dupes_to_dirty.contains(&node.id) {
+            debug!(
+                topic_id = %node.id,
+                name = node.name.as_deref().unwrap_or("?"),
+                "topiary naming: marking duplicate-named topic as dirty"
+            );
+            node.dirty = true;
+            return 1;
+        }
+        0
+    } else {
+        let mut count = 0;
+        for child in &mut node.children {
+            count += dedup_leaf_names(child, dupes_to_dirty);
+        }
+        count
+    }
+}
+
 /// Name internal (non-leaf) nodes bottom-up by summarizing child names.
 /// Uses the most common meaningful words from children's names.
 fn name_internal_nodes(node: &mut TopicNode) {
@@ -298,7 +370,25 @@ fn name_internal_nodes(node: &mut TopicNode) {
         String::new()
     };
     let combined = format!("{}{}", top_names.join(", "), suffix);
-    // Truncate to 60 chars
-    let truncated: String = combined.chars().take(60).collect();
+    // Truncate to 60 chars, but don't cut mid-word
+    let truncated = if combined.len() <= 60 {
+        combined
+    } else {
+        let mut end = 60;
+        while end > 0 && !combined.is_char_boundary(end) {
+            end -= 1;
+        }
+        // Back up to last space to avoid mid-word cut
+        if let Some(last_space) = combined[..end].rfind(' ') {
+            if last_space > 20 {
+                // Only back up if we still have a meaningful chunk
+                combined[..last_space].to_string()
+            } else {
+                combined.chars().take(60).collect()
+            }
+        } else {
+            combined.chars().take(60).collect()
+        }
+    };
     node.name = Some(truncated);
 }

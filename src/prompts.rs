@@ -468,7 +468,9 @@ Rules:
 - Name must cover ALL samples, not just the most prominent one
 - If samples share a clear action/scenario, use verb phrase (e.g. "Fix scoring errors")
 - If samples are thematically related but diverse, use noun phrase (e.g. "Proxy and tunnel setup")
-- Avoid: filler words (notes, details, lessons, info, overview, misc), comma-joined unrelated concepts"#;
+- Every name MUST be unique — no two topics may share the same name
+- Names must be specific and descriptive enough to distinguish from other topics
+- Never use a single generic word as a name — always include the subject matter"#;
 
 pub fn topic_naming_schema() -> serde_json::Value {
     serde_json::json!({
