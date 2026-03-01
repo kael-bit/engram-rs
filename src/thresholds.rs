@@ -223,7 +223,7 @@ pub const TOPIARY_NAMING_SAMPLE_CHARS: usize = 80;
 
 /// Minimum Jaccard similarity for inheriting a topic name from the
 /// cached tree after a rebuild.  Lower = more aggressive reuse.
-pub const TOPIARY_INHERIT_THRESHOLD: f32 = 0.30;
+pub const TOPIARY_INHERIT_THRESHOLD: f32 = 0.20;
 
 // ── Proxy ──────────────────────────────────────────────────────────────────
 

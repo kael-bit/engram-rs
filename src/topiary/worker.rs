@@ -166,15 +166,31 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
     }
 
     // Step 4: Name dirty topics (if AI available)
+    // Optimization: count dirty leaves first. If all are tiny (≤2 members),
+    // use fallback names instead of burning LLM tokens on small clusters
+    // that will likely grow and get renamed soon anyway.
     if let Some(cfg) = ai {
         if cfg.has_llm() {
-            let stats = super::naming::name_tree(&mut tree.roots, &entries, cfg, db).await;
-            if stats.named > 0 {
-                info!(
-                    named = stats.named,
-                    llm_calls = stats.llm_calls,
-                    "topiary naming complete"
+            let dirty_count = count_dirty_leaves(&tree.roots);
+            let dirty_total_members = sum_dirty_members(&tree.roots);
+            let skip_llm = dirty_count > 0
+                && dirty_count <= 3
+                && dirty_total_members <= dirty_count * 2;
+            if skip_llm {
+                debug!(
+                    dirty_count,
+                    dirty_total_members,
+                    "topiary: skipping LLM naming for small dirty clusters, using fallback"
                 );
+            } else {
+                let stats = super::naming::name_tree(&mut tree.roots, &entries, cfg, db).await;
+                if stats.named > 0 {
+                    info!(
+                        named = stats.named,
+                        llm_calls = stats.llm_calls,
+                        "topiary naming complete"
+                    );
+                }
             }
         }
     }
@@ -523,4 +539,28 @@ fn count_unnamed_in(node: &TopicNode) -> usize {
     } else {
         node.children.iter().map(count_unnamed_in).sum()
     }
+}
+
+/// Count dirty leaves in the tree.
+fn count_dirty_leaves(roots: &[TopicNode]) -> usize {
+    fn count(node: &TopicNode) -> usize {
+        if node.is_leaf() {
+            if node.dirty { 1 } else { 0 }
+        } else {
+            node.children.iter().map(|c| count(c)).sum()
+        }
+    }
+    roots.iter().map(|r| count(r)).sum()
+}
+
+/// Sum of member counts across all dirty leaves.
+fn sum_dirty_members(roots: &[TopicNode]) -> usize {
+    fn sum(node: &TopicNode) -> usize {
+        if node.is_leaf() {
+            if node.dirty { node.members.len() } else { 0 }
+        } else {
+            node.children.iter().map(|c| sum(c)).sum()
+        }
+    }
+    roots.iter().map(|r| sum(r)).sum()
 }
