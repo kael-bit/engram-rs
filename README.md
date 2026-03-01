@@ -1,4 +1,4 @@
-# engram
+# engram-rs
 
 [![CI](https://img.shields.io/github/actions/workflow/status/kael-bit/engram-rs/ci.yml?style=flat-square&logo=github&label=CI)](https://github.com/kael-bit/engram-rs/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -8,13 +8,13 @@
 
 Memory engine for AI agents. Two axes: **time** (three-layer decay & promotion) and **space** (self-organizing topic tree). Important memories get promoted, noise fades, related knowledge clusters automatically.
 
-Hybrid search, LLM-powered consolidation, single Rust binary, one SQLite file.
-
-Most agent memory is a flat store — dump everything in, keyword search to get it back. No forgetting, no organization, no lifecycle. engram adds the part that makes memory actually useful: the ability to forget what doesn't matter and surface what does.
+Most agent memory is a flat store — dump everything in, keyword search to get it back. No forgetting, no organization, no lifecycle. engram-rs adds the part that makes memory actually useful: the ability to forget what doesn't matter and surface what does.
 
 <p align="center">
   <img src="docs/engram-quickstart.gif" alt="engram demo — store, context reset, recall" width="720">
 </p>
+
+Single Rust binary, one SQLite file, zero external dependencies. No Python, no Redis, no vector DB — `curl | bash` and it runs. ~10 MB binary, ~100 MB RSS, single-digit ms search latency.
 
 ## Quick Start
 
@@ -192,7 +192,7 @@ irm https://raw.githubusercontent.com/kael-bit/engram-rs/main/install.ps1 | iex
 ### Docker
 
 ```bash
-docker run -d --name engram \
+docker run -d --name engram-rs \
   -p 3917:3917 \
   -v engram-data:/data \
   -e ENGRAM_LLM_URL=https://api.openai.com/v1 \
@@ -202,7 +202,7 @@ docker run -d --name engram \
 
 ### LLM Configuration
 
-engram works without an LLM — keyword search and rule-based lifecycle still function. Adding an LLM unlocks intelligent features (triage, gate, merge, topic naming):
+engram-rs works without an LLM — keyword search and rule-based lifecycle still function. Adding an LLM unlocks intelligent features (triage, gate, merge, topic naming):
 
 ```bash
 export ENGRAM_LLM_URL=https://api.openai.com/v1
@@ -228,7 +228,7 @@ ENGRAM_LLM_MODEL=gpt-4o-mini     # text processing
 Add to your agent's system prompt:
 
 ```
-Set up engram (persistent memory) by following the guide at:
+Set up engram-rs (persistent memory) by following the guide at:
 https://raw.githubusercontent.com/kael-bit/engram-rs/main/docs/SETUP.md
 ```
 
@@ -248,7 +248,7 @@ npx engram-rs-mcp
 
 ### Web Dashboard
 
-Built-in web UI at `http://localhost:3917` for browsing memories, viewing the topic tree, and monitoring LLM usage.
+Built-in web UI at `http://localhost:3917/ui` for browsing memories, viewing the topic tree, and monitoring LLM usage.
 
 ## Specs
 

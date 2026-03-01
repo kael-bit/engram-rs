@@ -1,16 +1,17 @@
-# engram
+# engram-rs
 
 [![CI](https://img.shields.io/github/actions/workflow/status/kael-bit/engram-rs/ci.yml?style=flat-square&logo=github&label=CI)](https://github.com/kael-bit/engram-rs/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
 [![GitHub stars](https://img.shields.io/github/stars/kael-bit/engram-rs?style=flat-square&color=yellow)](https://github.com/kael-bit/engram-rs)
+[![GitHub last commit](https://img.shields.io/github/last-commit/kael-bit/engram-rs?style=flat-square&color=green)](https://github.com/kael-bit/engram-rs/commits/main)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?style=flat-square&logo=docker)](https://ghcr.io/kael-bit/engram-rs)
 
 AI agent 的记忆引擎。沿两个轴组织记忆：**时间轴**（三层衰减与晋升）和**空间轴**（自组织主题树）。重要的记忆自动提升，噪音自然淡出，相关知识自动聚类。
 
-混合搜索，LLM 驱动的记忆整理，单个 Rust 二进制，一个 SQLite 文件。
+单个 Rust 二进制，一个 SQLite 文件，零外部依赖。不需要 Python、Redis、向量数据库——`curl | bash` 即装即用。~10 MB 二进制，~100 MB 内存占用，毫秒级搜索延迟。一台 $5 VPS 就能跑。
 
-多数 agent 记忆方案是平坦的存储——什么都往里塞，靠关键词搜出来。没有遗忘，没有组织，没有生命周期。engram 补上了让记忆真正有用的那部分：忘掉不重要的，浮现重要的。
+多数 agent 记忆方案是平坦的存储——什么都往里塞，靠关键词搜出来。没有遗忘，没有组织，没有生命周期。engram-rs 补上了让记忆真正有用的那部分：忘掉不重要的，浮现重要的。
 
 <p align="center">
   <img src="docs/engram-quickstart.gif" alt="engram 演示 — 存储、上下文重置、检索" width="720">
@@ -191,7 +192,7 @@ irm https://raw.githubusercontent.com/kael-bit/engram-rs/main/install.ps1 | iex
 ### Docker
 
 ```bash
-docker run -d --name engram \
+docker run -d --name engram-rs \
   -p 3917:3917 \
   -v engram-data:/data \
   -e ENGRAM_LLM_URL=https://api.openai.com/v1 \
@@ -227,7 +228,7 @@ ENGRAM_LLM_MODEL=gpt-4o-mini     # 文本处理
 将以下内容添加到 agent 的系统提示词中：
 
 ```
-Set up engram (persistent memory) by following the guide at:
+Set up engram-rs (persistent memory) by following the guide at:
 https://raw.githubusercontent.com/kael-bit/engram-rs/main/docs/SETUP.md
 ```
 
@@ -247,7 +248,7 @@ npx engram-rs-mcp
 
 ### Web 控制台
 
-内置 Web UI：`http://localhost:3917`，可浏览记忆、查看主题树、监控 LLM 调用量。
+内置 Web UI：`http://localhost:3917/ui`，可浏览记忆、查看主题树、监控 LLM 调用量。
 
 ## 技术规格
 
