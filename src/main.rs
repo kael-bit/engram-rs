@@ -168,9 +168,16 @@ async fn main() {
                 let r = consolidate::consolidate(
                     bg_state.db.clone(), req, ai_cfg, false,
                 ).await;
-                // Trigger topiary rebuild after consolidation
-                if let Some(ref tx) = bg_state.topiary_trigger {
-                    let _ = tx.send(());
+                // Trigger topiary rebuild only if consolidation made structural changes
+                // (promoted/decayed/merged/reconciled/distilled/demoted).
+                // Importance-only decay doesn't change the entry set, so rebuilding
+                // would just waste LLM naming tokens on re-clustering the same data.
+                let structural_changes = r.promoted + r.decayed + r.merged
+                    + r.reconciled + r.distilled + r.demoted + r.buffer_deduped;
+                if structural_changes > 0 {
+                    if let Some(ref tx) = bg_state.topiary_trigger {
+                        let _ = tx.send(());
+                    }
                 }
                 if r.promoted > 0 || r.decayed > 0 || r.merged > 0
                     || r.gate_rejected > 0 || r.demoted > 0 || r.reconciled > 0

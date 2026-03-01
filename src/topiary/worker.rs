@@ -139,30 +139,125 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
         }
     }
 
-    // Step 2: Build topic tree (entries changed — full rebuild needed)
+    // Step 1.6: Incremental insert path — if only a few entries were added
+    // (and none removed), deserialize the cached tree and insert new entries
+    // instead of rebuilding from scratch. This avoids k-means reshuffling
+    // that marks stable topics dirty and wastes LLM naming tokens.
     let mut tree = TopicTree::new(
         thresholds::TOPIARY_ASSIGN_THRESHOLD,
         thresholds::TOPIARY_MERGE_THRESHOLD,
     );
-    for (i, entry) in entries.iter().enumerate() {
-        tree.insert(i, &entry.embedding);
+    let mut used_incremental = false;
+
+    let try_incremental = cached_tree_full.is_some() && cached_ids_json.is_some();
+    if try_incremental {
+        let cached_ids_parsed: Option<Vec<String>> = cached_ids_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok());
+
+        if let Some(ref cached_ids) = cached_ids_parsed {
+            let cached_set: HashSet<&str> = cached_ids.iter().map(|s| s.as_str()).collect();
+            let current_set: HashSet<&str> = current_ids.iter().map(|s| s.as_str()).collect();
+
+            // Find added entries (in current but not cached)
+            let added_indices: Vec<usize> = entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| !cached_set.contains(e.id.as_str()))
+                .map(|(i, _)| i)
+                .collect();
+            // Find removed entries (in cached but not current)
+            let removed_count = cached_set
+                .iter()
+                .filter(|id| !current_set.contains(*id))
+                .count();
+
+            // Allow incremental even with removals — consolidation may merge/drop
+            // entries, which previously forced a full rebuild and wasted naming tokens.
+            // Removed entries are handled by filtering unmappable members below.
+            let total_changes = added_indices.len() + removed_count;
+            let can_incremental = total_changes > 0
+                && total_changes <= thresholds::TOPIARY_INCREMENTAL_MAX;
+
+            if can_incremental {
+                if let Some(ref full_json) = cached_tree_full {
+                    if let Ok(mut cached_tree) = serde_json::from_str::<TopicTree>(full_json) {
+                        // Remap member indices: cached tree uses indices into old entry list,
+                        // but current entry list may have different ordering.
+                        let old_id_to_idx: HashMap<&str, usize> = cached_ids
+                            .iter()
+                            .enumerate()
+                            .map(|(i, id)| (id.as_str(), i))
+                            .collect();
+                        let new_id_to_idx: HashMap<&str, usize> = entries
+                            .iter()
+                            .enumerate()
+                            .map(|(i, e)| (e.id.as_str(), i))
+                            .collect();
+
+                        // Build old_idx → new_idx mapping
+                        let idx_map: HashMap<usize, usize> = old_id_to_idx
+                            .iter()
+                            .filter_map(|(id, &old_i)| {
+                                new_id_to_idx.get(id).map(|&new_i| (old_i, new_i))
+                            })
+                            .collect();
+
+                        // Remap all member indices in the tree
+                        remap_members(&mut cached_tree.roots, &idx_map);
+
+                        // Insert new entries
+                        for &new_idx in &added_indices {
+                            cached_tree.insert(new_idx, &entries[new_idx].embedding);
+                        }
+
+                        // Light consolidation pass
+                        cached_tree.consolidate(&entries);
+
+                        let topic_count: usize =
+                            cached_tree.roots.iter().map(|r| r.leaf_count()).sum();
+                        info!(
+                            entries = entry_count,
+                            added = added_indices.len(),
+                            topics = topic_count,
+                            elapsed_ms = start.elapsed().as_millis() as u64,
+                            "topiary incremental insert"
+                        );
+
+                        tree = cached_tree;
+                        used_incremental = true;
+                    }
+                }
+            }
+        }
     }
 
-    // Step 3: Consolidate
-    tree.consolidate(&entries);
+    if !used_incremental {
+        // Step 2: Build topic tree (full rebuild)
+        tree = TopicTree::new(
+            thresholds::TOPIARY_ASSIGN_THRESHOLD,
+            thresholds::TOPIARY_MERGE_THRESHOLD,
+        );
+        for (i, entry) in entries.iter().enumerate() {
+            tree.insert(i, &entry.embedding);
+        }
 
-    let topic_count: usize = tree.roots.iter().map(|r| r.leaf_count()).sum();
-    info!(
-        entries = entry_count,
-        topics = topic_count,
-        elapsed_ms = start.elapsed().as_millis() as u64,
-        "topiary tree built"
-    );
+        // Step 3: Consolidate
+        tree.consolidate(&entries);
 
-    // Step 3.5: Inherit names from previously cached tree
-    let inherited = inherit_names(&mut tree.roots, &entries, cached_tree_full, cached_ids_json);
-    if inherited > 0 {
-        info!(inherited, "topiary inherited names from cache");
+        let topic_count: usize = tree.roots.iter().map(|r| r.leaf_count()).sum();
+        info!(
+            entries = entry_count,
+            topics = topic_count,
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "topiary tree built (full rebuild)"
+        );
+
+        // Step 3.5: Inherit names from previously cached tree
+        let inherited = inherit_names(&mut tree.roots, &entries, cached_tree_full, cached_ids_json);
+        if inherited > 0 {
+            info!(inherited, "topiary inherited names from cache");
+        }
     }
 
     // Step 4: Name dirty topics (if AI available)
@@ -212,6 +307,7 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
     }
 
     // Step 5: Serialize and store
+    let topic_count: usize = tree.roots.iter().map(|r| r.leaf_count()).sum();
     let store_start = std::time::Instant::now();
     let tree_json = tree.to_json(&entries);
     let json_str = match serde_json::to_string(&tree_json) {
@@ -563,4 +659,26 @@ fn sum_dirty_members(roots: &[TopicNode]) -> usize {
         }
     }
     roots.iter().map(|r| sum(r)).sum()
+}
+
+/// Remap member indices in all tree nodes from old entry list positions to new ones.
+/// Entries that no longer exist (missing from idx_map) are dropped.
+fn remap_members(roots: &mut [TopicNode], idx_map: &HashMap<usize, usize>) {
+    for node in roots.iter_mut() {
+        if node.is_leaf() {
+            node.members = node
+                .members
+                .iter()
+                .filter_map(|old_idx| idx_map.get(old_idx).copied())
+                .collect();
+        } else {
+            remap_members(&mut node.children, idx_map);
+            // Update parent member list (union of children)
+            node.members = node
+                .children
+                .iter()
+                .flat_map(|c| c.members.iter().copied())
+                .collect();
+        }
+    }
 }
