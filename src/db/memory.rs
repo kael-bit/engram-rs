@@ -190,8 +190,10 @@ impl MemoryDB {
                     continue;
                 }
                 let now = now_ms();
-                // All new memories enter Buffer
-                let layer = Layer::Buffer;
+                // Default to Buffer; callers may override via input.layer.
+                let layer = input.layer
+                    .and_then(|v| Layer::try_from(v).ok())
+                    .unwrap_or(Layer::Buffer);
                 let layer_val = layer as u8;
                 let id = Uuid::new_v4().to_string();
                 let source = input.source.unwrap_or_else(|| "api".into());
