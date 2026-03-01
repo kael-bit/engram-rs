@@ -244,10 +244,12 @@ fn score_memory_recency_matters() {
         modified_at: 0,
         modified_epoch: 0,
     };
-    // Use moderate relevance so scores stay below the 1.0 cap
+    // Use moderate relevance so scores stay below the 1.0 cap.
+    // 720h (30 days) gap ensures large recency difference even under jitter.
     let recent = score_memory(&mk(now), 0.5);
-    let old = score_memory(&mk(now - 72 * 3_600_000), 0.5);
-    assert!(recent.score > old.score, "recent memory should score higher");
+    let old = score_memory(&mk(now - 720 * 3_600_000), 0.5);
+    assert!(recent.score > old.score,
+        "recent ({}) should score higher than old ({})", recent.score, old.score);
     assert!(recent.score > 0.0);
 }
 
