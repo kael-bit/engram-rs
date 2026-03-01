@@ -100,8 +100,44 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
 
     let entry_count = entries.len();
 
-    // Step 2: Build topic tree
-    let mut tree = TopicTree::new(thresholds::TOPIARY_ASSIGN_THRESHOLD, thresholds::TOPIARY_MERGE_THRESHOLD);
+    // Step 1.5: Check if entry set matches cache — skip full rebuild if unchanged
+    let current_ids: HashSet<String> = entries.iter().map(|e| e.id.clone()).collect();
+    let db_cache = db.clone();
+    let (cached_tree_full, cached_ids_json, cached_tree_json) =
+        tokio::task::spawn_blocking(move || {
+            (
+                db_cache.get_meta("topiary_tree_full"),
+                db_cache.get_meta("topiary_entry_ids"),
+                db_cache.get_meta("topiary_tree"),
+            )
+        })
+        .await
+        .unwrap_or((None, None, None));
+
+    // If entry set is identical to cache, restore cached tree and skip rebuild
+    if let (Some(ref ids_json), Some(ref tree_json)) = (&cached_ids_json, &cached_tree_json) {
+        if let Ok(cached_ids) = serde_json::from_str::<Vec<String>>(ids_json) {
+            let cached_set: HashSet<&str> = cached_ids.iter().map(|s| s.as_str()).collect();
+            let current_set: HashSet<&str> = current_ids.iter().map(|s| s.as_str()).collect();
+            if cached_set == current_set {
+                // Verify the cached tree is valid (has content)
+                if tree_json.len() > 2 {
+                    info!(
+                        entries = entry_count,
+                        elapsed_ms = start.elapsed().as_millis() as u64,
+                        "topiary: entry set unchanged, using cached tree"
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
+    // Step 2: Build topic tree (entries changed — full rebuild needed)
+    let mut tree = TopicTree::new(
+        thresholds::TOPIARY_ASSIGN_THRESHOLD,
+        thresholds::TOPIARY_MERGE_THRESHOLD,
+    );
     for (i, entry) in entries.iter().enumerate() {
         tree.insert(i, &entry.embedding);
     }
@@ -118,17 +154,7 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
     );
 
     // Step 3.5: Inherit names from previously cached tree
-    let db3 = db.clone();
-    let (old_tree_data, old_ids_data) = tokio::task::spawn_blocking(move || {
-        (
-            db3.get_meta("topiary_tree_full"),
-            db3.get_meta("topiary_entry_ids"),
-        )
-    })
-    .await
-    .unwrap_or((None, None));
-
-    let inherited = inherit_names(&mut tree.roots, &entries, old_tree_data, old_ids_data);
+    let inherited = inherit_names(&mut tree.roots, &entries, cached_tree_full, cached_ids_json);
     if inherited > 0 {
         info!(inherited, "topiary inherited names from cache");
     }
