@@ -101,25 +101,32 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
     let entry_count = entries.len();
 
     // Step 1.5: Check if entry set matches cache — skip full rebuild if unchanged
+    // Fingerprint includes IDs + content lengths to detect PATCH/merge changes
     let current_ids: HashSet<String> = entries.iter().map(|e| e.id.clone()).collect();
+    let current_fingerprint: u64 = entries.iter().map(|e| e.text.len() as u64).sum();
     let db_cache = db.clone();
-    let (cached_tree_full, cached_ids_json, cached_tree_json) =
+    let (cached_tree_full, cached_ids_json, cached_tree_json, cached_fingerprint) =
         tokio::task::spawn_blocking(move || {
             (
                 db_cache.get_meta("topiary_tree_full"),
                 db_cache.get_meta("topiary_entry_ids"),
                 db_cache.get_meta("topiary_tree"),
+                db_cache.get_meta("topiary_fingerprint"),
             )
         })
         .await
-        .unwrap_or((None, None, None));
+        .unwrap_or((None, None, None, None));
 
-    // If entry set is identical to cache, restore cached tree and skip rebuild
+    // If entry set AND content fingerprint match cache, skip rebuild
     if let (Some(ref ids_json), Some(ref tree_json)) = (&cached_ids_json, &cached_tree_json) {
         if let Ok(cached_ids) = serde_json::from_str::<Vec<String>>(ids_json) {
             let cached_set: HashSet<&str> = cached_ids.iter().map(|s| s.as_str()).collect();
             let current_set: HashSet<&str> = current_ids.iter().map(|s| s.as_str()).collect();
-            if cached_set == current_set {
+            let fp_matches = cached_fingerprint
+                .as_ref()
+                .and_then(|s| s.parse::<u64>().ok())
+                .map_or(false, |fp| fp == current_fingerprint);
+            if cached_set == current_set && fp_matches {
                 // Verify the cached tree is valid (has content)
                 if tree_json.len() > 2 {
                     info!(
@@ -216,10 +223,12 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
     };
 
     let db2 = db.clone();
+    let fp_str = current_fingerprint.to_string();
     let store_result = tokio::task::spawn_blocking(move || {
         db2.set_meta("topiary_tree", &json_str)?;
         db2.set_meta("topiary_tree_full", &full_tree)?;
         db2.set_meta("topiary_entry_ids", &entry_ids_json)?;
+        db2.set_meta("topiary_fingerprint", &fp_str)?;
         Ok::<_, crate::error::EngramError>(())
     })
     .await;
