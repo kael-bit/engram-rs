@@ -248,6 +248,7 @@ async fn try_reconcile_pair(
     let newer_id = newer.id.clone();
     let older_id = older.id.clone();
     let db2 = db.clone();
+    let merged_for_embed = merged_content.clone();
     let result = tokio::task::spawn_blocking(move || {
         if let Some(layer) = promote_newer_to {
             db2.promote(&newer_id, layer)?;
@@ -263,6 +264,8 @@ async fn try_reconcile_pair(
 
     match result {
         Ok(Ok(())) => {
+            // Re-embed the surviving memory with the merged content
+            crate::api::spawn_embed(db.clone(), cfg.clone(), newer.id.clone(), merged_for_embed);
             info!(
                 newer = %newer.id, older = %older.id,
                 sim = format!("{:.3}", sim), decision = %decision,

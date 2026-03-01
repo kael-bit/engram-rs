@@ -326,7 +326,7 @@ async fn stats(
 }
 
 /// Fire-and-forget: generate embedding for a memory in the background.
-fn spawn_embed(db: crate::SharedDB, cfg: ai::AiConfig, id: String, content: String) {
+pub(crate) fn spawn_embed(db: crate::SharedDB, cfg: ai::AiConfig, id: String, content: String) {
     tokio::spawn(async move {
         let mut attempts = 0;
         loop {
