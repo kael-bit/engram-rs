@@ -492,14 +492,7 @@ pub(super) async fn do_import_facts(
         return Err(EngramError::Validation("no numbered facts found in text".into()));
     }
 
-    // Build the user message: numbered facts for the LLM
-    let user_msg: String = facts
-        .iter()
-        .map(|(id, text)| format!("{id}. {text}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Call LLM for annotation
+    // Call LLM for annotation in batches to avoid timeout on large inputs
     #[derive(serde::Deserialize)]
     struct FactAnnotation {
         id: usize,
@@ -517,33 +510,47 @@ pub(super) async fn do_import_facts(
         memories: Vec<FactAnnotation>,
     }
 
-    let tool_result = ai::llm_tool_call_with_model::<AnnotationResult>(
-        cfg,
-        "gate",
-        None, // use default gate model (sonnet)
-        crate::prompts::IMPORT_FACTS_SYSTEM,
-        &user_msg,
-        "store_memories",
-        "Annotate each fact with kind, tags, and importance",
-        crate::prompts::import_facts_schema(),
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "import/facts LLM call failed");
-        e
-    })?;
+    const BATCH_SIZE: usize = 30;
+    let mut all_annotations: Vec<FactAnnotation> = Vec::new();
 
-    // Log LLM usage
-    if let Some(ref u) = tool_result.usage {
-        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
-        let _ = state.db.log_llm_call(
-            "import_facts",
-            &tool_result.model,
-            u.prompt_tokens,
-            u.completion_tokens,
-            cached,
-            tool_result.duration_ms,
-        );
+    for batch in facts.chunks(BATCH_SIZE) {
+        let user_msg: String = batch
+            .iter()
+            .map(|(id, text)| format!("{id}. {text}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let tool_result = ai::llm_tool_call_with_model::<AnnotationResult>(
+            cfg,
+            "gate",
+            None, // use default gate model (sonnet)
+            crate::prompts::IMPORT_FACTS_SYSTEM,
+            &user_msg,
+            "store_memories",
+            "Annotate each fact with kind, tags, and importance",
+            crate::prompts::import_facts_schema(),
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(batch_start = batch.first().map(|f| f.0), error = %e, "import/facts LLM batch failed");
+            e
+        })?;
+
+        // Log LLM usage per batch
+        if let Some(ref u) = tool_result.usage {
+            let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+            let _ = state.db.log_llm_call(
+                "import_facts",
+                &tool_result.model,
+                u.prompt_tokens,
+                u.completion_tokens,
+                cached,
+                tool_result.duration_ms,
+            );
+        }
+
+        all_annotations.extend(tool_result.value.memories);
+        debug!(batch_size = batch.len(), annotations = all_annotations.len(), "import/facts batch complete");
     }
 
     // Build a lookup: id → original text
@@ -552,12 +559,11 @@ pub(super) async fn do_import_facts(
         .map(|(id, text)| (*id, text.as_str()))
         .collect();
 
-    let annotations = tool_result.value.memories;
-    let total_annotated = annotations.len();
+    let total_annotated = all_annotations.len();
     let mut imported = Vec::new();
     let mut skipped = 0usize;
 
-    for ann in annotations {
+    for ann in all_annotations {
         let Some(original_text) = fact_map.get(&ann.id) else {
             tracing::warn!(id = ann.id, "import/facts: annotation ID not found in parsed facts");
             skipped += 1;
