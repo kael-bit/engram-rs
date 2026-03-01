@@ -108,7 +108,6 @@ impl TopicTree {
     }
 
     /// Set roots directly (for tests and deserialization).
-    #[cfg(test)]
     pub fn with_roots(mut self, roots: Vec<TopicNode>) -> Self {
         self.roots = roots;
         self

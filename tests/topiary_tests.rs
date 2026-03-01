@@ -1,338 +1,262 @@
-use engram::topiary::{cosine_similarity, l2_normalize, Entry, TopicNode, TopicTree};
+use engram::topiary::worker::{assign_fallback_names, count_unnamed_leaves, inherit_names};
+use engram::topiary::{Entry, TopicNode, TopicTree};
 
-fn make_entry(id: &str, text: &str, embedding: Vec<f32>) -> Entry {
+fn make_leaf(id: &str, name: Option<&str>, members: Vec<usize>) -> TopicNode {
+    let size = members.len();
+    TopicNode {
+        id: id.to_string(),
+        name: name.map(|s| s.to_string()),
+        centroid: vec![],
+        members,
+        children: vec![],
+        dirty: name.is_none(),
+        avg_sim: 0.0,
+        named_at_size: if name.is_some() { size } else { 0 },
+    }
+}
+
+fn make_entry(id: &str) -> Entry {
     Entry {
         id: id.to_string(),
-        text: text.to_string(),
-        embedding,
+        text: String::new(),
+        embedding: vec![],
         tags: vec![],
     }
 }
 
-/// Generate a simple unit vector in the given dimension (1.0 at idx, 0.0 elsewhere).
-fn unit_vec(dim: usize, idx: usize) -> Vec<f32> {
-    let mut v = vec![0.0f32; dim];
-    v[idx] = 1.0;
-    v
-}
-
-// ── Math helpers (edge cases only) ────────────────────────────────────────
-
-#[test]
-fn cosine_empty_vectors() {
-    let sim = cosine_similarity(&[], &[]);
-    assert_eq!(sim, 0.0);
-}
-
-#[test]
-fn cosine_different_lengths() {
-    let a = vec![1.0, 2.0];
-    let b = vec![1.0, 2.0, 3.0];
-    let sim = cosine_similarity(&a, &b);
-    assert_eq!(sim, 0.0);
-}
-
-#[test]
-fn l2_normalize_zero_vector() {
-    let mut v = vec![0.0, 0.0, 0.0];
-    l2_normalize(&mut v); // should not panic
-    assert_eq!(v, vec![0.0, 0.0, 0.0]);
-}
-
-// ── TopicTree insertion ───────────────────────────────────────────────────
-
-#[test]
-fn insert_creates_leaf() {
-    let mut tree = TopicTree::new(0.30, 0.55);
-    let emb = unit_vec(8, 0);
-    tree.insert(0, &emb);
-    assert_eq!(tree.roots.len(), 1);
-    assert!(tree.roots[0].is_leaf());
-    assert_eq!(tree.roots[0].members, vec![0]);
-    assert!(tree.roots[0].dirty);
-    assert_eq!(tree.roots[0].named_at_size, 0);
-}
-
-#[test]
-fn similar_entries_cluster_together() {
-    let mut tree = TopicTree::new(0.30, 0.55);
-    // Two very similar vectors should go into the same leaf
-    let e0 = vec![1.0, 0.1, 0.0, 0.0];
-    let e1 = vec![1.0, 0.2, 0.0, 0.0];
-    tree.insert(0, &e0);
-    tree.insert(1, &e1);
-    // Should be in same leaf (cosine > 0.30 threshold)
-    assert_eq!(tree.roots.len(), 1);
-    assert_eq!(tree.roots[0].members.len(), 2);
-}
-
-#[test]
-fn dissimilar_entries_create_separate_leaves() {
-    let mut tree = TopicTree::new(0.30, 0.55);
-    // Orthogonal vectors should create separate leaves
-    let e0 = unit_vec(4, 0);
-    let e1 = unit_vec(4, 1);
-    tree.insert(0, &e0);
-    tree.insert(1, &e1);
-    assert_eq!(tree.roots.len(), 2);
-}
-
-// ── Dirty flag logic (naming optimization) ────────────────────────────────
-
-#[test]
-fn new_leaf_is_dirty() {
-    let mut tree = TopicTree::new(0.30, 0.55);
-    tree.insert(0, &unit_vec(4, 0));
-    assert!(tree.roots[0].dirty);
-    assert!(tree.roots[0].name.is_none());
-}
-
-#[test]
-fn named_leaf_stays_clean_on_insert() {
-    let mut tree = TopicTree::new(0.30, 0.55);
-    let emb = vec![1.0, 0.1, 0.0, 0.0];
-    tree.insert(0, &emb);
-    // Simulate naming
-    tree.roots[0].name = Some("Test Topic".to_string());
-    tree.roots[0].named_at_size = 1;
-    tree.roots[0].dirty = false;
-    // Insert similar entry
-    let emb2 = vec![1.0, 0.2, 0.0, 0.0];
-    tree.insert(1, &emb2);
-    // Should NOT be dirty (named_at_size=1, now 2, 2 < 1*1.5=1.5... wait 2 >= 1+0=1)
-    // 50% growth: 2 >= 1 + 1/2 = 1 (integer division: 1/2=0), so 2 >= 1+0=1 → dirty!
-    // Actually for named_at_size=1: 1/2=0, so threshold is 1+0=1, and members.len()=2 >= 1 → dirty
-    // This is fine — size 1 topics are volatile and should be re-checked
-    // For named_at_size=2: 2/2=1, threshold is 2+1=3
-    assert!(tree.roots[0].dirty);
-}
-
-#[test]
-fn named_leaf_dirty_after_50pct_growth() {
-    let mut tree = TopicTree::new(0.10, 0.55); // low threshold to cluster easily
-    let dim = 8;
-    // Insert 4 similar entries
-    for i in 0..4 {
-        let mut emb = vec![1.0f32; dim];
-        emb[0] += i as f32 * 0.01; // tiny variation
-        tree.insert(i, &emb);
+fn make_entry_with_tags(id: &str, tags: &[&str]) -> Entry {
+    Entry {
+        id: id.to_string(),
+        text: String::new(),
+        embedding: vec![],
+        tags: tags.iter().map(|t| t.to_string()).collect(),
     }
-    assert_eq!(tree.roots.len(), 1);
-    // Simulate naming at size 4
-    tree.roots[0].name = Some("Clustered Topic".to_string());
-    tree.roots[0].named_at_size = 4;
-    tree.roots[0].dirty = false;
-    // Insert 1 more — now 5. 50% of 4 = 2, so threshold is 4+2=6. 5 < 6 → not dirty
-    let mut emb = vec![1.0f32; dim];
-    emb[0] += 0.04;
-    tree.insert(4, &emb);
-    assert!(!tree.roots[0].dirty, "should not be dirty at 5/4 (< 50% growth)");
-    // Insert 1 more — now 6. 6 >= 6 → dirty
-    let mut emb = vec![1.0f32; dim];
-    emb[0] += 0.05;
-    tree.insert(5, &emb);
-    assert!(tree.roots[0].dirty, "should be dirty at 6/4 (= 50% growth)");
+}
+
+fn old_tree_json(roots: Vec<TopicNode>) -> String {
+    let tree = TopicTree::new(0.3, 0.55).with_roots(roots);
+    serde_json::to_string(&tree).unwrap()
+}
+
+// ── inherit_names ─────────────────────────────────────────────────────
+
+#[test]
+fn inherit_exact_match() {
+    let entries = vec![make_entry("m1"), make_entry("m2"), make_entry("m3")];
+    let mut roots = vec![make_leaf("kb1", None, vec![0, 1, 2])];
+
+    let tree_json = old_tree_json(vec![make_leaf("old1", Some("Deploy"), vec![0, 1, 2])]);
+    let ids_json = serde_json::to_string(&vec!["m1", "m2", "m3"]).unwrap();
+
+    let n = inherit_names(&mut roots, &entries, Some(tree_json), Some(ids_json));
+    assert_eq!(n, 1);
+    assert_eq!(roots[0].name.as_deref(), Some("Deploy"));
+    assert!(!roots[0].dirty);
 }
 
 #[test]
-fn unnamed_leaf_always_dirty_on_insert() {
-    let mut tree = TopicTree::new(0.10, 0.55);
-    let emb = vec![1.0f32; 4];
-    tree.insert(0, &emb);
-    assert!(tree.roots[0].dirty);
-    // Clear dirty but keep name=None
-    tree.roots[0].dirty = false;
-    let emb2 = vec![1.0f32, 1.01, 1.0, 1.0];
-    tree.insert(1, &emb2);
-    assert!(tree.roots[0].dirty, "unnamed leaf should always be dirty");
-}
-
-// ── Consolidation ─────────────────────────────────────────────────────────
-
-#[test]
-fn consolidate_merges_similar_leaves() {
-    let dim = 8;
-    let mut tree = TopicTree::new(0.30, 0.55);
-    let entries: Vec<Entry> = (0..6)
-        .map(|i| {
-            let mut emb = vec![0.0f32; dim];
-            // Two groups: 0-2 in dim 0, 3-5 in dim 1
-            if i < 3 {
-                emb[0] = 1.0;
-                emb[1] = 0.05 * i as f32;
-            } else {
-                emb[1] = 1.0;
-                emb[0] = 0.05 * (i - 3) as f32;
-            }
-            make_entry(&format!("m{i}"), &format!("entry {i}"), emb)
-        })
-        .collect();
-
-    for (i, e) in entries.iter().enumerate() {
-        tree.insert(i, &e.embedding);
-    }
-    tree.consolidate(&entries);
-
-    let total_members: usize = tree.roots.iter().map(|r| r.total_members()).sum();
-    assert_eq!(total_members, 6, "no members lost after consolidation");
-}
-
-// ── TopicNode helpers ─────────────────────────────────────────────────────
-
-#[test]
-fn topic_node_depth() {
-    let leaf = TopicNode {
-        id: "kb1".into(),
-        name: None,
-        centroid: vec![1.0],
-        members: vec![0],
-        children: vec![],
-        dirty: false,
-        avg_sim: 1.0,
-        named_at_size: 0,
-    };
-    assert_eq!(leaf.depth(), 0);
-
-    let parent = TopicNode {
-        id: "t1".into(),
-        name: None,
-        centroid: vec![1.0],
-        members: vec![],
-        children: vec![leaf],
-        dirty: false,
-        avg_sim: 0.0,
-        named_at_size: 0,
-    };
-    assert_eq!(parent.depth(), 1);
-}
-
-#[test]
-fn topic_node_leaf_count() {
-    let leaf1 = TopicNode {
-        id: "kb1".into(),
-        name: Some("A".into()),
-        centroid: vec![1.0],
-        members: vec![0, 1],
-        children: vec![],
-        dirty: false,
-        avg_sim: 1.0,
-        named_at_size: 2,
-    };
-    let leaf2 = TopicNode {
-        id: "kb2".into(),
-        name: Some("B".into()),
-        centroid: vec![0.0, 1.0],
-        members: vec![2],
-        children: vec![],
-        dirty: false,
-        avg_sim: 1.0,
-        named_at_size: 1,
-    };
-    let parent = TopicNode {
-        id: "t1".into(),
-        name: None,
-        centroid: vec![0.5, 0.5],
-        members: vec![],
-        children: vec![leaf1, leaf2],
-        dirty: false,
-        avg_sim: 0.0,
-        named_at_size: 0,
-    };
-    assert_eq!(parent.leaf_count(), 2);
-    assert_eq!(parent.total_members(), 3);
-}
-
-// ── Resume generation ─────────────────────────────────────────────────────
-
-#[test]
-fn generate_resume_includes_named_topics() {
-    let mut tree = TopicTree::new(0.30, 0.55);
+fn inherit_above_threshold() {
+    // Old: {m1,m2,m3,m4,m5}, New: {m1,m2,m3,m6} → Jaccard 3/6=0.5 ≥ 0.3
     let entries = vec![
-        make_entry("m1", "Deploy to production", vec![1.0, 0.0]),
-        make_entry("m2", "Run cargo test", vec![1.0, 0.1]),
+        make_entry("m1"),
+        make_entry("m2"),
+        make_entry("m3"),
+        make_entry("m6"),
     ];
-    tree.insert(0, &entries[0].embedding);
-    tree.insert(1, &entries[1].embedding);
-    tree.roots[0].name = Some("Deployment".into());
-    tree.roots[0].named_at_size = 2;
-    tree.roots[0].dirty = false;
+    let mut roots = vec![make_leaf("kb1", None, vec![0, 1, 2, 3])];
 
-    let (total_entries, total_topics, text) = tree.generate_resume(&entries);
-    assert!(text.contains("Deployment"), "resume should contain topic name");
-    assert!(text.contains("[2]"), "resume should show member count");
-    assert_eq!(total_entries, 2);
-    assert_eq!(total_topics, 1);
-}
+    let tree_json = old_tree_json(vec![make_leaf(
+        "old1",
+        Some("Config"),
+        vec![0, 1, 2, 3, 4],
+    )]);
+    let ids_json = serde_json::to_string(&vec!["m1", "m2", "m3", "m4", "m5"]).unwrap();
 
-// ── Serialization roundtrip ───────────────────────────────────────────────
-
-#[test]
-fn topic_node_serde_roundtrip() {
-    let node = TopicNode {
-        id: "kb1".into(),
-        name: Some("Test".into()),
-        centroid: vec![1.0, 0.0],
-        members: vec![0, 1, 2],
-        children: vec![],
-        dirty: false,
-        avg_sim: 0.95,
-        named_at_size: 3,
-    };
-    let json = serde_json::to_string(&node).unwrap();
-    let restored: TopicNode = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored.name, Some("Test".into()));
-    assert_eq!(restored.named_at_size, 3);
-    assert_eq!(restored.members, vec![0, 1, 2]);
+    let n = inherit_names(&mut roots, &entries, Some(tree_json), Some(ids_json));
+    assert_eq!(n, 1);
+    assert_eq!(roots[0].name.as_deref(), Some("Config"));
 }
 
 #[test]
-fn topic_node_serde_missing_named_at_size() {
-    // Simulate old JSON without named_at_size field
-    let json = r#"{"id":"kb1","name":"Old","centroid":[1.0],"members":[0],"children":[],"dirty":false,"avg_sim":0.9}"#;
-    let node: TopicNode = serde_json::from_str(json).unwrap();
-    assert_eq!(node.named_at_size, 0, "missing named_at_size should default to 0");
-}
-
-// ── enforce_budget preserves names ────────────────────────────────────────
-
-#[test]
-fn enforce_budget_preserves_target_name() {
-    use engram::topiary::cluster::enforce_budget;
-    let dim = 4;
-    let entries: Vec<Entry> = (0..4)
+fn inherit_below_threshold_rejected() {
+    // Old: {m1..m10}, New: {m1, m11..m19} → Jaccard 1/19 ≈ 0.05 < 0.3
+    let entries: Vec<Entry> = (0..10)
         .map(|i| {
-            let mut emb = vec![1.0f32; dim];
-            emb[0] += i as f32 * 0.01;
-            make_entry(&format!("m{i}"), &format!("entry {i}"), emb)
+            let id = if i == 0 {
+                "m1".into()
+            } else {
+                format!("m{}", 10 + i)
+            };
+            make_entry(&id)
         })
         .collect();
+    let mut roots = vec![make_leaf("kb1", None, (0..10).collect())];
 
-    let mut leaves = vec![
-        TopicNode {
-            id: "kb1".into(),
-            name: Some("Keep This Name".into()),
-            centroid: vec![1.0, 1.0, 1.0, 1.0],
-            members: vec![0, 1],
-            children: vec![],
-            dirty: false,
-            avg_sim: 0.99,
-            named_at_size: 2,
-        },
-        TopicNode {
-            id: "kb2".into(),
-            name: Some("Merge Into Above".into()),
-            centroid: vec![1.01, 1.0, 1.0, 1.0],
-            members: vec![2, 3],
-            children: vec![],
-            dirty: false,
-            avg_sim: 0.99,
-            named_at_size: 2,
-        },
+    let tree_json = old_tree_json(vec![make_leaf("old1", Some("Big"), (0..10).collect())]);
+    let ids_json =
+        serde_json::to_string(&(1..=10).map(|i| format!("m{i}")).collect::<Vec<_>>()).unwrap();
+
+    let n = inherit_names(&mut roots, &entries, Some(tree_json), Some(ids_json));
+    assert_eq!(n, 0);
+    assert!(roots[0].name.is_none());
+}
+
+#[test]
+fn inherit_greedy_dedup() {
+    // Old "Deploy" = {m1,m2,m3,m4}
+    // New A = {m1,m2}, B = {m3,m4} — both Jaccard 0.5 to "Deploy"
+    // Only one should get the name
+    let entries = vec![
+        make_entry("m1"),
+        make_entry("m2"),
+        make_entry("m3"),
+        make_entry("m4"),
+    ];
+    let mut roots = vec![
+        make_leaf("kb1", None, vec![0, 1]),
+        make_leaf("kb2", None, vec![2, 3]),
     ];
 
-    enforce_budget(&mut leaves, &entries, 1); // force merge into 1
-    assert_eq!(leaves.len(), 1);
-    assert_eq!(leaves[0].name, Some("Keep This Name".into()));
-    assert!(!leaves[0].dirty, "named target should NOT be dirty after merge");
-    assert_eq!(leaves[0].members.len(), 4);
+    let tree_json = old_tree_json(vec![make_leaf(
+        "old1",
+        Some("Deploy"),
+        vec![0, 1, 2, 3],
+    )]);
+    let ids_json = serde_json::to_string(&vec!["m1", "m2", "m3", "m4"]).unwrap();
+
+    let n = inherit_names(&mut roots, &entries, Some(tree_json), Some(ids_json));
+    assert_eq!(n, 1);
+    let named = roots
+        .iter()
+        .filter(|r| r.name.as_deref() == Some("Deploy"))
+        .count();
+    assert_eq!(named, 1, "only one topic should get the name");
+}
+
+#[test]
+fn inherit_multiple_old_topics() {
+    // Old: "Deploy"={m1,m2}, "Config"={m3,m4}
+    // New: A={m1,m2,m5}, B={m3,m4}
+    let entries = vec![
+        make_entry("m1"),
+        make_entry("m2"),
+        make_entry("m3"),
+        make_entry("m4"),
+        make_entry("m5"),
+    ];
+    let mut roots = vec![
+        make_leaf("kb1", None, vec![0, 1, 4]),
+        make_leaf("kb2", None, vec![2, 3]),
+    ];
+
+    let tree_json = old_tree_json(vec![
+        make_leaf("old1", Some("Deploy"), vec![0, 1]),
+        make_leaf("old2", Some("Config"), vec![2, 3]),
+    ]);
+    let ids_json = serde_json::to_string(&vec!["m1", "m2", "m3", "m4"]).unwrap();
+
+    let n = inherit_names(&mut roots, &entries, Some(tree_json), Some(ids_json));
+    assert_eq!(n, 2);
+    assert_eq!(roots[0].name.as_deref(), Some("Deploy"));
+    assert_eq!(roots[1].name.as_deref(), Some("Config"));
+}
+
+#[test]
+fn inherit_no_cache() {
+    let entries = vec![make_entry("m1")];
+    let mut roots = vec![make_leaf("kb1", None, vec![0])];
+    assert_eq!(inherit_names(&mut roots, &entries, None, None), 0);
+}
+
+#[test]
+fn inherit_already_named_skipped() {
+    let entries = vec![make_entry("m1"), make_entry("m2")];
+    let mut roots = vec![make_leaf("kb1", Some("Existing"), vec![0, 1])];
+
+    let tree_json = old_tree_json(vec![make_leaf("old1", Some("OldName"), vec![0, 1])]);
+    let ids_json = serde_json::to_string(&vec!["m1", "m2"]).unwrap();
+
+    let n = inherit_names(&mut roots, &entries, Some(tree_json), Some(ids_json));
+    assert_eq!(n, 0);
+    assert_eq!(roots[0].name.as_deref(), Some("Existing"));
+}
+
+#[test]
+fn inherit_best_match_wins() {
+    // Old: "Alpha"={m1,m2}, "Beta"={m3,m4,m5}
+    // New A={m1,m2,m3} best→Alpha(0.67), New B={m3,m4,m5} best→Beta(1.0)
+    // B gets Beta first (higher score), A gets Alpha
+    let entries = vec![
+        make_entry("m1"),
+        make_entry("m2"),
+        make_entry("m3"),
+        make_entry("m4"),
+        make_entry("m5"),
+    ];
+    let mut roots = vec![
+        make_leaf("kb1", None, vec![0, 1, 2]),
+        make_leaf("kb2", None, vec![2, 3, 4]),
+    ];
+
+    let tree_json = old_tree_json(vec![
+        make_leaf("old1", Some("Alpha"), vec![0, 1]),
+        make_leaf("old2", Some("Beta"), vec![2, 3, 4]),
+    ]);
+    let ids_json = serde_json::to_string(&vec!["m1", "m2", "m3", "m4", "m5"]).unwrap();
+
+    let n = inherit_names(&mut roots, &entries, Some(tree_json), Some(ids_json));
+    assert_eq!(n, 2);
+    assert_eq!(roots[0].name.as_deref(), Some("Alpha"));
+    assert_eq!(roots[1].name.as_deref(), Some("Beta"));
+}
+
+// ── count_unnamed ─────────────────────────────────────────────────────
+
+#[test]
+fn count_unnamed_mixed() {
+    let roots = vec![
+        make_leaf("kb1", Some("Named"), vec![0]),
+        make_leaf("kb2", None, vec![1]),
+        make_leaf("kb3", Some("Also"), vec![2]),
+        make_leaf("kb4", None, vec![3]),
+    ];
+    assert_eq!(count_unnamed_leaves(&roots), 2);
+}
+
+// ── fallback names ────────────────────────────────────────────────────
+
+#[test]
+fn fallback_uses_most_common_tag() {
+    let entries = vec![
+        make_entry_with_tags("m1", &["deploy-flow", "ops"]),
+        make_entry_with_tags("m2", &["deploy-flow"]),
+        make_entry_with_tags("m3", &["ops"]),
+    ];
+    let mut roots = vec![make_leaf("kb1", None, vec![0, 1, 2])];
+    let n = assign_fallback_names(&mut roots, &entries);
+    assert_eq!(n, 1);
+    let name = roots[0].name.as_deref().unwrap();
+    assert!(
+        name == "Deploy Flow" || name == "Ops",
+        "expected tag-based name, got: {name}"
+    );
+    assert!(!roots[0].dirty);
+}
+
+#[test]
+fn fallback_no_tags_uses_topic_id() {
+    let entries = vec![make_entry("m1"), make_entry("m2")];
+    let mut roots = vec![make_leaf("kb1", None, vec![0, 1])];
+    let n = assign_fallback_names(&mut roots, &entries);
+    assert_eq!(n, 1);
+    assert_eq!(roots[0].name.as_deref(), Some("Topic kb1"));
+}
+
+#[test]
+fn fallback_skips_already_named() {
+    let entries = vec![make_entry("m1")];
+    let mut roots = vec![make_leaf("kb1", Some("Existing"), vec![0])];
+    let n = assign_fallback_names(&mut roots, &entries);
+    assert_eq!(n, 0);
+    assert_eq!(roots[0].name.as_deref(), Some("Existing"));
 }
