@@ -116,12 +116,44 @@ pub async fn name_tree(
                         result.duration_ms,
                     );
                 }
-                let map: HashMap<String, String> = result
-                    .value
-                    .topics
-                    .into_iter()
-                    .map(|t| (t.id, t.name))
-                    .collect();
+                let requested_ids: Vec<&str> = chunk.iter().map(|(id, _, _)| id.as_str()).collect();
+                let mut map: HashMap<String, String> = HashMap::new();
+                for t in result.value.topics {
+                    // Try exact match first, then fuzzy match for LLM ID hallucinations
+                    if requested_ids.contains(&t.id.as_str()) {
+                        map.insert(t.id, t.name);
+                    } else {
+                        // Try to find the requested ID that the LLM's response refers to
+                        // e.g. LLM returns "topic_kb1" or "Kb1" for requested "kb1"
+                        let lower = t.id.to_lowercase();
+                        if let Some(&rid) = requested_ids.iter().find(|&&r| lower.contains(r)) {
+                            if !map.contains_key(rid) {
+                                debug!(
+                                    returned_id = %t.id,
+                                    matched_to = rid,
+                                    "topiary naming: fuzzy-matched LLM topic ID"
+                                );
+                                map.insert(rid.to_string(), t.name);
+                            }
+                        } else {
+                            debug!(
+                                returned_id = %t.id,
+                                "topiary naming: unrecognized topic ID from LLM"
+                            );
+                        }
+                    }
+                }
+                let matched = map.keys().filter(|k| requested_ids.contains(&k.as_str())).count();
+                if matched < requested_ids.len() {
+                    let missing: Vec<&&str> = requested_ids.iter().filter(|id| !map.contains_key(**id)).collect();
+                    warn!(
+                        requested = requested_ids.len(),
+                        returned = map.len(),
+                        matched,
+                        ?missing,
+                        "topiary naming: LLM returned fewer topics than requested"
+                    );
+                }
                 all_names.extend(map);
             }
             Err(e) => {
