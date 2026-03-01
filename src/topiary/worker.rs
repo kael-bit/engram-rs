@@ -124,8 +124,7 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
             let current_set: HashSet<&str> = current_ids.iter().map(|s| s.as_str()).collect();
             let fp_matches = cached_fingerprint
                 .as_ref()
-                .and_then(|s| s.parse::<u64>().ok())
-                .map_or(false, |fp| fp == current_fingerprint);
+                .and_then(|s| s.parse::<u64>().ok()) == Some(current_fingerprint);
             if cached_set == current_set && fp_matches {
                 // Verify the cached tree is valid (has content)
                 if tree_json.len() > 2 {

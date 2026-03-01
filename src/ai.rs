@@ -489,6 +489,30 @@ pub async fn llm_tool_call<T: serde::de::DeserializeOwned>(
     }
 }
 
+/// Like `llm_tool_call` but allows overriding the model at call time.
+/// If `model_override` is `None`, behaves identically to `llm_tool_call`.
+#[allow(clippy::too_many_arguments)]
+pub async fn llm_tool_call_with_model<T: serde::de::DeserializeOwned>(
+    cfg: &AiConfig,
+    component: &str,
+    model_override: Option<&str>,
+    system: &str,
+    user: &str,
+    fn_name: &str,
+    fn_desc: &str,
+    parameters: serde_json::Value,
+) -> Result<ToolCallResult<T>, EngramError> {
+    let mut resolved = cfg.for_component(component);
+    if let Some(model) = model_override {
+        resolved.model = model.to_string();
+    }
+
+    match resolved.provider {
+        LlmProvider::Anthropic => llm_tool_call_anthropic(&cfg.client, &resolved, system, user, fn_name, fn_desc, parameters).await,
+        LlmProvider::OpenAI => llm_tool_call_openai(&cfg.client, &resolved, system, user, fn_name, fn_desc, parameters).await,
+    }
+}
+
 async fn llm_tool_call_openai<T: serde::de::DeserializeOwned>(
     client: &reqwest::Client,
     resolved: &ResolvedConfig,

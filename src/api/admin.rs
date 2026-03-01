@@ -238,6 +238,12 @@ pub(super) async fn do_import(
     headers: axum::http::HeaderMap,
     LenientJson(body): LenientJson<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
+    // Dispatch: if body has "text" key → LLM extraction import
+    // Otherwise fall through to legacy JSON import (requires "memories" key)
+    if body.get("text").is_some() || body.get("prompt").is_some() {
+        return do_import_text(state, headers, body).await;
+    }
+
     let ns_override = get_namespace(&headers);
     let memories_val = body
         .get("memories")
@@ -259,6 +265,188 @@ pub(super) async fn do_import(
     Ok(Json(serde_json::json!({
         "imported": imported,
         "skipped": memories_val.as_array().map(std::vec::Vec::len).unwrap_or(0).saturating_sub(imported),
+    })))
+}
+
+/// LLM-based text import: extract memories from raw text using a caller-provided prompt.
+async fn do_import_text(
+    state: AppState,
+    headers: axum::http::HeaderMap,
+    body: serde_json::Value,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let cfg = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
+
+    // Validate required fields
+    let text = body
+        .get("text")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| EngramError::Validation("'text' is required and must be non-empty".into()))?;
+    let prompt = body
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| EngramError::Validation("'prompt' is required and must be non-empty".into()))?;
+
+    let namespace = body
+        .get("namespace")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .or_else(|| get_namespace(&headers))
+        .unwrap_or_else(|| "default".into());
+    let model_override = body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    // Define the store_memories function schema for LLM tool calling
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "memories": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "Memory content text"
+                        },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["semantic", "episodic", "procedural"],
+                            "description": "semantic=facts/decisions/lessons (default). episodic=dated events. procedural=step-by-step workflows."
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "1-4 topic tags"
+                        }
+                    },
+                    "required": ["content"]
+                }
+            }
+        },
+        "required": ["memories"]
+    });
+
+    // Call LLM with function calling
+    #[derive(serde::Deserialize)]
+    struct ImportMemory {
+        content: String,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        tags: Option<Vec<String>>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct StoreMemoriesResult {
+        #[serde(default)]
+        memories: Vec<ImportMemory>,
+    }
+
+    let tool_result = ai::llm_tool_call_with_model::<StoreMemoriesResult>(
+        cfg,
+        "gate",
+        model_override.as_deref(),
+        prompt,
+        text,
+        "store_memories",
+        "Store extracted memories from the provided text",
+        schema,
+    )
+    .await
+    .map_err(|e| {
+        // LLM call failure → 500; parse failure already handled by llm_tool_call_with_model
+        // which returns AiBackend error (maps to 502 via EngramError::status_code)
+        tracing::error!(error = %e, "import LLM call failed");
+        e
+    })?;
+
+    // Log LLM usage
+    if let Some(ref u) = tool_result.usage {
+        let cached = u
+            .prompt_tokens_details
+            .as_ref()
+            .map_or(0, |d| d.cached_tokens);
+        let _ = state.db.log_llm_call(
+            "import",
+            &tool_result.model,
+            u.prompt_tokens,
+            u.completion_tokens,
+            cached,
+            tool_result.duration_ms,
+        );
+    }
+
+    let extracted = tool_result.value.memories;
+
+    // Insert each memory through the normal path (dedup + embed)
+    let mut imported_memories = Vec::new();
+    for em in extracted {
+        // Validate kind
+        let kind = em.kind.as_deref().unwrap_or("semantic");
+        if !db::is_valid_kind(kind) {
+            tracing::warn!(kind = %kind, "import: skipping memory with invalid kind");
+            continue;
+        }
+
+        let input = db::MemoryInput {
+            content: em.content,
+            layer: None,
+            importance: None,
+            source: Some("import".into()),
+            tags: em.tags,
+            supersedes: None,
+            skip_dedup: None,
+            namespace: Some(namespace.clone()),
+            sync_embed: None,
+            kind: em.kind,
+            embedding: None,
+        };
+
+        let db = state.db.clone();
+        match blocking(move || db.insert(input)).await {
+            Ok(Ok(mem)) => {
+                // Queue embedding
+                if let Some(ref eq) = state.embed_queue {
+                    eq.push(mem.id.clone(), mem.content.clone());
+                } else if let Some(ref cfg) = state.ai {
+                    super::spawn_embed(
+                        state.db.clone(),
+                        cfg.clone(),
+                        mem.id.clone(),
+                        mem.content.clone(),
+                    );
+                }
+                imported_memories.push(serde_json::json!({
+                    "id": mem.id,
+                    "content": mem.content,
+                    "kind": mem.kind,
+                    "tags": mem.tags,
+                }));
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "import: failed to insert memory");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "import: spawn_blocking failed");
+            }
+        }
+    }
+
+    let count = imported_memories.len();
+    if count > 0 {
+        state
+            .last_activity
+            .store(db::now_ms(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    debug!(count, "import text complete");
+    Ok(Json(serde_json::json!({
+        "imported": count,
+        "memories": imported_memories,
     })))
 }
 
