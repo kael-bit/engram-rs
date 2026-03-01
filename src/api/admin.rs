@@ -522,8 +522,8 @@ pub(super) async fn do_import_facts(
 
         let tool_result = ai::llm_tool_call_with_model::<AnnotationResult>(
             cfg,
-            "gate",
-            None, // use default gate model (sonnet)
+            "naming",
+            None, // use naming model (gpt-4.1) — fast, cheap, good enough for annotation
             crate::prompts::IMPORT_FACTS_SYSTEM,
             &user_msg,
             "store_memories",
