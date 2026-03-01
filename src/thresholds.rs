@@ -215,6 +215,12 @@ pub const TOPIARY_DEBOUNCE_MS: u64 = 5_000;
 /// Naming batch size (topics per LLM call).
 pub const TOPIARY_NAMING_BATCH_SIZE: usize = 30;
 
+/// Max sample texts per topic sent to the naming LLM.
+pub const TOPIARY_NAMING_MAX_SAMPLES: usize = 6;
+
+/// Max chars per sample text in naming prompts.
+pub const TOPIARY_NAMING_SAMPLE_CHARS: usize = 80;
+
 /// Minimum Jaccard similarity for inheriting a topic name from the
 /// cached tree after a rebuild.  Lower = more aggressive reuse.
 pub const TOPIARY_INHERIT_THRESHOLD: f32 = 0.30;

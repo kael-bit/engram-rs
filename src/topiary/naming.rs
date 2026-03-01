@@ -74,7 +74,7 @@ pub async fn name_tree(
         for (id, member_count, samples) in chunk {
             prompt.push_str(&format!("{} ({} entries):\n", id, member_count));
             for s in samples {
-                let truncated: String = s.chars().take(120).collect();
+                let truncated: String = s.chars().take(thresholds::TOPIARY_NAMING_SAMPLE_CHARS).collect();
                 prompt.push_str(&format!("- \"{truncated}\"\n"));
             }
             prompt.push('\n');
@@ -157,7 +157,7 @@ fn collect_dirty_leaves(
 ) {
     if node.is_leaf() {
         if node.dirty && !node.members.is_empty() {
-            let limit = node.members.len().min(12);
+            let limit = node.members.len().min(thresholds::TOPIARY_NAMING_MAX_SAMPLES);
             let samples: Vec<String> = node
                 .members
                 .iter()
