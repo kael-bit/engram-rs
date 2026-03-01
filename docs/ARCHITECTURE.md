@@ -16,21 +16,21 @@ Each memory has: `id` (UUID), `content` (≤8192 chars), `layer` (1/2/3), `impor
 
 ### Layers
 
-| Layer | Enum | Score Bonus | Semantics |
-|-------|------|-------------|-----------|
-| **Buffer** | 1 | 0.9× | Intake. All new memories land here via API. Evicted by epoch-based decay or capacity cap (200). |
-| **Working** | 2 | 1.0× | Active knowledge. Promoted from Buffer by consolidation. Never deleted — importance decays by kind. |
-| **Core** | 3 | 1.1× | Long-term identity. Promoted from Working through LLM gate. Never deleted. |
+| Layer | Enum | Bias | Semantics |
+|-------|------|------|-----------|
+| **Buffer** | 1 | −0.1 | Intake. All new memories land here via API. Evicted by epoch-based decay or capacity cap (200). |
+| **Working** | 2 | 0.0 | Active knowledge. Promoted from Buffer by consolidation. Never deleted — importance decays by kind. |
+| **Core** | 3 | +0.1 | Long-term identity. Promoted from Working through LLM gate. Never deleted. |
 
-**Decay rates by kind** (epoch-based, per active consolidation cycle):
+**Decay rates by kind** (exponential, epoch-based, per active consolidation cycle):
 
-| Kind | Decay per epoch | Use case |
-|------|----------------|----------|
-| `episodic` | −0.005 (full) | Events, experiences, time-bound context |
-| `semantic` | −0.003 (60%) | Knowledge, preferences, lessons (default) |
-| `procedural` | −0.001 (20%) | Workflows, instructions, how-to |
+| Kind | Decay factor | Half-life | Use case |
+|------|-------------|-----------|----------|
+| `episodic` | ×0.98 | ~35 epochs | Events, experiences, time-bound context |
+| `semantic` | ×0.988 | ~58 epochs | Knowledge, preferences, lessons (default) |
+| `procedural` | ×0.996 | ~173 epochs | Workflows, instructions, how-to |
 
-Decay only happens during active consolidation — no decay while the agent is idle. Working and Core memories are never deleted regardless of importance. Buffer memories below `decay_drop_threshold` (0.01) are evicted.
+Decay only happens during active consolidation — no decay while the agent is idle. Working and Core memories are never deleted regardless of importance. Buffer memories below `decay_drop_threshold` (0.01) are evicted. Exponential decay follows the Ebbinghaus forgetting curve — importance approaches the floor asymptotically but never reaches zero.
 
 **Layer entry:** All API writes enter Buffer regardless of any `layer` parameter. Three layers each have a single entry point: Buffer ← API, Working ← consolidation promotion, Core ← LLM gate. The agent cannot specify which layer a memory goes to.
 
@@ -166,8 +166,8 @@ promotes.
 
 ### 2.7 Importance Decay
 
-Every consolidation cycle (epoch-based, not time-based): `decay_importance(cycle_start, 0.005, floor=0.0)`.
-All kinds decay but at different rates: episodic ×1.0, semantic ×0.6, procedural ×0.2. Decay only happens during active consolidation cycles — idle periods cause zero decay. Floor of 0.0 — memories with high repetition or access stay discoverable even at zero importance.
+Every consolidation cycle (epoch-based, not time-based): `decay_importance(cycle_start, factor=0.02, floor=0.01)`.
+All kinds decay exponentially at different rates: episodic ×0.98, semantic ×0.988, procedural ×0.996 per epoch. Decay only happens during active consolidation cycles — idle periods cause zero decay. Floor of 0.01 — memories asymptotically approach but never reach zero, remaining retrievable under precise queries. Activation boost on recall (+0.03) lets frequently-used memories self-reinforce.
 
 ---
 
@@ -189,7 +189,7 @@ Triggered by `POST /consolidate` or cron. Runs `consolidate()`:
 8. **Buffer capacity cap:** FIFO eviction if >200 entries.
 9. **Buffer capacity cap:** FIFO eviction if >200 entries.
 10. **Drop decayed:** Delete Buffer memories below `decay_drop_threshold = 0.01`. Working/Core are never deleted.
-11. **Importance decay:** epoch-based, −0.005/cycle (episodic), floor 0.0.
+11. **Importance decay:** exponential, ×0.98/cycle (episodic), floor 0.01.
 
 ### Phase 2: Async (LLM-dependent)
 
@@ -272,14 +272,18 @@ Three retrieval channels run in parallel:
 ### 4.2 Scoring Formula
 
 ```
-score = (W_importance × importance + W_recency × recency + W_relevance × relevance) × layer_bonus
+raw = relevance × (1 + 0.4 × weight + 0.2 × recency)
+score = sigmoid(raw) = 2/(1 + e^(-2×raw)) - 1
 ```
 
 Where:
-- `W_importance = 0.20`, `W_recency = 0.20`, `W_relevance = 0.60`
+- `weight = importance + rep_bonus + access_bonus + kind_bias + layer_bias` (see `memory_weight()`)
+- `rep_bonus = 0.17 × ln(1 + rep_count)`, capped at 0.7
+- `access_bonus = 0.12 × ln(1 + access_count)`, capped at 0.55
+- `kind_bias`: procedural=+0.15, semantic=0, episodic=−0.1
+- `layer_bias`: core=+0.1, working=0, buffer=−0.1
 - `recency = exp(-decay_rate × age_hours / 168)` (168h = 1 week half-life)
-- `layer_bonus`: Buffer=0.9, Working=1.0, Core=1.1
-- Score capped at 1.0.
+- Score compressed via sigmoid — approaches 1.0 asymptotically, preserving ranking discrimination in high-score regions (no hard cap).
 
 ### 4.3 Dual-Hit Boost
 
@@ -495,13 +499,12 @@ Triggers: git-push, deploy, memory-store, ...
 
 | Section | Content | Budget | Sort |
 |---------|---------|--------|------|
-| **Core** | Permanent rules/identity, full text | ~2k tokens | `importance × kind_boost × (1 + rep × 2.5)` |
+| **Core** | Permanent rules/identity, full text | ~2k tokens | `memory_weight()` (importance + rep/access bonuses + kind/layer biases) |
 | **Recent** | Non-Core memories modified in last N consolidation epochs | ~1k tokens | Time descending |
 | **Topics** | Flat leaf index from cached topiary tree | ~300-500 tokens | Member count descending |
 | **Triggers** | All `trigger:*` tags | ~100-200 tokens | Access count descending |
 
-**Core sorting:** `kind_boost` = 1.3 for procedural, 1.0 for semantic, 0.8 for episodic. Procedural memories naturally
-rank higher because they decay slowest AND get a 1.3× boost.
+**Core sorting:** Uses `memory_weight()` — additive kind bias (+0.15 procedural, −0.1 episodic) and layer bias (+0.1 core). Procedural memories naturally rank higher because they decay slowest AND get a +0.15 bias.
 
 **Topics:** Read from `topiary_tree` in `engram_meta`. If no tree cached, section is omitted.
 Agent can drill into any topic via `POST /topic {"ids": ["kb1", "kb3"]}`.
@@ -564,8 +567,8 @@ sorted by aggregate access count.
 | `working_age_promote_secs` | 604800 (7d) | Age-based Working→Core candidacy |
 | `buffer_threshold` | max(promote_threshold, 5) = 5 | Reinforcement score for Buffer→Working |
 | `BUFFER_CAP` | 200 (env) | Max buffer entries before FIFO eviction |
-| `importance_decay` | 0.005/epoch, floor 0.0 | Epoch-based importance reduction (per active consolidation cycle) |
-| `REPETITION_WEIGHT` | 2.5 | Repetition counts 2.5× more than access in reinforcement |
+| `importance_decay` | ×0.98/epoch (exponential), floor 0.01 | Epoch-based importance reduction (per active consolidation cycle) |
+| `activation_boost` | +0.03 per recall | Importance bump when a memory is retrieved |
 
 ---
 

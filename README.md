@@ -61,13 +61,15 @@ Working → [sustained access + LLM gate] → Core
 
 ### Automatic Decay
 
-Decay is activity-driven — it only fires during active consolidation cycles, not wall-clock time. If the system is idle, memories stay intact. Different kinds decay at different rates:
+Decay is activity-driven — it only fires during active consolidation cycles, not wall-clock time. If the system is idle, memories stay intact.
 
-| Kind | Decay rate | Use case |
-|------|-----------|----------|
-| `episodic` | Fast | Events, experiences, time-bound context |
-| `semantic` | Slow | Knowledge, preferences, lessons (default) |
-| `procedural` | Slowest | Workflows, instructions, how-to |
+**Exponential decay** follows the [Ebbinghaus forgetting curve](https://en.wikipedia.org/wiki/Forgetting_curve) — fast at first, then long-tail. Memories never fully vanish (floor = 0.01), remaining retrievable under precise queries. When a memory is recalled, it gets an **activation boost**, strengthening frequently-used knowledge.
+
+| Kind | Decay rate | Half-life | Use case |
+|------|-----------|-----------|----------|
+| `episodic` | Fastest | ~35 epochs | Events, experiences, time-bound context |
+| `semantic` | Medium | ~58 epochs | Knowledge, preferences, lessons (default) |
+| `procedural` | Slowest | ~173 epochs | Workflows, instructions, how-to |
 
 ### Semantic Dedup & Merge
 
