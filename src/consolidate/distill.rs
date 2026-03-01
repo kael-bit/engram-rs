@@ -89,20 +89,46 @@ async fn distill_one_ns(
             ..Default::default()
         };
         let db4 = db.clone();
-        if let Err(e) = tokio::task::spawn_blocking(move || db4.insert(input)).await {
-            warn!("session distillation insert failed: {e}");
+        // spawn_blocking returns Result<Result<Memory, EngramError>, JoinError>.
+        // Must check both layers to avoid deleting sources on a silent insert failure.
+        let insert_ok = match tokio::task::spawn_blocking(move || db4.insert(input)).await {
+            Err(e) => {
+                warn!("session distillation insert task failed: {e}");
+                false
+            }
+            Ok(Err(e)) => {
+                warn!("session distillation insert failed: {e}");
+                false
+            }
+            Ok(Ok(_)) => true,
+        };
+        if !insert_ok {
             return 0;
         }
         info!(len = summary.len(), sessions = to_distill.len(), ns = ns,
               "distilled sessions into project status");
     }
 
+    // Only delete source notes after successful insert.
+    // When is_dup, tag them as "distilled" to prevent reprocessing, but keep the data.
     let db5 = db.clone();
-    let ids: Vec<String> = to_distill.iter().map(|m| m.id.clone()).collect();
-    let count = ids.len();
+    let sources: Vec<(String, Vec<String>)> = to_distill.iter()
+        .map(|m| (m.id.clone(), m.tags.clone()))
+        .collect();
+    let count = sources.len();
+    let delete_sources = !is_dup;
     let _ = tokio::task::spawn_blocking(move || {
-        for id in &ids {
-            let _ = db5.delete(id);
+        for (id, existing_tags) in &sources {
+            if delete_sources {
+                let _ = db5.delete(id);
+            } else {
+                // Near-duplicate case: mark as processed without deleting
+                let mut tags = existing_tags.clone();
+                if !tags.iter().any(|t| t == "distilled") {
+                    tags.push("distilled".into());
+                }
+                let _ = db5.update_fields(id, None, None, None, Some(&tags));
+            }
         }
     }).await;
     count
