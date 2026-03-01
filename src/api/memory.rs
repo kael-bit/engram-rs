@@ -201,7 +201,7 @@ pub(super) async fn batch_create(
     let count = inputs.len();
     let inputs_had_sync = inputs.iter().any(|i| i.sync_embed.unwrap_or(false));
     let db = state.db.clone();
-    let results = blocking(move || db.insert_batch(inputs))
+    let (results, batch_errors) = blocking(move || db.insert_batch(inputs))
         .await??;
 
     // batch embed — embedding guaranteed available by startup check
@@ -240,10 +240,14 @@ pub(super) async fn batch_create(
 
     let inserted = results.len();
     state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
-    Ok(Json(serde_json::json!({
+    let mut resp = serde_json::json!({
         "inserted": inserted,
         "requested": count,
-    })))
+    });
+    if !batch_errors.is_empty() {
+        resp["errors"] = serde_json::to_value(&batch_errors).unwrap_or_default();
+    }
+    Ok(Json(resp))
 }
 
 pub(super) async fn get_memory(

@@ -136,6 +136,12 @@ fn default_ns() -> String {
     "default".into()
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BatchError {
+    pub index: usize,
+    pub reason: String,
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct MemoryInput {
     #[serde(default)]

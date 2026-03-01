@@ -176,17 +176,19 @@ impl MemoryDB {
 
     /// Batch insert within a single transaction. Skips dedup for speed.
     /// Returns the successfully inserted memories.
-    pub fn insert_batch(&self, inputs: Vec<MemoryInput>) -> Result<Vec<Memory>, EngramError> {
+    pub fn insert_batch(&self, inputs: Vec<MemoryInput>) -> Result<(Vec<Memory>, Vec<BatchError>), EngramError> {
         let conn = self.conn()?;
         conn.execute_batch("BEGIN")?;
         let mut results = Vec::with_capacity(inputs.len());
+        let mut errors: Vec<BatchError> = Vec::new();
         let current_epoch: i64 = self.get_meta("consolidation_epoch")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
         let result = (|| -> Result<(), EngramError> {
-            for input in inputs {
+            for (idx, input) in inputs.into_iter().enumerate() {
                 if let Err(e) = validate_input(&input) {
-                    tracing::warn!(error = %e, "batch: skipping invalid input");
+                    tracing::warn!(index = idx, error = %e, "batch: skipping invalid input");
+                    errors.push(BatchError { index: idx, reason: e.to_string() });
                     continue;
                 }
                 let now = now_ms();
@@ -259,7 +261,7 @@ impl MemoryDB {
                 if !results.is_empty() {
                     let _ = self.clear_meta_prefix("resume_cache:");
                 }
-                Ok(results)
+                Ok((results, errors))
             }
             Err(e) => {
                 let _ = conn.execute_batch("ROLLBACK");

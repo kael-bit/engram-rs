@@ -775,8 +775,9 @@ fn batch_insert_importance_routing() {
         MemoryInput { importance: Some(0.3), ..MemoryInput::new("transient note") },
         MemoryInput { importance: Some(0.3), ..MemoryInput::new("explicit layer override") },
     ];
-    let results = db.insert_batch(inputs).unwrap();
+    let (results, errors) = db.insert_batch(inputs).unwrap();
     assert_eq!(results.len(), 4);
+    assert!(errors.is_empty());
     // All batch inserts go to Buffer — layer field is ignored
     assert!(results.iter().all(|r| r.layer == Layer::Buffer));
 }
