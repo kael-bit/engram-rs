@@ -517,7 +517,7 @@ function renderTreeNode(node,depth){
       '<div class="tt-leaf-head">'+
         '<span class="tt-icon tt-leaf-icon">●</span>'+
         '<span class="tc-id">'+esc(node.id)+'</span>'+
-        '<span class="tc-name">'+esc(node.name||'unnamed')+'</span>'+
+        '<span class="tc-name">'+esc(node.name&&node.name!=='unnamed'?node.name:'Topic '+node.id)+'</span>'+
         '<span class="tc-count">'+node.member_count+'</span>'+
       '</div>'+
       '<div class="tt-leaf-body" style="display:none"></div>'+
