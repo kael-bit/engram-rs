@@ -5,7 +5,7 @@ use crate::prompts;
 use crate::SharedDB;
 use crate::util::truncate_chars;
 use serde::Deserialize;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::merge_tags;
 
@@ -230,7 +230,7 @@ pub(super) async fn triage_buffer(
 /// Merge near-duplicate buffer memories based on cosine similarity.
 /// No LLM calls — keeps the newest entry, sums access counts, merges tags.
 pub fn dedup_buffer(db: &MemoryDB) -> usize {
-    let all = db.get_all_with_embeddings().unwrap_or_else(|e| { warn!(error = %e, "get_all_with_embeddings failed"); vec![] });
+    let all = db.get_all_with_embeddings_from_index();
     let buffers: Vec<_> = all.iter()
         .filter(|(m, e)| !e.is_empty() && m.layer == Layer::Buffer)
         .collect();

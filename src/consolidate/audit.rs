@@ -256,6 +256,7 @@ async fn distill_one_topic(
     // Apply: insert distilled entries, tag sources as absorbed
     let result = tokio::task::spawn_blocking(move || {
         let mut absorbed = Vec::new();
+        let mut new_memories: Vec<(String, String)> = Vec::new();
 
         for entry in &distilled {
             // Resolve source_ids (could be short or full)
@@ -309,6 +310,7 @@ async fn distill_one_topic(
                             warn!(error = %e, "distill promote failed");
                         }
                     }
+                    new_memories.push((mem.id.clone(), mem.content.clone()));
                     absorbed.extend(sources);
                 }
                 Err(e) => {
@@ -317,15 +319,21 @@ async fn distill_one_topic(
             }
         }
 
-        DistillResult {
+        (DistillResult {
             topic_name,
             input_count,
             output_count: distilled.len(),
             absorbed_ids: absorbed,
-        }
+        }, new_memories)
     })
     .await
     .map_err(|e| EngramError::Internal(format!("spawn: {e}")))?;
+
+    // Re-embed all newly created distilled memories so they're immediately searchable
+    let (result, new_mems) = result;
+    for (id, content) in new_mems {
+        crate::api::spawn_embed(db.clone(), cfg.clone(), id, content);
+    }
 
     Ok(result)
 }

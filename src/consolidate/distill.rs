@@ -100,7 +100,11 @@ async fn distill_one_ns(
                 warn!("session distillation insert failed: {e}");
                 false
             }
-            Ok(Ok(_)) => true,
+            Ok(Ok(mem)) => {
+                // Re-embed the new distilled memory so it's immediately searchable
+                crate::api::spawn_embed(db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
+                true
+            }
         };
         if !insert_ok {
             return 0;

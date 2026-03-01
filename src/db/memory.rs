@@ -1140,6 +1140,15 @@ impl MemoryDB {
                     "INSERT INTO memories_fts(id, content, tags) VALUES (?1, ?2, ?3)",
                     params![actual_id, processed, tags_json],
                 )?;
+                // Populate in-memory vec index if embedding is present
+                if let Some(ref emb) = m.embedding {
+                    if let Ok(mut idx) = self.vec_index.write() {
+                        idx.insert(actual_id.clone(), super::vec::VecEntry {
+                            emb: emb.clone(),
+                            namespace: m.namespace.clone(),
+                        });
+                    }
+                }
                 imported += 1;
             }
             Ok(())
