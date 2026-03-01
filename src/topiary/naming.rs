@@ -172,6 +172,12 @@ pub async fn name_tree(
     for root in roots.iter_mut() {
         applied += apply_names_to_leaves(root, &all_names);
     }
+
+    // Name internal nodes bottom-up from child names (no LLM needed)
+    for root in roots.iter_mut() {
+        name_internal_nodes(root);
+    }
+
     info!(named = applied, dirty = dirty_count, "topiary naming complete");
 
     NamingStats {
@@ -240,4 +246,59 @@ fn apply_names_to_leaves(node: &mut TopicNode, names: &HashMap<String, String>) 
         }
         count
     }
+}
+
+/// Name internal (non-leaf) nodes bottom-up by summarizing child names.
+/// Uses the most common meaningful words from children's names.
+fn name_internal_nodes(node: &mut TopicNode) {
+    if node.is_leaf() {
+        return;
+    }
+
+    // Recurse into children first (bottom-up)
+    for child in node.children.iter_mut() {
+        name_internal_nodes(child);
+    }
+
+    // Collect child names
+    let child_names: Vec<&str> = node
+        .children
+        .iter()
+        .filter_map(|c| c.name.as_deref())
+        .filter(|n| *n != "unnamed")
+        .collect();
+
+    if child_names.is_empty() {
+        return;
+    }
+
+    // If only one named child, inherit its name with a broader marker
+    if child_names.len() == 1 {
+        node.name = Some(format!("{} & more", child_names[0]));
+        return;
+    }
+
+    // Pick the two largest children by total_members and join their names
+    let mut children_by_size: Vec<(usize, &str)> = node
+        .children
+        .iter()
+        .filter_map(|c| {
+            c.name
+                .as_deref()
+                .filter(|n| *n != "unnamed")
+                .map(|n| (c.total_members(), n))
+        })
+        .collect();
+    children_by_size.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let top_names: Vec<&str> = children_by_size.iter().take(2).map(|(_, n)| *n).collect();
+    let suffix = if children_by_size.len() > 2 {
+        format!(" +{}", children_by_size.len() - 2)
+    } else {
+        String::new()
+    };
+    let combined = format!("{}{}", top_names.join(", "), suffix);
+    // Truncate to 60 chars
+    let truncated: String = combined.chars().take(60).collect();
+    node.name = Some(truncated);
 }
