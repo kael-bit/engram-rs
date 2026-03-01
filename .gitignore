@@ -12,3 +12,6 @@
 *-INTERNAL*
 .claude/
 .githooks/
+
+# Eval artifacts
+eval/
