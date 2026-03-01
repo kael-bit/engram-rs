@@ -1,5 +1,11 @@
 # engram
 
+[![CI](https://img.shields.io/github/actions/workflow/status/kael-bit/engram-rs/ci.yml?style=flat-square&logo=github&label=CI)](https://github.com/kael-bit/engram-rs/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
+[![GitHub stars](https://img.shields.io/github/stars/kael-bit/engram-rs?style=flat-square&color=yellow)](https://github.com/kael-bit/engram-rs)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?style=flat-square&logo=docker)](https://ghcr.io/kael-bit/engram-rs)
+
 Memory engine for AI agents. Two axes: **time** (three-layer decay & promotion) and **space** (self-organizing topic tree). Important memories get promoted, noise fades, related knowledge clusters automatically.
 
 Hybrid search, LLM-powered consolidation, single Rust binary, one SQLite file.
@@ -9,8 +15,6 @@ Most agent memory is a flat store — dump everything in, keyword search to get 
 <p align="center">
   <img src="docs/engram-quickstart.gif" alt="engram demo — store, context reset, recall" width="720">
 </p>
-
-[中文](README_CN.md)
 
 ## Quick Start
 

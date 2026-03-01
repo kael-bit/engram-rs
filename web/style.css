@@ -112,6 +112,8 @@ label { font-size:11px; color:#888; }
 .topic-grid { display:flex; flex-direction:column; gap:6px; }
 .trigger-tag { display:inline-block; padding:3px 10px; border-radius:12px; font-size:11px; background:#222; color:#888; margin:3px; border:1px solid #333; }
 .trigger-tag:hover { color:#ccc; border-color:#555; }
+.tt-expand-hint { font-size:12px; color:#555; font-style:italic; }
+.tt-node-head:hover .tt-expand-hint { color:#5b9cf5; }
 .resume-section { margin-bottom:16px; }
 .resume-section-hdr { font-size:12px; color:#888; font-weight:600; margin-bottom:6px; cursor:pointer; }
 .resume-section-hdr:hover { color:#ccc; }
