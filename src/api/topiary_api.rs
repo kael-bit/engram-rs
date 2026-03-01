@@ -137,7 +137,7 @@ pub(super) async fn topiary_tree_handler(
         let children: Vec<serde_json::Value> = node.children.iter().map(|c| strip_node(c)).collect();
         serde_json::json!({
             "id": node.id,
-            "name": node.name.as_deref().unwrap_or("unnamed"),
+            "name": node.name,
             "member_count": member_count,
             "children": children,
         })

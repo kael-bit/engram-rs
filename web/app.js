@@ -529,7 +529,7 @@ function renderTreeNode(node,depth){
     '<div class="tt-node-head" onclick="toggleTreeBranch(this)">'+
       '<span class="tt-icon tt-toggle">▶</span>'+
       '<span class="tc-id">'+esc(node.id)+'</span>'+
-      (node.name&&node.name!=='unnamed'?'<span class="tc-name">'+esc(node.name)+'</span>':'<span class="tt-expand-hint">Click to expand</span>')+
+      (node.name?'<span class="tc-name">'+esc(node.name)+'</span>':'<span class="tt-expand-hint">Click to expand</span>')+
       '<span class="tc-count">'+node.member_count+'</span>'+
     '</div>'+
     '<div class="tt-children" style="display:none">'+childrenHtml+'</div>'+
