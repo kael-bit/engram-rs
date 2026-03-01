@@ -860,6 +860,11 @@ impl MemoryDB {
             "UPDATE memories SET namespace = ?1, modified_at = ?2 WHERE id = ?3",
             params![namespace, now_ms(), id],
         )?;
+        // Update vec index namespace for semantic search filtering
+        if let Ok(mut idx) = self.vec_index.write() {
+            idx.set_namespace(id, namespace.to_string());
+        }
+        let _ = self.clear_meta_prefix("resume_cache:");
         Ok(())
     }
 
@@ -1050,6 +1055,7 @@ impl MemoryDB {
             "UPDATE memories SET kind = ?1, modified_at = ?3 WHERE id = ?2",
             params![kind, id, crate::db::now_ms()],
         )?;
+        let _ = self.clear_meta_prefix("resume_cache:");
         Ok(())
     }
 

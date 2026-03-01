@@ -92,6 +92,13 @@ impl VecIndex {
         self.entries.get(id)
     }
 
+    /// Update the namespace of an entry in the vec index.
+    pub fn set_namespace(&mut self, id: &str, namespace: String) {
+        if let Some(entry) = self.entries.get_mut(id) {
+            entry.namespace = namespace;
+        }
+    }
+
     pub fn contains_key(&self, id: &str) -> bool {
         self.entries.contains_key(id)
     }
