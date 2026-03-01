@@ -54,6 +54,7 @@ pub(super) async fn do_resume(
         .map(|w| w.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect())
         .unwrap_or_default();
 
+    let ns_filter_for_stats = ns_filter.clone();
     let db = state.db.clone();
     let sections = blocking(move || {
         let d = db;
@@ -192,9 +193,16 @@ pub(super) async fn do_resume(
 
         let section = if let Some(ref tj) = tree_json {
             if let Ok(tree_data) = serde_json::from_str::<serde_json::Value>(tj) {
-                // Count working/buffer from memory stats
+                // Count working/buffer from memory stats (namespace-aware)
                 let db_stats = state.db.clone();
-                let stats = tokio::task::spawn_blocking(move || db_stats.stats())
+                let ns_for_stats = ns_filter_for_stats.clone();
+                let stats = tokio::task::spawn_blocking(move || {
+                    if let Some(ref ns) = ns_for_stats {
+                        db_stats.stats_ns(ns)
+                    } else {
+                        db_stats.stats()
+                    }
+                })
                     .await
                     .unwrap_or(db::Stats { total: 0, buffer: 0, working: 0, core: 0, by_kind: db::KindStats::default() });
                 working_count = stats.working;

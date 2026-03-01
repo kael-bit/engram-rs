@@ -91,7 +91,7 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
     let mut stored: u64 = 0;
     let mut batch_contents: Vec<String> = Vec::new();
     for entry in entries {
-        if entry.content.is_empty() || entry.content.len() > 200 {
+        if entry.content.is_empty() || entry.content.chars().count() > 200 {
             continue;
         }
 
