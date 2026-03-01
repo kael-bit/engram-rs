@@ -1,6 +1,6 @@
 //! Debounced async background worker for topiary tree rebuilds.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -295,7 +295,7 @@ fn load_entries(db: &MemoryDB) -> Vec<Entry> {
 // ── Name inheritance helpers ──────────────────────────────────────────────
 
 /// Inherit topic names from the previously cached tree for leaves whose
-/// member composition hasn't changed significantly (Jaccard >= 0.5).
+/// member composition hasn't changed significantly (Jaccard >= threshold).
 fn inherit_names(
     new_roots: &mut [TopicNode],
     new_entries: &[Entry],
@@ -329,9 +329,33 @@ fn inherit_names(
         return 0;
     }
 
+    // Collect all dirty leaves with their best match scores
+    let mut candidates: Vec<(String, String, f32)> = Vec::new(); // (node_id, old_name, jaccard)
+    for root in new_roots.iter() {
+        collect_inherit_candidates(root, new_entries, &old_named, &mut candidates);
+    }
+
+    // Sort by score descending — best matches first
+    candidates.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Greedy assignment: each old name can only be used once
+    let mut used_names: HashSet<String> = HashSet::new();
+    let mut assignments: HashMap<String, String> = HashMap::new();
+    for (node_id, old_name, score) in &candidates {
+        if *score < thresholds::TOPIARY_INHERIT_THRESHOLD {
+            break; // sorted descending, no more good matches
+        }
+        if used_names.contains(old_name) {
+            continue;
+        }
+        used_names.insert(old_name.clone());
+        assignments.insert(node_id.clone(), old_name.clone());
+    }
+
+    // Apply assignments
     let mut inherited = 0;
     for root in new_roots.iter_mut() {
-        inherited += inherit_in_node(root, new_entries, &old_named);
+        inherited += apply_inherited_names(root, &assignments);
     }
     inherited
 }
@@ -359,14 +383,16 @@ fn collect_named_leaves(
     }
 }
 
-fn inherit_in_node(
-    node: &mut TopicNode,
+/// Collect (node_id, best_old_name, jaccard) for all dirty unnamed leaves.
+fn collect_inherit_candidates(
+    node: &TopicNode,
     new_entries: &[Entry],
     old_named: &[(String, HashSet<String>)],
-) -> usize {
+    out: &mut Vec<(String, String, f32)>,
+) {
     if node.is_leaf() {
         if !node.dirty || node.name.is_some() {
-            return 0;
+            return;
         }
         let new_ids: HashSet<String> = node
             .members
@@ -374,7 +400,7 @@ fn inherit_in_node(
             .filter_map(|&i| new_entries.get(i).map(|e| e.id.clone()))
             .collect();
         if new_ids.is_empty() {
-            return 0;
+            return;
         }
 
         let mut best_score = 0.0f32;
@@ -393,9 +419,25 @@ fn inherit_in_node(
             }
         }
 
-        if best_score >= 0.5 {
-            if let Some(name) = best_name {
-                node.name = Some(name.to_string());
+        if let Some(name) = best_name {
+            out.push((node.id.clone(), name.to_string(), best_score));
+        }
+    } else {
+        for child in &node.children {
+            collect_inherit_candidates(child, new_entries, old_named, out);
+        }
+    }
+}
+
+/// Apply inherited names to matching dirty leaves.
+fn apply_inherited_names(
+    node: &mut TopicNode,
+    assignments: &HashMap<String, String>,
+) -> usize {
+    if node.is_leaf() {
+        if node.dirty {
+            if let Some(name) = assignments.get(&node.id) {
+                node.name = Some(name.clone());
                 node.named_at_size = node.members.len();
                 node.dirty = false;
                 return 1;
@@ -405,7 +447,7 @@ fn inherit_in_node(
     } else {
         let mut count = 0;
         for child in &mut node.children {
-            count += inherit_in_node(child, new_entries, old_named);
+            count += apply_inherited_names(child, assignments);
         }
         count
     }

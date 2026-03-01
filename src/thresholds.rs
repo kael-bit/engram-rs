@@ -215,6 +215,10 @@ pub const TOPIARY_DEBOUNCE_MS: u64 = 5_000;
 /// Naming batch size (topics per LLM call).
 pub const TOPIARY_NAMING_BATCH_SIZE: usize = 30;
 
+/// Minimum Jaccard similarity for inheriting a topic name from the
+/// cached tree after a rebuild.  Lower = more aggressive reuse.
+pub const TOPIARY_INHERIT_THRESHOLD: f32 = 0.30;
+
 // ── Proxy ──────────────────────────────────────────────────────────────────
 
 /// Minimum importance for proxy-extracted memories to be stored.
