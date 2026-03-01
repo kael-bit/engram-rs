@@ -23,6 +23,15 @@ pub(super) async fn create_memory(
     let sync = input.sync_embed.unwrap_or(false);
     let skip_dedup = input.skip_dedup.unwrap_or(false);
 
+    // Validate kind early — before semantic dedup can bypass validate_input
+    if let Some(ref kind) = input.kind {
+        if !db::is_valid_kind(kind) {
+            return Err(EngramError::Validation(
+                format!("invalid kind '{}': must be semantic, episodic, or procedural", kind),
+            ));
+        }
+    }
+
     // Semantic dedup: if AI is available and dedup isn't skipped, check
     // for semantically similar existing memories before inserting.
     // Jaccard (in db.insert) catches textual duplicates; this catches
@@ -268,6 +277,11 @@ pub(super) async fn update_memory(
     let mem = blocking(move || {
         let full_id = db.resolve_prefix(&id)?;
         if let Some(ref k) = body.kind {
+            if !db::is_valid_kind(k) {
+                return Err(EngramError::Validation(
+                    format!("invalid kind '{}': must be semantic, episodic, or procedural", k),
+                ));
+            }
             db.update_kind(&full_id, k)?;
         }
         db.update_fields(

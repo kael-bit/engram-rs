@@ -127,6 +127,11 @@ fn default_kind() -> String {
     "semantic".into()
 }
 
+/// Valid memory kinds.  Returns `true` for semantic / episodic / procedural.
+pub fn is_valid_kind(k: &str) -> bool {
+    matches!(k, "semantic" | "episodic" | "procedural")
+}
+
 fn is_default_ns(ns: &str) -> bool {
     ns == "default"
 }
@@ -374,6 +379,13 @@ fn validate_input(input: &MemoryInput) -> Result<(), EngramError> {
         if let Some(t) = tags.iter().find(|t| t.chars().count() > thresholds::MAX_TAG_LEN) {
             let max = thresholds::MAX_TAG_LEN;
             return Err(EngramError::Validation(format!("tag '{}' too long (max {max})", t)));
+        }
+    }
+    if let Some(ref kind) = input.kind {
+        if !is_valid_kind(kind) {
+            return Err(EngramError::Validation(
+                format!("invalid kind '{}': must be semantic, episodic, or procedural", kind),
+            ));
         }
     }
     Ok(())
