@@ -274,24 +274,33 @@ pub(super) async fn update_memory(
     LenientJson(body): LenientJson<UpdateBody>,
 ) -> Result<Json<db::Memory>, EngramError> {
     let content_changed = body.content.is_some();
+    // Validate kind early (before any DB mutations)
+    if let Some(ref k) = body.kind {
+        if !db::is_valid_kind(k) {
+            return Err(EngramError::Validation(
+                format!("invalid kind '{}': must be semantic, episodic, or procedural", k),
+            ));
+        }
+    }
     let db = state.db.clone();
     let mem = blocking(move || {
         let full_id = db.resolve_prefix(&id)?;
-        if let Some(ref k) = body.kind {
-            if !db::is_valid_kind(k) {
-                return Err(EngramError::Validation(
-                    format!("invalid kind '{}': must be semantic, episodic, or procedural", k),
-                ));
-            }
-            db.update_kind(&full_id, k)?;
-        }
-        db.update_fields(
+        // update_fields first — it validates content/tags/layer and fails
+        // early. update_kind runs only after fields succeed, preventing
+        // partial updates where kind changed but content was rejected.
+        let result = db.update_fields(
             &full_id,
             body.content.as_deref(),
             body.layer,
             body.importance,
             body.tags.as_deref(),
-        )
+        )?;
+        if let Some(ref k) = body.kind {
+            db.update_kind(&full_id, k)?;
+            // Re-fetch to include updated kind in response
+            return db.get(&full_id);
+        }
+        Ok(result)
     })
     .await??;
 

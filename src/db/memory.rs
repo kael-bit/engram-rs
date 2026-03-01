@@ -1057,9 +1057,12 @@ impl MemoryDB {
 
     /// Update just the kind field for a memory.
     pub fn update_kind(&self, id: &str, kind: &str) -> Result<(), EngramError> {
+        let current_epoch: i64 = self.get_meta("consolidation_epoch")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         self.conn()?.execute(
-            "UPDATE memories SET kind = ?1, modified_at = ?3 WHERE id = ?2",
-            params![kind, id, crate::db::now_ms()],
+            "UPDATE memories SET kind = ?1, modified_at = ?3, modified_epoch = ?4 WHERE id = ?2",
+            params![kind, id, crate::db::now_ms(), current_epoch],
         )?;
         let _ = self.clear_meta_prefix("resume_cache:");
         Ok(())
