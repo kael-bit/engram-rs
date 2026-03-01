@@ -48,14 +48,14 @@ fn touch() {
     db.touch(&mem.id).unwrap();
     let got = db.get(&mem.id).unwrap().unwrap();
     assert_eq!(got.access_count, 1);
-    assert!((got.importance - 0.32).abs() < 0.001, "imp={}", got.importance);
+    assert!((got.importance - 0.33).abs() < 0.001, "imp={}", got.importance);
 
     // multiple touches accumulate
     db.touch(&mem.id).unwrap();
     db.touch(&mem.id).unwrap();
     let got = db.get(&mem.id).unwrap().unwrap();
     assert_eq!(got.access_count, 3);
-    assert!((got.importance - 0.36).abs() < 0.001, "imp={}", got.importance);
+    assert!((got.importance - 0.39).abs() < 0.001, "imp={}", got.importance);
 }
 
 #[test]

@@ -898,11 +898,11 @@ fn score_memory_perfect_scores() {
     let now = engram::db::now_ms();
     let mem = make_memory(Layer::Core, 1.0, 0.05, now);
     let scored = score_memory(&mem, 1.0);
-    // importance=1.0, relevance=1.0, recency≈1.0, bonus=1.1
-    // raw = (0.2*1 + 0.2*1 + 0.6*1) * 1.1 = 1.1 → capped to 1.0
+    // With sigmoid compression, perfect inputs should score high but < 1.0.
+    // raw ≈ 1.0 * (1 + 0.4*weight + 0.2*recency) → sigmoid maps to ~0.93
     assert!(
-        (scored.score - 1.0).abs() < 1e-9,
-        "perfect inputs with Core layer should cap at 1.0, got {}", scored.score
+        scored.score > 0.85 && scored.score < 1.0,
+        "perfect inputs should score high via sigmoid (0.85-1.0), got {}", scored.score
     );
 }
 

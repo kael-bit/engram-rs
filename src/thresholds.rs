@@ -115,32 +115,58 @@ pub static NO_FTS_PENALTY: LazyLock<f64> =
 
 // ── Memory weight / scoring ────────────────────────────────────────────────
 
-/// Repetition bonus: scale × count, capped at cap.
-pub const REP_BONUS_SCALE: f64 = 0.1;
-pub const REP_BONUS_CAP: f64 = 0.5;
+/// Repetition bonus: scale × ln(1 + count), soft-saturating.
+/// Old: linear 0.1×count capped at 0.5 (saturated at 5 reps).
+/// New: logarithmic, reaches ~0.3 at 5 reps, ~0.5 at 30 reps.
+pub const REP_BONUS_SCALE: f64 = 0.17;
+pub const REP_BONUS_CAP: f64 = 0.7;
 
-/// Access bonus: scale × ln(1 + count), capped at cap.
-pub const ACCESS_BONUS_SCALE: f64 = 0.1;
-pub const ACCESS_BONUS_CAP: f64 = 0.3;
+/// Access bonus: scale × ln(1 + count), soft-saturating.
+/// Old: 0.1×ln(1+count) capped at 0.3 (saturated at ~19 accesses).
+/// New: reaches ~0.3 at 20 accesses, ~0.45 at 100 accesses.
+pub const ACCESS_BONUS_SCALE: f64 = 0.12;
+pub const ACCESS_BONUS_CAP: f64 = 0.55;
 
-/// Kind boost multipliers (semantic is always 1.0).
+/// Kind bias (additive, not multiplicative).
+/// Procedural gets +0.15, episodic gets -0.1, semantic is 0.
+pub const KIND_BIAS_PROCEDURAL: f64 = 0.15;
+pub const KIND_BIAS_EPISODIC: f64 = -0.1;
+
+/// Layer bias (additive, not multiplicative).
+/// Core gets +0.1, buffer gets -0.1, working is 0.
+pub const LAYER_BIAS_CORE: f64 = 0.1;
+pub const LAYER_BIAS_BUFFER: f64 = -0.1;
+
+// Legacy multiplicative constants — kept for migration reference, unused.
+#[allow(dead_code)]
 pub const KIND_BOOST_PROCEDURAL: f64 = 1.3;
+#[allow(dead_code)]
 pub const KIND_BOOST_EPISODIC: f64 = 0.8;
-
-/// Layer boost multipliers (Working is always 1.0).
+#[allow(dead_code)]
 pub const LAYER_BOOST_CORE: f64 = 1.2;
+#[allow(dead_code)]
 pub const LAYER_BOOST_BUFFER: f64 = 0.8;
 
 // ── Decay ──────────────────────────────────────────────────────────────────
 
-/// Base decay amount per consolidation epoch (episodic rate).
-/// Semantic decays at 60% of this, procedural at 20%.
-pub const DECAY_BASE_AMOUNT: f64 = 0.005;
+/// Exponential decay factor per consolidation epoch.
+/// importance *= (1 - DECAY_FACTOR × kind_ratio) each epoch.
+/// Default 0.02 → ~50% after 35 epochs for episodic.
+pub const DECAY_FACTOR: f64 = 0.02;
 pub const DECAY_SEMANTIC_RATIO: f64 = 0.6;
 pub const DECAY_PROCEDURAL_RATIO: f64 = 0.2;
 
 /// Importance floor — memories never decay below this.
-pub const DECAY_FLOOR: f64 = 0.0;
+/// Non-zero floor ensures long-tail memories remain retrievable
+/// under sufficiently precise queries.
+pub const DECAY_FLOOR: f64 = 0.01;
+
+/// Activation boost: importance bump when a memory is recalled.
+/// Applied in touch() for Buffer/Working memories.
+pub const ACTIVATION_BOOST: f64 = 0.03;
+
+/// Activation boost ceiling — touch can push importance up to this.
+pub const ACTIVATION_CEILING: f64 = 1.0;
 
 // ── Consolidation ──────────────────────────────────────────────────────────
 

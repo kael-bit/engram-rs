@@ -872,7 +872,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
     }
 
     // Importance decay
-    let importance_decayed = db.decay_importance(now, thresholds::DECAY_BASE_AMOUNT, thresholds::DECAY_FLOOR).unwrap_or(0);
+    let importance_decayed = db.decay_importance(now, thresholds::DECAY_FACTOR, thresholds::DECAY_FLOOR).unwrap_or(0);
 
     if promoted > 0 || decayed > 0 || demoted > 0 || importance_decayed > 0 {
         info!(promoted, decayed, demoted, importance_decayed, "consolidation complete");

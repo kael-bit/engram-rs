@@ -135,10 +135,18 @@ pub fn score_memory(mem: &Memory, relevance: f64) -> ScoredMemory {
     let weight = crate::scoring::memory_weight(mem);
     // Multiplicative: relevance is the gate, weight/recency are modifiers only.
     // relevance=0 → score=0 regardless of weight/recency (no free passes for Core).
-    let mut score = relevance * (1.0 + 0.4 * weight + 0.2 * recency);
+    let raw = relevance * (1.0 + 0.4 * weight + 0.2 * recency);
 
-    // Cap at 1.0 — scores above 1 confuse callers and threshold logic
-    score = score.min(1.0);
+    // Smooth compression instead of hard cap at 1.0.
+    // Maps [0, ∞) → [0, 1) via sigmoid: 2/(1+e^(-2x)) - 1
+    // At raw=0.5 → ~0.46, raw=1.0 → ~0.76, raw=1.5 → ~0.91, raw=2.0 → ~0.96
+    // This preserves ranking discrimination in the high-score region
+    // where the old min(1.0) caused information loss.
+    let score = if raw <= 0.0 {
+        0.0
+    } else {
+        2.0 / (1.0 + (-2.0 * raw).exp()) - 1.0
+    };
 
     ScoredMemory {
         memory: mem.clone(),

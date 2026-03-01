@@ -430,13 +430,17 @@ impl MemoryDB {
     }
 
     pub fn touch(&self, id: &str) -> Result<(), EngramError> {
-        // Recall-based reinforcement. Only bump importance for
-        // Buffer/Working — Core memories are already at their ceiling.
+        // Recall-based activation boost. Buffer/Working memories get an
+        // importance bump when recalled — simulating the "retrieval strengthens
+        // memory" effect (testing effect / activation boosting).
+        // Core memories don't need boosting — they've already earned permanence.
+        let boost = thresholds::ACTIVATION_BOOST;
+        let ceiling = thresholds::ACTIVATION_CEILING;
         self.conn()?.execute(
             "UPDATE memories SET last_accessed = ?1, access_count = access_count + 1, \
-             importance = CASE WHEN layer < 3 THEN MIN(1.0, importance + 0.02) ELSE importance END \
+             importance = CASE WHEN layer < 3 THEN MIN(?3, importance + ?4) ELSE importance END \
              WHERE id = ?2",
-            params![now_ms(), id],
+            params![now_ms(), id, ceiling, boost],
         )?;
         Ok(())
     }
@@ -456,30 +460,43 @@ impl MemoryDB {
 
     /// Decay importance for memories not accessed recently.
     /// Returns the number of memories affected.
-    /// Decay importance per consolidation epoch (activity-based, not time-based).
+    /// Exponential decay per consolidation epoch (activity-based, not time-based).
     /// Called once per consolidation cycle. Only runs when there's write activity,
     /// so idle periods cause zero decay.
-    /// Decay amount varies by kind: episodic fastest, semantic medium, procedural slowest.
+    ///
+    /// Formula: importance *= (1 - DECAY_FACTOR × kind_ratio)
+    /// This produces Ebbinghaus-like exponential forgetting:
+    ///   - episodic: ~50% after 35 epochs (fastest)
+    ///   - semantic: ~50% after 58 epochs (medium)
+    ///   - procedural: ~50% after 173 epochs (slowest)
+    ///
+    /// Unlike linear decay, exponential decay never hits zero — memories
+    /// approach DECAY_FLOOR asymptotically, preserving long-tail retrievability.
+    ///
     /// `cycle_start` is the timestamp when this consolidation cycle began —
     /// memories accessed after this point are not decayed.
-    pub fn decay_importance(&self, cycle_start: i64, decay_amount: f64, floor: f64) -> Result<usize, EngramError> {
+    pub fn decay_importance(&self, cycle_start: i64, decay_factor: f64, floor: f64) -> Result<usize, EngramError> {
         let conn = self.conn()?;
         // Only decay Buffer and Working — Core memories earned their spot.
-        // episodic: full amount, semantic: 60%, procedural: 20%
+        // Exponential: importance = max(floor, importance × (1 - factor × ratio))
+        let ep_ratio = 1.0 - decay_factor;
+        let sem_ratio = 1.0 - decay_factor * thresholds::DECAY_SEMANTIC_RATIO;
+        let proc_ratio = 1.0 - decay_factor * thresholds::DECAY_PROCEDURAL_RATIO;
+
         let n_episodic = conn.execute(
-            "UPDATE memories SET importance = MAX(?1, importance - ?2) \
+            "UPDATE memories SET importance = MAX(?1, importance * ?2) \
              WHERE last_accessed < ?3 AND importance > ?1 AND layer < 3 AND kind = 'episodic'",
-            params![floor, decay_amount, cycle_start],
+            params![floor, ep_ratio, cycle_start],
         )?;
         let n_semantic = conn.execute(
-            "UPDATE memories SET importance = MAX(?1, importance - ?2) \
+            "UPDATE memories SET importance = MAX(?1, importance * ?2) \
              WHERE last_accessed < ?3 AND importance > ?1 AND layer < 3 AND kind = 'semantic'",
-            params![floor, decay_amount * thresholds::DECAY_SEMANTIC_RATIO, cycle_start],
+            params![floor, sem_ratio, cycle_start],
         )?;
         let n_procedural = conn.execute(
-            "UPDATE memories SET importance = MAX(?1, importance - ?2) \
+            "UPDATE memories SET importance = MAX(?1, importance * ?2) \
              WHERE last_accessed < ?3 AND importance > ?1 AND layer < 3 AND kind = 'procedural'",
-            params![floor, decay_amount * thresholds::DECAY_PROCEDURAL_RATIO, cycle_start],
+            params![floor, proc_ratio, cycle_start],
         )?;
         Ok(n_episodic + n_semantic + n_procedural)
     }

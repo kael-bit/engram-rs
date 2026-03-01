@@ -17,9 +17,8 @@ pub struct MemoryResult {
     /// Only present if non-empty
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
-    /// Only present if not "semantic" (the default)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
+    /// Memory kind (semantic, episodic, procedural)
+    pub kind: String,
 }
 
 impl MemoryResult {
@@ -35,7 +34,7 @@ impl MemoryResult {
             score,
             layer: layer_name.to_string(),
             tags: mem.tags.clone(),
-            kind: if mem.kind != "semantic" { Some(mem.kind.clone()) } else { None },
+            kind: mem.kind.clone(),
         }
     }
 }
@@ -43,45 +42,42 @@ impl MemoryResult {
 /// Unified memory weight — used across all ranking contexts.
 /// Combines decayable importance with permanent reinforcement signals.
 ///
-/// # Value domain
+/// # Formula (v2 — additive biases)
 ///
-/// The return value is **not** clamped to `[0, 1]` and can exceed `1.0`.
-///
-/// The formula is:
 /// ```text
-/// (importance + rep_bonus + access_bonus) × kind_boost × layer_boost
+/// base = importance + rep_bonus + access_bonus
+/// weight = base + kind_bias + layer_bias
 /// ```
 ///
 /// - `importance` is in `[0, 1]` (clamped on write).
-/// - `rep_bonus` is in `[0, REP_BONUS_CAP]` (default `0.5`).
-/// - `access_bonus` is in `[0, ACCESS_BONUS_CAP]` (default `0.3`).
-/// - `kind_boost` and `layer_boost` are multipliers (e.g. `1.3`, `1.2`).
+/// - `rep_bonus` = `SCALE × ln(1 + rep_count)`, capped at `REP_BONUS_CAP`.
+/// - `access_bonus` = `SCALE × ln(1 + access_count)`, capped at `ACCESS_BONUS_CAP`.
+/// - `kind_bias` and `layer_bias` are small additive offsets (e.g. +0.15, -0.1).
 ///
-/// Theoretical maximum ≈ `(1.0 + 0.5 + 0.3) × 1.3 × 1.2 ≈ 2.81`.
+/// The return value is **not** clamped to `[0, 1]` and can exceed `1.0`.
 ///
-/// **Usage notes:**
-/// - **Recall scoring** (`score_memory`): weight feeds into a multiplicative
-///   formula whose output is separately capped at `1.0`, so an unbounded
-///   weight is safe.
-/// - **Resume sorting**: used only for relative ordering — absolute magnitude
-///   doesn't matter.
-/// - **Consolidation / triage**: compared against fixed thresholds (e.g.
-///   `BUFFER_PROMOTE_SCORE`). Callers should be aware that high-repetition
-///   procedural Core memories may far exceed `1.0`.
+/// **Design rationale (v2):**
+/// - Additive biases prevent the 2.4× multiplicative gap between procedural×core
+///   and episodic×buffer that existed in v1.
+/// - Logarithmic rep/access bonuses with higher caps preserve long-tail
+///   discrimination (v1 saturated at 5 reps / 19 accesses).
 pub fn memory_weight(mem: &Memory) -> f64 {
-    let rep_bonus = (mem.repetition_count as f64 * thresholds::REP_BONUS_SCALE).min(thresholds::REP_BONUS_CAP);
-    let access_bonus = ((1.0 + mem.access_count as f64).ln() * thresholds::ACCESS_BONUS_SCALE).min(thresholds::ACCESS_BONUS_CAP);
+    let rep_bonus = ((1.0 + mem.repetition_count as f64).ln() * thresholds::REP_BONUS_SCALE)
+        .min(thresholds::REP_BONUS_CAP);
+    let access_bonus = ((1.0 + mem.access_count as f64).ln() * thresholds::ACCESS_BONUS_SCALE)
+        .min(thresholds::ACCESS_BONUS_CAP);
 
-    let kind_boost = match mem.kind.as_str() {
-        "procedural" => thresholds::KIND_BOOST_PROCEDURAL,
-        "episodic" => thresholds::KIND_BOOST_EPISODIC,
-        _ => 1.0, // semantic and unknown
+    let kind_bias = match mem.kind.as_str() {
+        "procedural" => thresholds::KIND_BIAS_PROCEDURAL,
+        "episodic" => thresholds::KIND_BIAS_EPISODIC,
+        _ => 0.0, // semantic and unknown
     };
-    let layer_boost = match mem.layer {
-        Layer::Core => thresholds::LAYER_BOOST_CORE,
-        Layer::Working => 1.0,
-        Layer::Buffer => thresholds::LAYER_BOOST_BUFFER,
+    let layer_bias = match mem.layer {
+        Layer::Core => thresholds::LAYER_BIAS_CORE,
+        Layer::Working => 0.0,
+        Layer::Buffer => thresholds::LAYER_BIAS_BUFFER,
     };
 
-    (mem.importance + rep_bonus + access_bonus) * kind_boost * layer_boost
+    let base = mem.importance + rep_bonus + access_bonus;
+    base + kind_bias + layer_bias
 }
