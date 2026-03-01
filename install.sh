@@ -236,7 +236,7 @@ configure() {
   echo ""
   echo -e "${BOLD}LLM Configuration${NC} (optional — enables smart consolidation)"
   echo ""
-  echo "  engram works without an LLM (embedding is already configured above)."
+  echo "  engram works without an LLM (embedding-only mode)."
   echo "  With an LLM, it can automatically triage, merge, and audit memories."
   echo ""
 

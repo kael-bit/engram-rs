@@ -109,6 +109,18 @@ impl VecIndex {
         if self.entries.is_empty() {
             return vec![];
         }
+        // For very small indexes, brute-force is faster and exact (HNSW is approximate)
+        if self.entries.len() <= 50 {
+            let mut results: Vec<(String, f64)> = self.entries.iter()
+                .map(|(id, entry)| {
+                    let sim = crate::util::cosine_similarity(query, &entry.emb);
+                    (id.clone(), sim)
+                })
+                .filter(|(_, sim)| *sim > 0.0)
+                .collect();
+            top_k(&mut results, k);
+            return results;
+        }
         let neighbours = self.hnsw.search(query, k, hnsw_ef_search());
         neighbours
             .into_iter()
