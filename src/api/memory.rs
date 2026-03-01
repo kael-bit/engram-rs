@@ -273,6 +273,7 @@ pub(super) async fn update_memory(
     Path(id): Path<String>,
     LenientJson(body): LenientJson<UpdateBody>,
 ) -> Result<Json<db::Memory>, EngramError> {
+    let content_changed = body.content.is_some();
     let db = state.db.clone();
     let mem = blocking(move || {
         let full_id = db.resolve_prefix(&id)?;
@@ -295,6 +296,16 @@ pub(super) async fn update_memory(
     .await??;
 
     state.last_activity.store(crate::db::now_ms(), std::sync::atomic::Ordering::Relaxed);
+
+    // Re-embed when content changes so semantic search matches the new text
+    if content_changed {
+        if let Some(ref mem) = mem {
+            if let Some(ref cfg) = state.ai {
+                super::spawn_embed(state.db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
+            }
+        }
+    }
+
     mem.ok_or(EngramError::NotFound).map(Json)
 }
 
