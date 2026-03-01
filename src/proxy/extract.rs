@@ -155,6 +155,10 @@ pub(crate) async fn extract_from_context(state: AppState, context: &str) {
         let db = state.db.clone();
         match tokio::task::spawn_blocking(move || db.insert(input)).await {
             Ok(Ok(mem)) => {
+                // Embed immediately so memory is searchable right away
+                if let Some(ref cfg) = state.ai {
+                    crate::api::spawn_embed(state.db.clone(), cfg.clone(), mem.id.clone(), mem.content.clone());
+                }
                 if let Some(facts) = facts_input {
                     if !facts.is_empty() {
                         let linked: Vec<db::FactInput> = facts.into_iter().map(|mut f| {
