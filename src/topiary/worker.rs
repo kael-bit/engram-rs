@@ -180,15 +180,19 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
         }
     }
 
-    // Step 4.5: Don't store tree with unnamed topics — keep cached version
+    // Step 4.5: Assign fallback names to any still-unnamed topics.
+    // Previously we discarded the entire tree — but that wasted
+    // already-inherited and LLM-named topics.  A fallback is better
+    // than losing the whole rebuild.
     {
         let unnamed = count_unnamed_leaves(&tree.roots);
         if unnamed > 0 {
-            warn!(
+            let fallback_count = assign_fallback_names(&mut tree.roots, &entries);
+            info!(
                 unnamed,
-                "topiary: {} unnamed topics, keeping cached tree", unnamed
+                fallback_count,
+                "topiary: assigned fallback names to unnamed topics"
             );
-            return;
         }
     }
 
@@ -453,6 +457,59 @@ fn apply_inherited_names(
     }
 }
 
+/// Assign fallback names to unnamed leaves. Uses the most common tag
+/// among a topic's members, or falls back to "Topic <id>".
+fn assign_fallback_names(roots: &mut [TopicNode], entries: &[Entry]) -> usize {
+    let mut count = 0;
+    for root in roots.iter_mut() {
+        count += assign_fallback_in(root, entries);
+    }
+    count
+}
+
+fn assign_fallback_in(node: &mut TopicNode, entries: &[Entry]) -> usize {
+    if node.is_leaf() {
+        if node.name.is_some() {
+            return 0;
+        }
+        // Pick the most frequent tag across this topic's members
+        let mut tag_counts: HashMap<&str, usize> = HashMap::new();
+        for &idx in &node.members {
+            if let Some(entry) = entries.get(idx) {
+                for tag in &entry.tags {
+                    *tag_counts.entry(tag.as_str()).or_insert(0) += 1;
+                }
+            }
+        }
+        let name = tag_counts
+            .into_iter()
+            .max_by_key(|&(_, c)| c)
+            .map(|(t, _)| {
+                // Title case: "deploy-flow" → "Deploy Flow"
+                t.split(&['-', '_'][..])
+                    .map(|w| {
+                        let mut c = w.chars();
+                        match c.next() {
+                            Some(f) => f.to_uppercase().to_string() + c.as_str(),
+                            None => String::new(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_else(|| format!("Topic {}", node.id));
+        node.name = Some(name);
+        node.dirty = false;
+        1
+    } else {
+        let mut count = 0;
+        for child in &mut node.children {
+            count += assign_fallback_in(child, entries);
+        }
+        count
+    }
+}
+
 fn count_unnamed_leaves(roots: &[TopicNode]) -> usize {
     roots.iter().map(count_unnamed_in).sum()
 }
@@ -670,5 +727,53 @@ mod tests {
             make_leaf("kb4", None, vec![3]),
         ];
         assert_eq!(count_unnamed_leaves(&roots), 2);
+    }
+
+    // ── fallback names ────────────────────────────────────────────────
+
+    fn make_entry_with_tags(id: &str, tags: &[&str]) -> Entry {
+        Entry {
+            id: id.to_string(),
+            text: String::new(),
+            embedding: vec![],
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn fallback_uses_most_common_tag() {
+        let entries = vec![
+            make_entry_with_tags("m1", &["deploy-flow", "ops"]),
+            make_entry_with_tags("m2", &["deploy-flow"]),
+            make_entry_with_tags("m3", &["ops"]),
+        ];
+        let mut roots = vec![make_leaf("kb1", None, vec![0, 1, 2])];
+        let n = assign_fallback_names(&mut roots, &entries);
+        assert_eq!(n, 1);
+        // "deploy-flow" appears 2 times, "ops" appears 2 times — either is valid
+        let name = roots[0].name.as_deref().unwrap();
+        assert!(
+            name == "Deploy Flow" || name == "Ops",
+            "expected tag-based name, got: {name}"
+        );
+        assert!(!roots[0].dirty);
+    }
+
+    #[test]
+    fn fallback_no_tags_uses_topic_id() {
+        let entries = vec![make_entry("m1"), make_entry("m2")];
+        let mut roots = vec![make_leaf("kb1", None, vec![0, 1])];
+        let n = assign_fallback_names(&mut roots, &entries);
+        assert_eq!(n, 1);
+        assert_eq!(roots[0].name.as_deref(), Some("Topic kb1"));
+    }
+
+    #[test]
+    fn fallback_skips_already_named() {
+        let entries = vec![make_entry("m1")];
+        let mut roots = vec![make_leaf("kb1", Some("Existing"), vec![0])];
+        let n = assign_fallback_names(&mut roots, &entries);
+        assert_eq!(n, 0);
+        assert_eq!(roots[0].name.as_deref(), Some("Existing"));
     }
 }
