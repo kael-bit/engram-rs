@@ -647,6 +647,15 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
             })
             .collect();
 
+        // Only advance scan timestamp to one_hour_ago (not now), so memories
+        // created in the last hour are picked up once they age past the cutoff.
+        // If no memories passed both filters, keep the old timestamp.
+        let new_scan_ts = if new_mems.is_empty() {
+            one_hour_ago.max(last_scan_ts)
+        } else {
+            one_hour_ago
+        };
+
         if new_mems.is_empty() {
             info!("core overlap scan: no new memories since last scan, skipping");
         } else {
@@ -709,7 +718,7 @@ pub fn consolidate_sync(db: &MemoryDB, req: Option<&ConsolidateRequest>, llm_lev
             info!(pairs = candidates.len(), new_core = new_mems.len(), "core overlap scan complete (incremental)");
         }
 
-        db.set_meta("last_core_overlap_ts", &now.to_string()).ok();
+        db.set_meta("last_core_overlap_ts", &new_scan_ts.to_string()).ok();
     }
 
     // Working -> Core: collect candidates for LLM gate review.
