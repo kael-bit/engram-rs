@@ -98,6 +98,17 @@ async fn main() {
     let embed_queue = ai_cfg.as_ref()
         .map(|c| EmbedQueue::new(shared.clone(), c.clone(), Some(topiary_tx_clone)));
 
+    // Backfill any memories missing embeddings (e.g. from before mandatory embed)
+    if let Some(ref eq) = embed_queue {
+        let missing = shared.list_missing_embeddings(500);
+        if !missing.is_empty() {
+            info!(count = missing.len(), "backfilling missing embeddings on startup");
+            for (id, content) in missing {
+                eq.push(id, content);
+            }
+        }
+    }
+
     // Spawn topiary worker
     let _topiary_handle = topiary::worker::spawn_worker(
         shared.clone(),

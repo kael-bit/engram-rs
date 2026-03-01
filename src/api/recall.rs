@@ -160,7 +160,7 @@ pub(super) async fn do_recall(
     headers: axum::http::HeaderMap,
     LenientJson(mut req): LenientJson<recall::RecallRequest>,
 ) -> Result<Json<serde_json::Value>, EngramError> {
-    if req.query.is_empty() {
+    if req.query.trim().is_empty() {
         return Err(EngramError::EmptyQuery);
     }
     if req.namespace.is_none() {

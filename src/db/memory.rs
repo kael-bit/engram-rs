@@ -11,6 +11,15 @@ pub(super) const META_COLS: &str = "id, content, layer, importance, created_at, 
 
 use super::*;
 
+/// Sanitize tags: trim whitespace, remove empty/whitespace-only entries, deduplicate.
+fn sanitize_tags(tags: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    tags.into_iter()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty() && seen.insert(t.clone()))
+        .collect()
+}
+
 impl MemoryDB {
     pub fn insert(&self, input: MemoryInput) -> Result<Memory, EngramError> {
         validate_input(&input)?;
@@ -27,8 +36,7 @@ impl MemoryDB {
             // Repetition = reinforcement. This is the core insight:
             // if someone keeps writing similar content, they clearly care about it.
             let _ = self.reinforce(&existing.id);
-            let tags = input.tags.unwrap_or_default();
-            // Merge tags from both
+            let tags = sanitize_tags(input.tags.unwrap_or_default());            // Merge tags from both
             let mut merged_tags: Vec<String> = existing.tags.clone();
             for t in &tags {
                 if !merged_tags.contains(t) {
@@ -80,7 +88,7 @@ impl MemoryDB {
         let layer_val = layer as u8;
         let id = Uuid::new_v4().to_string();
         let source = input.source.unwrap_or_else(|| "api".into());
-        let tags = input.tags.unwrap_or_default();
+        let tags = sanitize_tags(input.tags.unwrap_or_default());
 
         // Boost importance for high-signal memories when caller didn't set it explicitly
         let importance = if input.importance.is_some() {
@@ -185,8 +193,7 @@ impl MemoryDB {
                 let layer_val = layer as u8;
                 let id = Uuid::new_v4().to_string();
                 let source = input.source.unwrap_or_else(|| "api".into());
-                let tags = input.tags.unwrap_or_default();
-                let importance = if input.importance.is_some() {
+                let tags = sanitize_tags(input.tags.unwrap_or_default());                let importance = if input.importance.is_some() {
                     input.importance.unwrap_or(0.5)
                 } else {
                     let kind_str = input.kind.as_deref().unwrap_or("semantic");
@@ -998,8 +1005,9 @@ impl MemoryDB {
             values.push(Box::new(i.clamp(0.0, 1.0)));
         }
         if let Some(t) = tags {
+            let sanitized = sanitize_tags(t.to_vec());
             set_clauses.push("tags=?".into());
-            let j = serde_json::to_string(t).unwrap_or_else(|_| "[]".into());
+            let j = serde_json::to_string(&sanitized).unwrap_or_else(|_| "[]".into());
             values.push(Box::new(j));
         }
 
