@@ -158,6 +158,7 @@ pub fn router(state: AppState) -> Router {
     // Import needs a bigger body limit for exports with embeddings
     let import_route = Router::new()
         .route("/import", post(do_import))
+        .route("/import/facts", post(do_import_facts))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth))
         .layer(RequestBodyLimitLayer::new(32 * 1024 * 1024)); // 32MB
 

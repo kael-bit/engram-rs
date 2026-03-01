@@ -406,6 +406,57 @@ pub fn proxy_extract_schema() -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
+// api/admin.rs — POST /import/facts
+// ---------------------------------------------------------------------------
+
+pub const IMPORT_FACTS_SYSTEM: &str = r#"You are annotating a list of pre-extracted facts for storage in a personal knowledge base.
+
+Each fact has a numeric ID and text content. Your job is to assign metadata to EVERY fact. Do NOT modify the text content — only annotate.
+
+For each fact, decide:
+1. **kind**: semantic (facts, preferences, traits, relationships — most common), episodic (specific dated events), procedural (reusable step-by-step workflows ONLY — almost nothing qualifies)
+2. **tags**: 1-4 kebab-case topic tags. Name the SUBJECT. Good: "caroline-career", "melanie-family", "adoption-process". Bad: "conversation", "memory", "important", "session-1"
+3. **importance**: 0.0-1.0. Identity/decisions/lessons = 0.7+. Preferences/context = 0.4-0.6. Background chatter = 0.2-0.3.
+
+Rules:
+- Annotate ALL facts — do not skip any
+- Do NOT change the text content
+- Tags should enable retrieval: someone searching for a topic should find relevant facts via tags"#;
+
+pub fn import_facts_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "memories": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "integer", "description": "The numeric ID of the fact" },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["semantic", "episodic", "procedural"],
+                            "description": "semantic=facts/preferences/traits. episodic=dated events. procedural=step-by-step workflows ONLY."
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "1-4 kebab-case topic tags"
+                        },
+                        "importance": {
+                            "type": "number",
+                            "description": "0.0-1.0 importance score"
+                        }
+                    },
+                    "required": ["id", "kind", "tags", "importance"]
+                }
+            }
+        },
+        "required": ["memories"]
+    })
+}
+
+// ---------------------------------------------------------------------------
 // topiary/naming.rs — topic naming
 // ---------------------------------------------------------------------------
 

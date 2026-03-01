@@ -450,6 +450,189 @@ async fn do_import_text(
     })))
 }
 
+/// Import pre-extracted facts: parse numbered facts from text, send to LLM for
+/// tag/kind/importance annotation (content is NOT modified), then insert through
+/// the normal memory pipeline (dedup + embed).
+pub(super) async fn do_import_facts(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    LenientJson(body): LenientJson<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, EngramError> {
+    let cfg = state.ai.as_ref().ok_or(EngramError::AiNotConfigured)?;
+
+    let text = body
+        .get("text")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| EngramError::Validation("'text' is required and must be non-empty".into()))?;
+
+    let namespace = body
+        .get("namespace")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .or_else(|| get_namespace(&headers))
+        .unwrap_or_else(|| "default".into());
+
+    // Parse numbered facts: "1. Some fact text" → (1, "Some fact text")
+    let mut facts: Vec<(usize, String)> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Match lines like "1. text" or "123. text"
+        if let Some(dot_pos) = trimmed.find(". ") {
+            if let Ok(id) = trimmed[..dot_pos].parse::<usize>() {
+                let content = trimmed[dot_pos + 2..].trim().to_string();
+                if !content.is_empty() {
+                    facts.push((id, content));
+                }
+            }
+        }
+    }
+
+    if facts.is_empty() {
+        return Err(EngramError::Validation("no numbered facts found in text".into()));
+    }
+
+    // Build the user message: numbered facts for the LLM
+    let user_msg: String = facts
+        .iter()
+        .map(|(id, text)| format!("{id}. {text}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Call LLM for annotation
+    #[derive(serde::Deserialize)]
+    struct FactAnnotation {
+        id: usize,
+        kind: String,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default = "default_importance")]
+        importance: f64,
+    }
+    fn default_importance() -> f64 { 0.5 }
+
+    #[derive(serde::Deserialize)]
+    struct AnnotationResult {
+        #[serde(default)]
+        memories: Vec<FactAnnotation>,
+    }
+
+    let tool_result = ai::llm_tool_call_with_model::<AnnotationResult>(
+        cfg,
+        "gate",
+        None, // use default gate model (sonnet)
+        crate::prompts::IMPORT_FACTS_SYSTEM,
+        &user_msg,
+        "store_memories",
+        "Annotate each fact with kind, tags, and importance",
+        crate::prompts::import_facts_schema(),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "import/facts LLM call failed");
+        e
+    })?;
+
+    // Log LLM usage
+    if let Some(ref u) = tool_result.usage {
+        let cached = u.prompt_tokens_details.as_ref().map_or(0, |d| d.cached_tokens);
+        let _ = state.db.log_llm_call(
+            "import_facts",
+            &tool_result.model,
+            u.prompt_tokens,
+            u.completion_tokens,
+            cached,
+            tool_result.duration_ms,
+        );
+    }
+
+    // Build a lookup: id → original text
+    let fact_map: std::collections::HashMap<usize, &str> = facts
+        .iter()
+        .map(|(id, text)| (*id, text.as_str()))
+        .collect();
+
+    let annotations = tool_result.value.memories;
+    let total_annotated = annotations.len();
+    let mut imported = Vec::new();
+    let mut skipped = 0usize;
+
+    for ann in annotations {
+        let Some(original_text) = fact_map.get(&ann.id) else {
+            tracing::warn!(id = ann.id, "import/facts: annotation ID not found in parsed facts");
+            skipped += 1;
+            continue;
+        };
+
+        if !db::is_valid_kind(&ann.kind) {
+            tracing::warn!(id = ann.id, kind = %ann.kind, "import/facts: invalid kind, defaulting to semantic");
+        }
+        let kind = if db::is_valid_kind(&ann.kind) { ann.kind.clone() } else { "semantic".into() };
+
+        let importance = ann.importance.clamp(0.0, 1.0);
+
+        let input = db::MemoryInput {
+            content: original_text.to_string(),
+            layer: None,
+            importance: Some(importance),
+            source: Some("import".into()),
+            tags: Some(ann.tags),
+            supersedes: None,
+            skip_dedup: None,
+            namespace: Some(namespace.clone()),
+            sync_embed: None,
+            kind: Some(kind.clone()),
+            embedding: None,
+        };
+
+        let db = state.db.clone();
+        match blocking(move || db.insert(input)).await {
+            Ok(Ok(mem)) => {
+                if let Some(ref eq) = state.embed_queue {
+                    eq.push(mem.id.clone(), mem.content.clone());
+                } else if let Some(ref cfg) = state.ai {
+                    super::spawn_embed(
+                        state.db.clone(),
+                        cfg.clone(),
+                        mem.id.clone(),
+                        mem.content.clone(),
+                    );
+                }
+                imported.push(serde_json::json!({
+                    "id": ann.id,
+                    "memory_id": mem.id,
+                    "kind": kind,
+                    "tags": mem.tags,
+                    "importance": importance,
+                }));
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(id = ann.id, error = %e, "import/facts: insert failed");
+                skipped += 1;
+            }
+            Err(e) => {
+                tracing::warn!(id = ann.id, error = %e, "import/facts: spawn_blocking failed");
+                skipped += 1;
+            }
+        }
+    }
+
+    let count = imported.len();
+    let unannotated = facts.len().saturating_sub(total_annotated);
+    if count > 0 {
+        state.last_activity.store(db::now_ms(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    debug!(count, skipped, unannotated, "import/facts complete");
+    Ok(Json(serde_json::json!({
+        "imported": count,
+        "total_facts": facts.len(),
+        "skipped": skipped,
+        "unannotated": unannotated,
+        "memories": imported,
+    })))
+}
+
 // -- Trash (soft-delete recovery) --
 
 #[derive(Deserialize, Default)]
