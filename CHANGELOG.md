@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.16.1
+
+### Embedding & Index Consistency
+
+Systematic audit of all write paths found that 6 of them created or modified memories without updating the in-memory vector index — making those memories invisible to semantic search until restart.
+
+- **Proxy extraction** (`75e5277`): The highest-traffic insert path (every conversation flush) never called `spawn_embed`. Proxy-extracted memories were FTS-only until restart backfill.
+- **Consolidation distill/audit** (`9332ab4`): Distilled and audited memories entered with no embedding. Also: `dedup_buffer` now uses in-memory vec index instead of DB queries; `import()` populates vec index.
+- **Reconcile merge** (`08a238e`): `try_reconcile_pair` LLM-merged content but kept the pre-merge embedding in vec index.
+- **PATCH content update** (`ce0c6a9`): Updating content via API re-indexed FTS but not the embedding.
+- **Trash restore** (`d984d05`): Restored memories had no embedding queued. Also: `delete_namespace` and `trash_restore` now invalidate resume cache.
+- **set_namespace** (`8c63872`): Changed namespace in SQLite but not the in-memory vec index — namespace-filtered semantic search returned wrong results. Also: `set_namespace` and `update_kind` now invalidate resume cache.
+
+### Resume Cache Invalidation
+
+- **promote() and insert_batch()** (`6054c9e`): Layer changes from promotion and batch inserts weren't reflected in cached resume output.
+
+### Data Integrity
+
+- **Session distillation data loss** (`e7b5176`): Two bugs — (1) when distilled summary was near-duplicate, source notes were deleted with no replacement stored (fix: tag as "distilled" instead); (2) `spawn_blocking` double-Result only checked outer `JoinError`, inner `EngramError` from `insert()` silently fell through to the delete block.
+- **Topic distillation layer downgrade** (`4648c91`): `MemoryInput.layer` was set but `insert()` always creates Buffer (by design). Distilling Working/Core memories produced Buffer replacements while deleting sources. Fix: post-insert `promote()` to match highest source layer.
+- **Dedup namespace mismatch** (`ca8d318`): `is_near_duplicate_with` passed empty string instead of `None` for namespace, so FTS never found candidates. Refactored to `Option<&str>`.
+- **PATCH partial update ordering** (`d5a16ee`): `update_kind()` ran before `update_fields()` — if content validation failed, kind was already changed. Fix: validate early, write kind only after fields succeed. Also: `update_kind` now bumps `modified_epoch`.
+- **Core overlap scan gap** (`9a3fb2e`): `last_core_overlap_ts` advanced to `now` each cycle, but scan only processes memories >1h old. Memories in the 0–60min window were permanently skipped. Fix: advance to `one_hour_ago` instead.
+
+### Input Validation
+
+- **Tag sanitization** (`f1abec8`): Tags now deduplicated, trimmed, and empty strings filtered on create and update. Whitespace-only queries rejected before hitting LLM expand.
+- **Kind validation** (`5f8e9ad`): Memory kind restricted to `semantic`, `episodic`, `procedural` on both create and update. Previously accepted arbitrary strings.
+- **Small vec index accuracy** (`84949b9`): HNSW approximate search on ≤50 vectors could miss results due to graph sparsity. Added brute-force fallback for small indexes.
+
+### Activity Tracking
+
+- **Missing last_activity bumps** (`e83da96`): Proxy extraction, admin extract, and facts insertion didn't update `last_activity`, causing the consolidation loop to skip cycles after proxy-only write activity.
+
+### Refactoring
+
+- **Dead code removal** (`5485215`): Removed `score_combined()` and 3 additive `RECALL_WEIGHT_*` constants (dead since multiplicative scoring in 0.16.0). `POST /topic` switched from strict `Json` to `LenientJson` extractor (fixes 415 when no Content-Type header).
+
+### Documentation
+
+- Updated quickstart and `install.sh` to reflect mandatory embedding provider requirement.
+
+### Tests
+
+- 264 tests total (was 239 in 0.16.0). Added namespace dedup regression test, fixed flaky recency scoring test.
+
 ## 0.16.0
 
 ### Recall Overhaul
