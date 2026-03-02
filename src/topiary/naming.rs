@@ -347,21 +347,21 @@ pub fn name_internal_nodes(node: &mut TopicNode) {
 /// Returns the set of names used by this node and all descendants.
 fn name_internal_nodes_inner(node: &mut TopicNode) -> std::collections::HashSet<String> {
     if node.is_leaf() {
-        let mut used = std::collections::HashSet::new();
-        if let Some(ref name) = node.name {
-            used.insert(name.clone());
-        }
-        return used;
+        // Leaf names are NOT added to the used set — only internal node
+        // combined names need dedup.  Adding leaf names would cause every
+        // candidate to be filtered out (since internal nodes pick from
+        // descendant leaf names).
+        return std::collections::HashSet::new();
     }
 
-    // Recurse into children first (bottom-up), collecting all descendant names
+    // Recurse into children first (bottom-up), collecting internal-node names
     let mut descendant_used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     for child in node.children.iter_mut() {
         let child_names = name_internal_nodes_inner(child);
         descendant_used_names.extend(child_names);
     }
 
-    // Use ALL descendant names (not just direct children) to avoid duplication
+    // Only internal node names — leaf names are excluded
     let child_used_names = &descendant_used_names;
 
     // Collect leaf names from all children (not child internal node names,
