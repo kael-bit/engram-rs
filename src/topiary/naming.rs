@@ -327,6 +327,19 @@ fn dedup_leaf_names(node: &mut TopicNode, dupes_to_dirty: &HashSet<String>) -> u
 
 /// Name internal (non-leaf) nodes bottom-up by summarizing child names.
 /// Uses the most common meaningful words from children's names.
+/// Recursively collect leaf topic names with their member counts.
+fn collect_leaf_names(node: &TopicNode, out: &mut Vec<(usize, String)>) {
+    if node.is_leaf() {
+        if let Some(name) = node.name.as_deref().filter(|n| *n != "unnamed") {
+            out.push((node.total_members(), name.to_string()));
+        }
+        return;
+    }
+    for child in node.children.iter() {
+        collect_leaf_names(child, out);
+    }
+}
+
 pub fn name_internal_nodes(node: &mut TopicNode) {
     if node.is_leaf() {
         return;
@@ -337,50 +350,68 @@ pub fn name_internal_nodes(node: &mut TopicNode) {
         name_internal_nodes(child);
     }
 
-    // Pick the largest child's name as the representative
-    let mut children_by_size: Vec<(usize, Option<&str>)> = node
+    // Collect names already used by direct children (to avoid parent-child duplication)
+    let child_used_names: std::collections::HashSet<String> = node
         .children
         .iter()
-        .map(|c| {
-            let name = c.name.as_deref().filter(|n| *n != "unnamed");
-            (c.total_members(), name)
-        })
+        .filter_map(|c| c.name.clone())
         .collect();
-    children_by_size.sort_by(|a, b| b.0.cmp(&a.0));
 
-    // Find the first named child (by size)
-    let primary_name = children_by_size
-        .iter()
-        .find_map(|(_, n)| *n);
+    // Collect leaf names from all children (not child internal node names,
+    // which would cause parent-child name duplication).
+    let mut leaf_names: Vec<(usize, String)> = Vec::new();
+    for child in node.children.iter() {
+        collect_leaf_names(child, &mut leaf_names);
+    }
+    // Sort by member count descending, dedup by name, skip names already used by children
+    leaf_names.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut seen = std::collections::HashSet::new();
+    leaf_names.retain(|(_, name)| {
+        seen.insert(name.clone()) && !child_used_names.contains(name)
+    });
 
-    let Some(primary) = primary_name else {
+    if leaf_names.is_empty() {
         return;
-    };
+    }
 
-    let named_children = children_by_size
-        .iter()
-        .filter(|(_, n)| n.is_some())
-        .count();
+    let primary = &leaf_names[0].1;
 
-    if named_children <= 1 {
-        // Single named child: inherit its name directly
-        node.name = Some(primary.to_string());
+    if leaf_names.len() <= 1 {
+        node.name = Some(primary.clone());
     } else {
-        // Find the second-largest named child for a more descriptive name
-        let secondary = children_by_size
-            .iter()
-            .filter_map(|(_, n)| *n)
-            .nth(1);
-
-        let combined = if let Some(sec) = secondary {
-            let extra = if named_children > 2 {
-                format!(" +{}", named_children - 2)
-            } else {
-                String::new()
-            };
-            format!("{}, {}{}", primary, sec, extra)
+        // Pick secondary that won't duplicate the primary
+        let secondary = &leaf_names[1].1;
+        let extra = if leaf_names.len() > 2 {
+            format!(" +{}", leaf_names.len() - 2)
         } else {
-            primary.to_string()
+            String::new()
+        };
+        let combined = format!("{}, {}{}", primary, secondary, extra);
+
+        // If the combined name matches any direct child's name, try to
+        // differentiate by using alternative leaf names (skip to 3rd, 4th, etc.)
+        let combined_lower = combined.to_lowercase();
+        let child_collision = node.children.iter().any(|c| {
+            c.name.as_ref().map_or(false, |n| n.to_lowercase() == combined_lower)
+        });
+        let combined = if child_collision && leaf_names.len() > 2 {
+            // Try picking different leaf names that aren't in the primary/secondary
+            let alt_names: Vec<&String> = leaf_names[2..]
+                .iter()
+                .map(|(_, n)| n)
+                .collect();
+            if !alt_names.is_empty() {
+                let alt_extra = if alt_names.len() > 1 {
+                    format!(" +{}", alt_names.len() - 1)
+                } else {
+                    String::new()
+                };
+                format!("{}, {}{}", primary, alt_names[0], alt_extra)
+            } else {
+                combined
+            }
+        } else {
+            combined
         };
 
         // Truncate to 60 chars at word boundary
