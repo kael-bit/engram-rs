@@ -11,6 +11,10 @@ use crate::ai::AiConfig;
 use crate::db::{Layer, MemoryDB};
 use crate::thresholds;
 
+/// Bump this whenever clustering/naming/scoring logic changes so the
+/// cached tree is invalidated and rebuilt with the new algorithm.
+const TOPIARY_CODE_VERSION: u32 = 2;
+
 /// Spawn the topiary background worker.
 ///
 /// Listens on `trigger_rx` for rebuild signals. Debounces: after receiving
@@ -105,35 +109,43 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
     let current_ids: HashSet<String> = entries.iter().map(|e| e.id.clone()).collect();
     let current_fingerprint: u64 = entries.iter().map(|e| e.text.len() as u64).sum();
     let db_cache = db.clone();
-    let (cached_tree_full, cached_ids_json, cached_tree_json, cached_fingerprint) =
+    let (cached_tree_full, cached_ids_json, cached_tree_json, cached_fingerprint, cached_code_ver) =
         tokio::task::spawn_blocking(move || {
             (
                 db_cache.get_meta("topiary_tree_full"),
                 db_cache.get_meta("topiary_entry_ids"),
                 db_cache.get_meta("topiary_tree"),
                 db_cache.get_meta("topiary_fingerprint"),
+                db_cache.get_meta("topiary_code_version"),
             )
         })
         .await
-        .unwrap_or((None, None, None, None));
+        .unwrap_or((None, None, None, None, None));
 
-    // If entry set AND content fingerprint match cache, skip rebuild
-    if let (Some(ref ids_json), Some(ref tree_json)) = (&cached_ids_json, &cached_tree_json) {
-        if let Ok(cached_ids) = serde_json::from_str::<Vec<String>>(ids_json) {
-            let cached_set: HashSet<&str> = cached_ids.iter().map(|s| s.as_str()).collect();
-            let current_set: HashSet<&str> = current_ids.iter().map(|s| s.as_str()).collect();
-            let fp_matches = cached_fingerprint
-                .as_ref()
-                .and_then(|s| s.parse::<u64>().ok()) == Some(current_fingerprint);
-            if cached_set == current_set && fp_matches {
-                // Verify the cached tree is valid (has content)
-                if tree_json.len() > 2 {
-                    info!(
-                        entries = entry_count,
-                        elapsed_ms = start.elapsed().as_millis() as u64,
-                        "topiary: entry set unchanged, using cached tree"
-                    );
-                    return;
+    // Check if code version matches — invalidate cache on algorithm changes
+    let code_ver_matches = cached_code_ver
+        .as_ref()
+        .and_then(|s| s.parse::<u32>().ok()) == Some(TOPIARY_CODE_VERSION);
+
+    // If entry set AND content fingerprint AND code version match cache, skip rebuild
+    if code_ver_matches {
+        if let (Some(ref ids_json), Some(ref tree_json)) = (&cached_ids_json, &cached_tree_json) {
+            if let Ok(cached_ids) = serde_json::from_str::<Vec<String>>(ids_json) {
+                let cached_set: HashSet<&str> = cached_ids.iter().map(|s| s.as_str()).collect();
+                let current_set: HashSet<&str> = current_ids.iter().map(|s| s.as_str()).collect();
+                let fp_matches = cached_fingerprint
+                    .as_ref()
+                    .and_then(|s| s.parse::<u64>().ok()) == Some(current_fingerprint);
+                if cached_set == current_set && fp_matches {
+                    // Verify the cached tree is valid (has content)
+                    if tree_json.len() > 2 {
+                        info!(
+                            entries = entry_count,
+                            elapsed_ms = start.elapsed().as_millis() as u64,
+                            "topiary: entry set unchanged, using cached tree"
+                        );
+                        return;
+                    }
                 }
             }
         }
@@ -149,7 +161,7 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
     );
     let mut used_incremental = false;
 
-    let try_incremental = cached_tree_full.is_some() && cached_ids_json.is_some();
+    let try_incremental = cached_tree_full.is_some() && cached_ids_json.is_some() && code_ver_matches;
     if try_incremental {
         let cached_ids_parsed: Option<Vec<String>> = cached_ids_json
             .as_deref()
@@ -378,11 +390,13 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
 
     let db2 = db.clone();
     let fp_str = current_fingerprint.to_string();
+    let code_ver_str = TOPIARY_CODE_VERSION.to_string();
     let store_result = tokio::task::spawn_blocking(move || {
         db2.set_meta("topiary_tree", &json_str)?;
         db2.set_meta("topiary_tree_full", &full_tree)?;
         db2.set_meta("topiary_entry_ids", &entry_ids_json)?;
         db2.set_meta("topiary_fingerprint", &fp_str)?;
+        db2.set_meta("topiary_code_version", &code_ver_str)?;
         Ok::<_, crate::error::EngramError>(())
     })
     .await;
