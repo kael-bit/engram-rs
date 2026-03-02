@@ -106,7 +106,7 @@ fn missing_embeddings_lists_correctly() {
     // m2 has no embedding (only auto-embed when AI is configured)
     let missing = db.list_missing_embeddings(10);
     // Both should be missing since there's no AI in test
-    assert!(missing.len() >= 1);
+    assert!(!missing.is_empty());
     assert!(missing.iter().any(|(_, c)| c.contains("no embedding")));
 }
 

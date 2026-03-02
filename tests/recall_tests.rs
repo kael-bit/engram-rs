@@ -499,7 +499,7 @@ fn prefilter_restricts_semantic_search() {
                 .skip_dedup()
         ).unwrap();
         // Give them partial similarity to the query so semantic search returns them
-        db.set_embedding(&mem.id, &vec![0.6f32, 0.8, (i as f32) * 0.1]).unwrap();
+        db.set_embedding(&mem.id, &[0.6f32, 0.8, (i as f32) * 0.1]).unwrap();
         fts_ids.push(mem.id);
     }
 
@@ -543,7 +543,7 @@ fn prefilter_falls_back_when_few_candidates() {
 
     // Add padding memories so HNSW graph is stable (2 entries is too few)
     for i in 0..8 {
-        let pad = db.insert(MemoryInput::new(&format!("padding memory number {i}"))).unwrap();
+        let pad = db.insert(MemoryInput::new(format!("padding memory number {i}"))).unwrap();
         let mut pad_emb = vec![0.0f32; 64];
         pad_emb[(i + 2) % 64] = 1.0; // orthogonal to query/semantic embeddings
         db.set_embedding(&pad.id, &pad_emb).unwrap();
@@ -606,7 +606,7 @@ fn estimate_tokens_ascii() {
     let text = "hello world this is a test";
     let tokens = engram::recall::estimate_tokens(text);
     // 26 bytes / 4 = 6.5 → ceil = 7
-    assert!(tokens >= 5 && tokens <= 10, "got {tokens}");
+    assert!((5..=10).contains(&tokens), "got {tokens}");
 }
 
 #[test]
@@ -624,7 +624,7 @@ fn estimate_tokens_mixed() {
     let text = "hello 世界";
     let tokens = engram::recall::estimate_tokens(text);
     // 6/4 + 2/1.5 = 1.5 + 1.33 = 2.83 → 3
-    assert!(tokens >= 2 && tokens <= 4, "got {tokens}");
+    assert!((2..=4).contains(&tokens), "got {tokens}");
 }
 
 #[test]
@@ -708,7 +708,7 @@ fn pagination_second_page() {
     assert_eq!(first_page.memories.len(), 5);
     assert!(first_page.total >= 10, "should find most entries, got {}", first_page.total);
     assert_eq!(second_page.total, first_page.total);
-    assert!(second_page.memories.len() >= 1, "second page should have results");
+    assert!(!second_page.memories.is_empty(), "second page should have results");
 
     // Pages shouldn't overlap
     let first_ids: HashSet<String> = first_page.memories.iter().map(|m| m.memory.id.clone()).collect();
@@ -879,7 +879,7 @@ fn recency_score_huge_finite_decay() {
     // decay_rate=100 should be clamped to 10
     let score = recency_score(hour_ago, 100.0);
     assert!(score.is_finite(), "huge decay_rate must not produce NaN/Inf");
-    assert!(score >= 0.0 && score <= 1.0);
+    assert!((0.0..=1.0).contains(&score));
 }
 
 #[test]
