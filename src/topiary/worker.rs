@@ -206,6 +206,12 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
                         // Remap all member indices in the tree
                         remap_members(&mut cached_tree.roots, &idx_map);
 
+                        // Clear stale dirty flags from cache — previous cycles may
+                        // have skipped LLM naming (small-cluster optimization) and
+                        // stored topics as dirty. In the incremental path only the
+                        // topic receiving a new entry should be dirty.
+                        clear_dirty_flags(&mut cached_tree.roots);
+
                         // Insert new entries (insert already assigns to best topic
                         // or creates a new one; skip full consolidate which would
                         // run split/merge/absorb/hierarchy passes and mark many
@@ -679,6 +685,18 @@ fn remap_members(roots: &mut [TopicNode], idx_map: &HashMap<usize, usize>) {
                 .iter()
                 .flat_map(|c| c.members.iter().copied())
                 .collect();
+        }
+    }
+}
+
+/// Clear all dirty flags in the tree. Used after deserializing a cached tree
+/// for incremental insert — stale dirty flags from previous cycles (e.g. when
+/// LLM naming was skipped for small clusters) should not carry over.
+fn clear_dirty_flags(roots: &mut [TopicNode]) {
+    for node in roots.iter_mut() {
+        node.dirty = false;
+        if !node.is_leaf() {
+            clear_dirty_flags(&mut node.children);
         }
     }
 }
