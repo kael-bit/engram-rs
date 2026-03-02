@@ -206,13 +206,13 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
                         // Remap all member indices in the tree
                         remap_members(&mut cached_tree.roots, &idx_map);
 
-                        // Insert new entries
+                        // Insert new entries (insert already assigns to best topic
+                        // or creates a new one; skip full consolidate which would
+                        // run split/merge/absorb/hierarchy passes and mark many
+                        // stable topics dirty unnecessarily).
                         for &new_idx in &added_indices {
                             cached_tree.insert(new_idx, &entries[new_idx].embedding);
                         }
-
-                        // Light consolidation pass
-                        cached_tree.consolidate(&entries);
 
                         let topic_count: usize =
                             cached_tree.roots.iter().map(|r| r.leaf_count()).sum();
