@@ -1,3 +1,4 @@
+use engram::topiary::naming::name_internal_nodes;
 use engram::topiary::worker::{assign_fallback_names, count_unnamed_leaves, inherit_names};
 use engram::topiary::{Entry, TopicNode, TopicTree};
 
@@ -259,4 +260,111 @@ fn fallback_skips_already_named() {
     let n = assign_fallback_names(&mut roots, &entries);
     assert_eq!(n, 0);
     assert_eq!(roots[0].name.as_deref(), Some("Existing"));
+}
+
+// --- name_internal_nodes tests ---
+
+fn make_internal(id: &str, children: Vec<TopicNode>) -> TopicNode {
+    TopicNode {
+        id: id.to_string(),
+        name: None,
+        centroid: vec![],
+        members: vec![],
+        children,
+        dirty: false,
+        avg_sim: 0.0,
+        named_at_size: 0,
+    }
+}
+
+#[test]
+fn internal_node_gets_name_from_leaf_children() {
+    // Internal node with two named leaves — should combine their names
+    let mut root = make_internal("t1", vec![
+        make_leaf("kb1", Some("Deploy Procedures"), vec![0, 1, 2]),
+        make_leaf("kb2", Some("API Design"), vec![3, 4]),
+    ]);
+    name_internal_nodes(&mut root);
+    let name = root.name.as_deref().unwrap();
+    assert!(name.contains("Deploy Procedures"), "got: {}", name);
+    assert!(name.contains("API Design"), "got: {}", name);
+}
+
+#[test]
+fn internal_node_single_child_uses_child_name() {
+    // Internal node with one leaf child — should just use that name
+    let mut root = make_internal("t1", vec![
+        make_leaf("kb1", Some("Deploy Procedures"), vec![0, 1, 2]),
+    ]);
+    name_internal_nodes(&mut root);
+    assert_eq!(root.name.as_deref(), Some("Deploy Procedures"));
+}
+
+#[test]
+fn internal_node_no_duplicate_with_child() {
+    // Three-layer tree: grandchild and child would get same combined name
+    // Parent should pick a different combination
+    let grandchild = make_internal("t3", vec![
+        make_leaf("kb1", Some("Deploy Procedures"), vec![0, 1, 2, 3]),
+        make_leaf("kb2", Some("API Design"), vec![4, 5, 6]),
+    ]);
+    let mut root = make_internal("t1", vec![
+        make_internal("t2", vec![
+            grandchild,
+            make_leaf("kb3", Some("Testing"), vec![7, 8]),
+        ]),
+        make_leaf("kb4", Some("Monitoring"), vec![9]),
+    ]);
+    name_internal_nodes(&mut root);
+
+    // t3 should be "Deploy Procedures, API Design"
+    let t2 = &root.children[0];
+    let t3 = &t2.children[0];
+    let t3_name = t3.name.as_deref().unwrap();
+    assert!(t3_name.contains("Deploy Procedures"), "t3: {}", t3_name);
+
+    // t2 should NOT have same name as t3
+    let t2_name = t2.name.as_deref().unwrap();
+    assert_ne!(t2_name, t3_name, "t2 should differ from t3");
+
+    // Root should NOT have same name as t2
+    let root_name = root.name.as_deref().unwrap();
+    assert_ne!(root_name, t2_name, "root should differ from t2");
+}
+
+#[test]
+fn internal_node_leaf_names_not_blocked() {
+    // Verify that leaf names don't pollute the used set —
+    // internal nodes should still be able to use leaf names for combinations
+    let mut root = make_internal("t1", vec![
+        make_leaf("kb1", Some("Alpha"), vec![0, 1]),
+        make_leaf("kb2", Some("Beta"), vec![2, 3]),
+    ]);
+    name_internal_nodes(&mut root);
+    // Root should get a name (not None), combining Alpha and Beta
+    assert!(root.name.is_some(), "internal node should have a name");
+    let name = root.name.as_deref().unwrap();
+    assert!(name.contains("Alpha") || name.contains("Beta"),
+        "should use leaf names: got {}", name);
+}
+
+#[test]
+fn internal_node_deeply_nested_no_none() {
+    // 4-layer tree — no internal node should be None
+    let mut root = make_internal("t1", vec![
+        make_internal("t2", vec![
+            make_internal("t3", vec![
+                make_leaf("kb1", Some("A"), vec![0, 1, 2]),
+                make_leaf("kb2", Some("B"), vec![3, 4]),
+            ]),
+            make_leaf("kb3", Some("C"), vec![5]),
+        ]),
+        make_leaf("kb4", Some("D"), vec![6]),
+    ]);
+    name_internal_nodes(&mut root);
+
+    // All internal nodes should have names
+    assert!(root.name.is_some(), "root should have name");
+    assert!(root.children[0].name.is_some(), "t2 should have name");
+    assert!(root.children[0].children[0].name.is_some(), "t3 should have name");
 }
