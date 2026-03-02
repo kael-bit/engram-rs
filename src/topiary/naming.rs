@@ -390,5 +390,7 @@ fn name_internal_nodes(node: &mut TopicNode) {
             combined.chars().take(60).collect()
         }
     };
-    node.name = Some(truncated);
+    // Strip trailing commas/spaces left by mid-join truncation (e.g. "Foo, Bar,")
+    let trimmed = truncated.trim_end_matches(|c: char| c == ',' || c.is_whitespace()).to_string();
+    node.name = Some(trimmed);
 }
