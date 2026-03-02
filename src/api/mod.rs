@@ -293,6 +293,9 @@ async fn index(State(state): State<AppState>) -> Json<serde_json::Value> {
             "POST /topic": "fetch topic details by IDs (body: {ids: ['kb1','kb3']})",
             "GET /topic?ids=kb1,kb3": "fetch topic details by IDs (comma-separated query param)",
             "GET /topiary/tree": "full hierarchical topic tree (lightweight, no embeddings)",
+            "GET /llm-usage": "LLM call stats by component and day",
+            "DELETE /llm-usage": "clear LLM usage stats",
+            "POST /import/facts": "LLM-extract fact triples from text",
         }));
     }
     Json(data)
