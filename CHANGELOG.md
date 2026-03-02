@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.17.0
+
+### Topiary: Incremental Insert (Major Performance)
+
+The topic tree now supports **incremental insert** — when ≤10 entries change between cycles, new memories are inserted into the cached tree without a full k-means rebuild. This dropped daily LLM calls from **59 → 8** in production.
+
+- **Conditional rebuild** (`cd26bc0`): Skip full rebuild when entry set is unchanged or changes are small enough for incremental path.
+- **Skip consolidate in incremental path** (`2397fe3`): Incremental insert no longer runs split/merge/absorb/hierarchy passes, preventing stable topics from being marked dirty unnecessarily.
+- **Dirty flag management** (`24cb25e`): Clear stale dirty flags before insert so only the receiving topic is marked dirty for naming.
+- **Empty leaf pruning**: After member remap, leaves with 0 members (from deleted memories) are automatically pruned.
+
+### Topiary: Naming Improvements
+
+- **Internal node naming from leaf names** (`0efc576`, `a75a203`): Internal (non-leaf) nodes are now named bottom-up using their descendant leaf names ranked by member count — no LLM needed. Previously, internal nodes used child node names, causing cascading duplication across tree levels.
+- **Naming in both paths** (`a75a203`): `name_internal_nodes()` now runs in both full rebuild and incremental insert paths, so tree names stay fresh without requiring a full rebuild.
+- **Trailing stopword cleanup**: Names truncated at prepositions ("Sky Communication and") are now cleaned via `strip_trailing_stopwords()`.
+- **Trailing comma fix** (`fa4a2ba`): Strip trailing commas from internal topic node names.
+- **Dedup + prompt improvements** (`21323be`): Better deduplication of similar names and reduced prompt token usage.
+- **LLM cost reduction** (`562d475`): Inherit threshold lowered (0.30→0.20) for more name reuse; skip LLM for trivial dirty sets (≤3 topics, ≤2 members each). Expected 40-60% reduction in naming token consumption.
+
+### Scoring v2: Algorithm Overhaul
+
+Complete rewrite of the memory scoring system based on cognitive science analysis:
+
+- **Sigmoid score compression** (`e6743f4`): Replaced hard cap at 1.0 with sigmoid function — eliminates ranking saturation where many candidates scored identically.
+- **Exponential importance decay**: Changed from linear to exponential decay (`importance *= 0.95`), matching Ebbinghaus forgetting curves. Prevents cliff-edge forgetting of older memories.
+- **Additive kind/layer biases**: Changed from multiplicative to additive biases. Previous system had 2.4× spread (procedural×core=1.56 vs episodic×buffer=0.64); additive biases are more balanced.
+
+### API Improvements
+
+- **Batch create errors** (`251ab99`): `POST /memories/batch` now returns an `errors` array with index and reason for each failed entry.
+- **Import endpoints**: `POST /import` (LLM text extraction) and `POST /import/facts` (pre-extracted fact annotation) for bulk memory ingestion.
+- **Hierarchical topic tree UI** (`d521049`): New collapsible tree view in web UI + `GET /topiary/tree` API endpoint.
+
+### Bug Fixes
+
+- Fix `insert()` and `insert_batch()` to respect `input.layer` override instead of hardcoding Buffer (`8fd8e96`, `6fbae36`).
+- Fix resume stats to respect namespace filter (`75c103b`).
+- Always serialize `kind` field in API responses (`cacc3a3`).
+- Fix unnamed node display in web UI (`f35945d`).
+- Resolve 3 clippy warnings (`a061722`).
+
+### Documentation
+
+- README rewritten with badges, Rust advantages in intro, engram→engram-rs naming consistency.
+- ARCHITECTURE.md updated to scoring v2 (sigmoid formula, exponential decay, threshold tables).
+- Algorithm visualization charts (5 dark-theme matplotlib charts for scoring, decay, bias, reinforcement, lifecycle).
+
 ## 0.16.1
 
 ### Embedding & Index Consistency
