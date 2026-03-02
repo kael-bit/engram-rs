@@ -206,11 +206,25 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
                         // Remap all member indices in the tree
                         remap_members(&mut cached_tree.roots, &idx_map);
 
+                        // Prune leaves that became empty after remap (deleted memories)
+                        let pruned = prune_empty_leaves(&mut cached_tree.roots);
+                        if pruned > 0 {
+                            info!(pruned, "topiary incremental: pruned empty leaves after remap");
+                        }
+
                         // Clear stale dirty flags from cache — previous cycles may
                         // have skipped LLM naming (small-cluster optimization) and
                         // stored topics as dirty. In the incremental path only the
                         // topic receiving a new entry should be dirty.
                         clear_dirty_flags(&mut cached_tree.roots);
+
+                        let dirty_after_clear = count_dirty_leaves(&cached_tree.roots);
+                        if dirty_after_clear > 0 {
+                            warn!(
+                                dirty_after_clear,
+                                "topiary incremental: dirty leaves remain after clear_dirty_flags (BUG)"
+                            );
+                        }
 
                         // Insert new entries (insert already assigns to best topic
                         // or creates a new one; skip full consolidate which would
@@ -219,6 +233,13 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
                         for &new_idx in &added_indices {
                             cached_tree.insert(new_idx, &entries[new_idx].embedding);
                         }
+
+                        let dirty_after_insert = count_dirty_leaves(&cached_tree.roots);
+                        debug!(
+                            added = added_indices.len(),
+                            dirty_after_insert,
+                            "topiary incremental: dirty count after insert"
+                        );
 
                         let topic_count: usize =
                             cached_tree.roots.iter().map(|r| r.leaf_count()).sum();
@@ -687,6 +708,36 @@ fn remap_members(roots: &mut [TopicNode], idx_map: &HashMap<usize, usize>) {
                 .collect();
         }
     }
+}
+
+/// Remove empty leaves (0 members) left behind after remap_members drops
+/// entries that were deleted. Also removes internal nodes whose children were
+/// all pruned. Returns the number of nodes removed.
+fn prune_empty_leaves(roots: &mut Vec<TopicNode>) -> usize {
+    let mut pruned = 0;
+    // Process children first (bottom-up)
+    for node in roots.iter_mut() {
+        if !node.is_leaf() {
+            pruned += prune_empty_leaves(&mut node.children);
+            // Recalculate parent members after pruning children
+            node.members = node
+                .children
+                .iter()
+                .flat_map(|c| c.members.iter().copied())
+                .collect();
+        }
+    }
+    let before = roots.len();
+    roots.retain(|node| {
+        // Keep internal nodes that still have children, keep leaves with members
+        if node.is_leaf() {
+            !node.members.is_empty()
+        } else {
+            !node.children.is_empty()
+        }
+    });
+    pruned += before - roots.len();
+    pruned
 }
 
 /// Clear all dirty flags in the tree. Used after deserializing a cached tree

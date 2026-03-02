@@ -32,7 +32,12 @@ pub async fn name_tree(
 
     let dirty_count = dirty_leaves.len();
     if dirty_count == 0 {
-        debug!("topiary naming: no dirty topics");
+        debug!("topiary naming: no dirty topics, refreshing internal node names");
+        // Still refresh internal node names (no LLM needed) — they may be
+        // stale after leaf renames in a previous cycle.
+        for root in roots.iter_mut() {
+            name_internal_nodes(root);
+        }
         return NamingStats {
             llm_calls: 0,
             dirty_count: 0,
@@ -332,65 +337,104 @@ fn name_internal_nodes(node: &mut TopicNode) {
         name_internal_nodes(child);
     }
 
-    // Collect child names
-    let child_names: Vec<&str> = node
+    // Pick the largest child's name as the representative
+    let mut children_by_size: Vec<(usize, Option<&str>)> = node
         .children
         .iter()
-        .filter_map(|c| c.name.as_deref())
-        .filter(|n| *n != "unnamed")
-        .collect();
-
-    if child_names.is_empty() {
-        return;
-    }
-
-    // If only one named child, inherit its name with a broader marker
-    if child_names.len() == 1 {
-        node.name = Some(format!("{} & more", child_names[0]));
-        return;
-    }
-
-    // Pick the two largest children by total_members and join their names
-    let mut children_by_size: Vec<(usize, &str)> = node
-        .children
-        .iter()
-        .filter_map(|c| {
-            c.name
-                .as_deref()
-                .filter(|n| *n != "unnamed")
-                .map(|n| (c.total_members(), n))
+        .map(|c| {
+            let name = c.name.as_deref().filter(|n| *n != "unnamed");
+            (c.total_members(), name)
         })
         .collect();
     children_by_size.sort_by(|a, b| b.0.cmp(&a.0));
 
-    let top_names: Vec<&str> = children_by_size.iter().take(2).map(|(_, n)| *n).collect();
-    let suffix = if children_by_size.len() > 2 {
-        format!(" +{}", children_by_size.len() - 2)
-    } else {
-        String::new()
+    // Find the first named child (by size)
+    let primary_name = children_by_size
+        .iter()
+        .find_map(|(_, n)| *n);
+
+    let Some(primary) = primary_name else {
+        return;
     };
-    let combined = format!("{}{}", top_names.join(", "), suffix);
-    // Truncate to 60 chars, but don't cut mid-word
-    let truncated = if combined.len() <= 60 {
-        combined
+
+    let named_children = children_by_size
+        .iter()
+        .filter(|(_, n)| n.is_some())
+        .count();
+
+    if named_children <= 1 {
+        // Single named child: inherit its name directly
+        node.name = Some(primary.to_string());
     } else {
-        let mut end = 60;
-        while end > 0 && !combined.is_char_boundary(end) {
-            end -= 1;
-        }
-        // Back up to last space to avoid mid-word cut
-        if let Some(last_space) = combined[..end].rfind(' ') {
-            if last_space > 20 {
-                // Only back up if we still have a meaningful chunk
-                combined[..last_space].to_string()
+        // Find the second-largest named child for a more descriptive name
+        let secondary = children_by_size
+            .iter()
+            .filter_map(|(_, n)| *n)
+            .nth(1);
+
+        let combined = if let Some(sec) = secondary {
+            let extra = if named_children > 2 {
+                format!(" +{}", named_children - 2)
+            } else {
+                String::new()
+            };
+            format!("{}, {}{}", primary, sec, extra)
+        } else {
+            primary.to_string()
+        };
+
+        // Truncate to 60 chars at word boundary
+        let truncated = if combined.len() <= 60 {
+            combined
+        } else {
+            let mut end = 60;
+            while end > 0 && !combined.is_char_boundary(end) {
+                end -= 1;
+            }
+            if let Some(last_space) = combined[..end].rfind(' ') {
+                if last_space > 20 {
+                    combined[..last_space].to_string()
+                } else {
+                    combined.chars().take(60).collect()
+                }
             } else {
                 combined.chars().take(60).collect()
             }
-        } else {
-            combined.chars().take(60).collect()
+        };
+        // Strip trailing punctuation, prepositions, and conjunctions left by truncation
+        let trimmed = truncated
+            .trim_end_matches(|c: char| c == ',' || c.is_whitespace())
+            .to_string();
+        let trimmed = strip_trailing_stopwords(&trimmed);
+        node.name = Some(trimmed);
+    }
+}
+
+/// Strip trailing stopwords (prepositions, conjunctions, articles) that look
+/// awkward when truncation cuts mid-phrase.
+fn strip_trailing_stopwords(s: &str) -> String {
+    const STOPWORDS: &[&str] = &[
+        " and", " or", " for", " the", " of", " in", " on", " to",
+        " with", " by", " a", " an", " &",
+    ];
+    let mut result = s.to_string();
+    loop {
+        let mut changed = false;
+        for sw in STOPWORDS {
+            if let Some(prefix) = result.strip_suffix(sw) {
+                if !prefix.is_empty() {
+                    result = prefix.to_string();
+                    changed = true;
+                    break;
+                }
+            }
         }
-    };
-    // Strip trailing commas/spaces left by mid-join truncation (e.g. "Foo, Bar,")
-    let trimmed = truncated.trim_end_matches(|c: char| c == ',' || c.is_whitespace()).to_string();
-    node.name = Some(trimmed);
+        if !changed {
+            break;
+        }
+    }
+    // Final trim of punctuation/whitespace
+    result
+        .trim_end_matches(|c: char| c == ',' || c.is_whitespace())
+        .to_string()
 }
