@@ -251,6 +251,11 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
                             "topiary incremental insert"
                         );
 
+                        // Refresh internal node names (no LLM — combines leaf names)
+                        for root in cached_tree.roots.iter_mut() {
+                            super::naming::name_internal_nodes(root);
+                        }
+
                         tree = cached_tree;
                         used_incremental = true;
                     }
@@ -331,6 +336,13 @@ async fn do_rebuild(db: &Arc<MemoryDB>, ai: Option<&AiConfig>) {
                 "topiary: assigned fallback names to unnamed topics"
             );
         }
+    }
+
+    // Step 4.6: Always refresh internal node names (no LLM needed — just
+    // combines child leaf names). This ensures naming improvements take
+    // effect even when no leaves are dirty.
+    for root in tree.roots.iter_mut() {
+        super::naming::name_internal_nodes(root);
     }
 
     // Step 5: Serialize and store

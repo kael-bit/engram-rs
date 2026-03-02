@@ -327,7 +327,7 @@ fn dedup_leaf_names(node: &mut TopicNode, dupes_to_dirty: &HashSet<String>) -> u
 
 /// Name internal (non-leaf) nodes bottom-up by summarizing child names.
 /// Uses the most common meaningful words from children's names.
-fn name_internal_nodes(node: &mut TopicNode) {
+pub fn name_internal_nodes(node: &mut TopicNode) {
     if node.is_leaf() {
         return;
     }

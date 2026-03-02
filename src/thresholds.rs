@@ -251,8 +251,8 @@ pub const TOPIARY_NAMING_SAMPLE_CHARS: usize = 80;
 /// cached tree after a rebuild.  Lower = more aggressive reuse.
 pub const TOPIARY_INHERIT_THRESHOLD: f32 = 0.20;
 
-/// Maximum number of new entries to use the incremental insert path.
-/// Above this threshold, a full rebuild is performed instead.
+/// Maximum number of entry changes (adds + removes) allowed for incremental
+/// insert instead of a full tree rebuild.
 pub const TOPIARY_INCREMENTAL_MAX: usize = 10;
 
 // ── Proxy ──────────────────────────────────────────────────────────────────
