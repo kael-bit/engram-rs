@@ -169,8 +169,9 @@ pub fn recall(
     let budget = req.budget_tokens.unwrap_or(2000);
     let limit = req.limit.unwrap_or(20).min(100);
     let offset = req.offset.unwrap_or(0);
-    // Fetch enough candidates to fill the page even after skipping offset rows
-    let fetch_limit = (offset + limit).max(limit);
+    // Fetch a stable candidate pool so `total` stays consistent across pages.
+    // The minimum ensures small offset changes don't alter the candidate set.
+    let fetch_limit = (offset + limit).max(50);
     let min_imp = req.min_importance.unwrap_or(0.0);
     let sort_by = req.sort_by.as_deref().unwrap_or("score");
     let layer_filter: Option<Vec<Layer>> = req.layers.as_ref().map(|ls| {
@@ -211,13 +212,14 @@ pub fn recall(
                 return false;
             }
         }
-        // Tags: soft boost instead of hard filter.
-        // Memories matching hint tags get relevance boost; others are NOT excluded.
-        // if let Some(ref required_tags) = req.tags {
-        //     if !required_tags.iter().all(|t| mem.tags.contains(t)) {
-        //         return false;
-        //     }
-        // }
+        // Tags: hard filter — memory must contain ALL specified tags.
+        if let Some(ref required_tags) = req.tags {
+            if !required_tags.iter().all(|rt| {
+                mem.tags.iter().any(|t| t.eq_ignore_ascii_case(rt))
+            }) {
+                return false;
+            }
+        }
         if let Some(ref ns) = req.namespace {
             // Allow "default" namespace memories through when filtering by a project namespace
             if mem.namespace != *ns && mem.namespace != "default" {
@@ -279,7 +281,10 @@ pub fn recall(
     // Semantic search — restrict to candidates when we have enough,
     // otherwise fall back to full scan so we don't miss anything.
     if let Some(qemb) = query_emb {
-        let enough_candidates = candidate_ids.len() >= fetch_limit * 2;
+        // Use the actual page need (offset + limit) for prefilter decision,
+        // not fetch_limit which has a raised minimum for stable total counts.
+        let page_need = offset + limit;
+        let enough_candidates = candidate_ids.len() >= page_need * 2;
         let semantic_results = if enough_candidates {
             debug!(
                 candidates = candidate_ids.len(),
@@ -481,8 +486,8 @@ pub fn recall(
         }
     }
 
-    // Explicit tag boost: when agent passes tags=["discord"], memories with
-    // matching tags get a relevance boost (not a hard filter).
+    // Tag overlap boost: memories that match more of the requested tags
+    // get a proportional relevance bump (applied after hard filtering).
     if let Some(ref hint_tags) = req.tags {
         if !hint_tags.is_empty() {
             let tag_boost: f64 = SCORING_CONFIG.tag_boost;

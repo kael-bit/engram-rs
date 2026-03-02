@@ -341,21 +341,28 @@ fn collect_leaf_names(node: &TopicNode, out: &mut Vec<(usize, String)>) {
 }
 
 pub fn name_internal_nodes(node: &mut TopicNode) {
+    name_internal_nodes_inner(node);
+}
+
+/// Returns the set of names used by this node and all descendants.
+fn name_internal_nodes_inner(node: &mut TopicNode) -> std::collections::HashSet<String> {
     if node.is_leaf() {
-        return;
+        let mut used = std::collections::HashSet::new();
+        if let Some(ref name) = node.name {
+            used.insert(name.clone());
+        }
+        return used;
     }
 
-    // Recurse into children first (bottom-up)
+    // Recurse into children first (bottom-up), collecting all descendant names
+    let mut descendant_used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     for child in node.children.iter_mut() {
-        name_internal_nodes(child);
+        let child_names = name_internal_nodes_inner(child);
+        descendant_used_names.extend(child_names);
     }
 
-    // Collect names already used by direct children (to avoid parent-child duplication)
-    let child_used_names: std::collections::HashSet<String> = node
-        .children
-        .iter()
-        .filter_map(|c| c.name.clone())
-        .collect();
+    // Use ALL descendant names (not just direct children) to avoid duplication
+    let child_used_names = &descendant_used_names;
 
     // Collect leaf names from all children (not child internal node names,
     // which would cause parent-child name duplication).
@@ -371,7 +378,7 @@ pub fn name_internal_nodes(node: &mut TopicNode) {
     });
 
     if leaf_names.is_empty() {
-        return;
+        return descendant_used_names;
     }
 
     let primary = &leaf_names[0].1;
@@ -392,7 +399,7 @@ pub fn name_internal_nodes(node: &mut TopicNode) {
         // differentiate by using alternative leaf names (skip to 3rd, 4th, etc.)
         let combined_lower = combined.to_lowercase();
         let child_collision = node.children.iter().any(|c| {
-            c.name.as_ref().map_or(false, |n| n.to_lowercase() == combined_lower)
+            c.name.as_ref().is_some_and(|n| n.to_lowercase() == combined_lower)
         });
         let combined = if child_collision && leaf_names.len() > 2 {
             // Try picking different leaf names that aren't in the primary/secondary
@@ -439,6 +446,12 @@ pub fn name_internal_nodes(node: &mut TopicNode) {
         let trimmed = strip_trailing_stopwords(&trimmed);
         node.name = Some(trimmed);
     }
+
+    // Add our own name to the used set before returning
+    if let Some(ref name) = node.name {
+        descendant_used_names.insert(name.clone());
+    }
+    descendant_used_names
 }
 
 /// Strip trailing stopwords (prepositions, conjunctions, articles) that look

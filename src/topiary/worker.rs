@@ -682,10 +682,10 @@ fn count_dirty_leaves(roots: &[TopicNode]) -> usize {
         if node.is_leaf() {
             if node.dirty { 1 } else { 0 }
         } else {
-            node.children.iter().map(|c| count(c)).sum()
+            node.children.iter().map(count).sum()
         }
     }
-    roots.iter().map(|r| count(r)).sum()
+    roots.iter().map(count).sum()
 }
 
 /// Sum of member counts across all dirty leaves.
@@ -694,10 +694,10 @@ fn sum_dirty_members(roots: &[TopicNode]) -> usize {
         if node.is_leaf() {
             if node.dirty { node.members.len() } else { 0 }
         } else {
-            node.children.iter().map(|c| sum(c)).sum()
+            node.children.iter().map(sum).sum()
         }
     }
-    roots.iter().map(|r| sum(r)).sum()
+    roots.iter().map(sum).sum()
 }
 
 /// Remap member indices in all tree nodes from old entry list positions to new ones.
