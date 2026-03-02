@@ -386,40 +386,37 @@ fn name_internal_nodes_inner(node: &mut TopicNode) -> std::collections::HashSet<
     if leaf_names.len() <= 1 {
         node.name = Some(primary.clone());
     } else {
-        // Pick secondary that won't duplicate the primary
-        let secondary = &leaf_names[1].1;
-        let extra = if leaf_names.len() > 2 {
-            format!(" +{}", leaf_names.len() - 2)
-        } else {
-            String::new()
-        };
-        let combined = format!("{}, {}{}", primary, secondary, extra);
+        // Build a candidate name from the top leaf names, avoiding collision
+        // with any direct child's existing name.
+        let child_names_lower: Vec<String> = node.children.iter()
+            .filter_map(|c| c.name.as_ref())
+            .map(|n| n.to_lowercase())
+            .collect();
 
-        // If the combined name matches any direct child's name, try to
-        // differentiate by using alternative leaf names (skip to 3rd, 4th, etc.)
-        let combined_lower = combined.to_lowercase();
-        let child_collision = node.children.iter().any(|c| {
-            c.name.as_ref().is_some_and(|n| n.to_lowercase() == combined_lower)
-        });
-        let combined = if child_collision && leaf_names.len() > 2 {
-            // Try picking different leaf names that aren't in the primary/secondary
-            let alt_names: Vec<&String> = leaf_names[2..]
-                .iter()
-                .map(|(_, n)| n)
-                .collect();
-            if !alt_names.is_empty() {
-                let alt_extra = if alt_names.len() > 1 {
-                    format!(" +{}", alt_names.len() - 1)
-                } else {
-                    String::new()
-                };
-                format!("{}, {}{}", primary, alt_names[0], alt_extra)
+        // Try combinations: (primary, secondary), (primary, alt[0]), (primary, alt[1]), ...
+        // If all collide, fall back to "primary +N" without secondary.
+        let mut final_name = None;
+        let secondaries: Vec<&String> = leaf_names[1..].iter().map(|(_, n)| n).collect();
+
+        for (i, sec) in secondaries.iter().enumerate() {
+            let remaining = secondaries.len() - i - 1;
+            let extra = if remaining > 0 {
+                format!(" +{}", remaining)
             } else {
-                combined
+                String::new()
+            };
+            let candidate = format!("{}, {}{}", primary, sec, extra);
+            let candidate_lower = candidate.to_lowercase();
+            if !child_names_lower.contains(&candidate_lower)
+                && !descendant_used_names.iter().any(|n| n.to_lowercase() == candidate_lower)
+            {
+                final_name = Some(candidate);
+                break;
             }
-        } else {
-            combined
-        };
+        }
+
+        // Fallback: use primary alone (won't match combined child names)
+        let combined = final_name.unwrap_or_else(|| primary.clone());
 
         // Truncate to 60 chars at word boundary
         let truncated = if combined.len() <= 60 {

@@ -13,7 +13,7 @@ use crate::thresholds;
 
 /// Bump this whenever clustering/naming/scoring logic changes so the
 /// cached tree is invalidated and rebuilt with the new algorithm.
-const TOPIARY_CODE_VERSION: u32 = 2;
+const TOPIARY_CODE_VERSION: u32 = 3;
 
 /// Spawn the topiary background worker.
 ///
