@@ -34,6 +34,10 @@ curl -X POST http://localhost:3917/recall \
 curl http://localhost:3917/resume
 ```
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/kael-bit-engram-rs).
+
 ## What It Does
 
 ### Three-Layer Lifecycle
